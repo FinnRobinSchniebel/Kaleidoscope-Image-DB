@@ -10,7 +10,8 @@
 services:
   backend:
     build: 
-      context: .
+      context: ./KaleidoscopeBackend
+      dockerfile: Dockerfile.backend
       target: final
     ports:
       - 3000:3000
@@ -18,6 +19,18 @@ services:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@db:27017
     depends_on:
       - db
+  frontend:
+    build:
+      context: ./KaleidoscopeFrontend
+      dockerfile: Dockerfile.frontend
+      target: final
+    ports: 
+      - 3001
+    depends_on:
+      - backend
+    #stdin_open:true
+    #tty:true
+
   db:
     image: mongo:latest
     restart: unless-stopped

@@ -1,0 +1,19 @@
+# syntax=docker/dockerfile:1
+
+#build docker
+FROM node:24-alpine AS build
+
+WORKDIR /src
+
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+
+#prod docker
+FROM nginx:stable-alpine AS final
+COPY --from=build /app/build /usr/share/nginx/html
+
+EXPOSE 3001
+CMD ["nginx", "-g", "daemon off;"]
