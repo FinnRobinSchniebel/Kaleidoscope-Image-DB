@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -25,4 +26,12 @@ func main() {
 
 	log.Print("Connected, no issues ---------------------")
 
+	log.Print("Starting API")
+	app := fiber.New()
+
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.Status(200).JSON(fiber.Map{"msg": "hello world"})
+	})
+
+	app.Listen(":3000")
 }

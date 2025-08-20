@@ -13,7 +13,7 @@ RUN npm run build
 
 #prod docker
 FROM nginx:stable-alpine AS final
-COPY --from=build /app/build /usr/share/nginx/html
+COPY --from=build /src/dist /usr/share/nginx/html
 
 EXPOSE 3001
 CMD ["nginx", "-g", "daemon off;"]
