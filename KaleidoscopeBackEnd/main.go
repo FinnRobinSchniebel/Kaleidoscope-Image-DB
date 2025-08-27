@@ -17,30 +17,56 @@ type Todo struct {
 	Body      string `json:"body"`
 }
 
-func main() {
-	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+var collection *mongo.Collection
 
+func main() {
+
+	ConnectDB()
+	StartAPI()
+
+}
+
+func ConnectDB() {
+	//set up a basic connection timout
+	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	//get server URL for connection
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
 		log.Fatal("MONGO_URI not set")
 	}
-	defer cancel()
-	_, err := mongo.Connect(options.Client().ApplyURI(mongoURI))
+
+	//Connect to the mongoDB and catch errors
+	client, err := mongo.Connect(options.Client().ApplyURI(mongoURI))
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	collection = client.Database("golang_db").Collection("todos")
+
 	log.Print("Connected, no issues ---------------------")
+
+}
+
+func StartAPI() {
+	serverPort := os.Getenv("SERVERPORT")
+	if serverPort == "" {
+		log.Print("No Port")
+		serverPort = "3000"
+	}
 
 	log.Print("Starting API")
 	app := fiber.New()
 
 	todos := []Todo{}
 
+	//test get request
 	app.Get("/", func(c *fiber.Ctx) error {
 		return c.Status(200).JSON(fiber.Map{"msg": "hello world"})
 	})
 
+	//test post request
 	app.Post("/api/todos", func(c *fiber.Ctx) error {
 		todo := &Todo{}
 		if err := c.BodyParser(todo); err != nil {
@@ -48,7 +74,7 @@ func main() {
 		}
 
 		if todo.Body == "" {
-			return c.Status(400).JSON(fiber.Map{"error":"Todo body is required"})
+			return c.Status(400).JSON(fiber.Map{"error": "Todo body is required"})
 		}
 		todo.ID = len(todos) + 1
 		todos = append(todos, *todo)
@@ -56,5 +82,6 @@ func main() {
 		return c.Status(201).JSON(todo)
 	})
 
-	app.Listen(":3000")
+	//set to listen on port 3000
+	app.Listen(":" + serverPort)
 }
