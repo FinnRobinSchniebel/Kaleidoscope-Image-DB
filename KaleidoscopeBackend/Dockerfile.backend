@@ -52,6 +52,8 @@ RUN --mount=type=cache,target=/var/cache/apk \
         && \
         update-ca-certificates
 
+ARG BACKEND_VOLUME_LOCATION 
+        
 # Create a non-privileged user that the app will run under.
 # See https://docs.docker.com/go/dockerfile-user-best-practices/
 ARG UID=10001
@@ -63,7 +65,13 @@ RUN adduser \
     --no-create-home \
     --uid "${UID}" \
     appuser
+
+RUN mkdir -p $BACKEND_VOLUME_LOCATION
+RUN chown -R appuser:appuser $BACKEND_VOLUME_LOCATION
+
 USER appuser
+
+
 
 # Copy the executable from the "build" stage.
 COPY --from=build /bin/server /bin/

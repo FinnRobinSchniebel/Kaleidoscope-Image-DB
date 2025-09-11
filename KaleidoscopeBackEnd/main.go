@@ -1,33 +1,43 @@
 package main
 
 import (
+	//"KaleidoscopeBackend/utility"
 	"context"
 	"fmt"
+	"image"
 	"log"
 	"os"
 	"time"
 
+	"github.com/ajdnik/imghash"
 	"github.com/gofiber/fiber/v2"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
+type SourceInfo struct {
+	Name     string   `json:"name" form:"name"`
+	ID       string   `json:"id" form:"id"`
+	Title    string   `json:"title" form:"title"`
+	SourceID string   `json:"sourceid" form:"sourceid"`
+	Tags     []string `json:"tags" form:"tags"`
+}
+
 type ImageSetMongo struct {
-	ID               primitive.ObjectID `json:"id" bson:"_id"`
-	Title            string             `json:"title"`
-	Tags             []string           `json:"tags"`
-	Sources          []string           `json:"sources"`
-	Author           []string           `json:"author"`
-	ImageLinks       []string           `json:"images"`
-	LowImageLinks    []string           `json:"lowimage"`
-	ImageHash        []string           `json:"Hash"`
-	AutoTags         []string           `json:"autotags"`
-	TagRuleOverrides []string           `json:"tagruleoverrides"`
-	Itype            []string           `json:"type"`
-	Description      string             `json:"description"`
-	other            string             `json:"other"`
+	ID               bson.ObjectID `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
+	Title            string        `json:"title" form:"title"`
+	Tags             []string      `json:"tags" form:"tags"`
+	Sources          []SourceInfo  `json:"source" form:"source"`
+	Authors          []string      `json:"authors" form:"authors"`
+	ImageLinks       []string      `json:"images" form:"images"`
+	LowImageLinks    []string      `json:"lowimage" form:"lowimage"`
+	ImageHash        []string      `json:"hash" form:"hash"`
+	AutoTags         []string      `json:"autotags" form:"autotags"`
+	TagRuleOverrides []string      `json:"tagruleoverrides" form:"tagruleoverrides"`
+	Itype            string        `json:"type" form:"type"`
+	Description      string        `json:"description" form:"description"`
+	other            string        `json:"other" form:"other"`
 	// API will send file as well but it will not be placed in the struct: `json: media`
 }
 
@@ -112,14 +122,69 @@ func GetAllImages(c *fiber.Ctx) error {
 }
 
 func PostImageSet(c *fiber.Ctx) error {
+
+	var imageSet *ImageSetMongo = new(ImageSetMongo)
+
+	if err := c.BodyParser(imageSet); err != nil {
+		return err
+	}
+	// imageSet.ID = primitive.NilObjectID
+
+	if imageSet.ID != bson.NilObjectID {
+		//TODO : item sent to wrong api
+
+		//return fiber.DefaultErrorHandler(c)
+	}
+
+	//add to DB
+	insertResult, err := collection.InsertOne(context.Background(), imageSet)
+
+	if err != nil {
+		return err
+	}
+
+	imageSet.ID = insertResult.InsertedID.(bson.ObjectID)
+	//primitive.ObjectIDFromHex()
+
+	// download images to local storage
 	form, err := c.MultipartForm()
 	if err != nil {
 		return err
 	}
-	media := form.File["media"]
-	for _, item := range media {
-		fmt.Println(item.Filename, item.Size, item.Header["content-Type"])
 
+	media := form.File["media"]
+
+	//determine folder path
+	var AuthorName string
+	if len(imageSet.Authors) > 0 {
+		AuthorName = imageSet.Authors[0]
+
+	} else {
+		AuthorName = "unknown"
+	}
+
+	filePath := BackendVolumeLocation + "/" + AuthorName + "/"
+
+	fileInfo, _ := os.Stat(BackendVolumeLocation)
+	fmt.Println(fileInfo.Mode(), fileInfo.Sys())
+
+	//create folder
+	err = os.MkdirAll(filePath, 0700)
+	if err != nil {
+		return err
+	}
+	fileInfo, _ = os.Stat(filePath)
+	fmt.Println(fileInfo)
+
+	if len(media) == 0 {
+		//Todo: send proper feedback
+		return c.JSON(imageSet)
+	}
+
+	for index, item := range media {
+		fmt.Println(item.Filename, item.Size, item.Header["Content-Type"][0])
+
+		/**		Test FilePath	 **/
 		_, err := os.Stat(BackendVolumeLocation)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -130,10 +195,53 @@ func PostImageSet(c *fiber.Ctx) error {
 		} else {
 			fmt.Printf("File or directory exists at: %s\n", BackendVolumeLocation)
 		}
-		// err := c.SaveFile(item, fmt.Sprintf(BackendVolumeLocation, item.Filename))
-		// if err != nil {
-		// 	return err
-		// }
+
+		/**		save media		**/
+
+		//Todo: Test for invalid symbols
+
+		//test if file name is to long
+		fileName := ImageFileName(imageSet.Title, imageSet.ID, index)
+		fullPath := fmt.Sprintf("%s/%s", filePath, fileName)
+
+		log.Print("FilePath: " + fullPath)
+
+		err = c.SaveFile(item, fullPath)
+		if err != nil {
+			return err
+		}
+		imageSet.ImageLinks = append(imageSet.ImageLinks, fullPath)
+
+		/** 	get hash 	**/
+		//hash is used as the part of the image file name
+		file, _ := item.Open()
+
+		img, _, err := image.Decode(file)
+		if err != nil {
+			os.Remove(BackendVolumeLocation + item.Filename)
+			return err
+		}
+		phash := imghash.NewPHash()
+		ihash := phash.Calculate(img)
+		fmt.Printf("Hashed to: %v\n", ihash)
+		imageSet.ImageHash = append(imageSet.ImageHash, ihash.String())
+		file.Close()
 	}
-	return nil
+	log.Print("Files Uploaded")
+
+	//filter := bson.M{"_id": imageSet.ID}
+	update := bson.M{"$set": imageSet}
+	log.Print("Test 1 ++++")
+	result, err := collection.UpdateByID(context.Background(), imageSet.ID, update)
+	if err != nil {
+		fmt.Println("Update Failed")
+		return err
+	}
+	log.Print("Test 2 ++++")
+	if result.MatchedCount == 0 {
+		log.Print("COULD NOT UPDATE FILE AFTER ADDING INFO")
+
+	}
+	log.Print("---Upload complete---")
+	return c.JSON(imageSet)
 }
