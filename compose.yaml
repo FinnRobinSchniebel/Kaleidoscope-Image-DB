@@ -10,8 +10,8 @@
 services:
   backend:
     build: 
-      context: ./KaleidoscopeBackend
-      dockerfile: Dockerfile.backend
+      context: ./
+      dockerfile: ./KaleidoscopeBackend/Dockerfile.backend
       target: final
       args:
         BACKEND_VOLUME_LOCATION: ${BACKEND_VOLUME_LOCATION}

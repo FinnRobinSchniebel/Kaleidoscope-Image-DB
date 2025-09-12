@@ -132,8 +132,6 @@ func PostImageSet(c *fiber.Ctx) error {
 
 	if imageSet.ID != bson.NilObjectID {
 		//TODO : item sent to wrong api
-
-		//return fiber.DefaultErrorHandler(c)
 	}
 
 	//add to DB
@@ -144,7 +142,6 @@ func PostImageSet(c *fiber.Ctx) error {
 	}
 
 	imageSet.ID = insertResult.InsertedID.(bson.ObjectID)
-	//primitive.ObjectIDFromHex()
 
 	// download images to local storage
 	form, err := c.MultipartForm()
@@ -155,26 +152,10 @@ func PostImageSet(c *fiber.Ctx) error {
 	media := form.File["media"]
 
 	//determine folder path
-	var AuthorName string
-	if len(imageSet.Authors) > 0 {
-		AuthorName = imageSet.Authors[0]
-
-	} else {
-		AuthorName = "unknown"
-	}
-
-	filePath := BackendVolumeLocation + "/" + AuthorName + "/"
-
-	fileInfo, _ := os.Stat(BackendVolumeLocation)
-	fmt.Println(fileInfo.Mode(), fileInfo.Sys())
-
-	//create folder
-	err = os.MkdirAll(filePath, 0700)
+	filePath, err := MakeFileDirectory(imageSet.Authors[0])
 	if err != nil {
 		return err
 	}
-	fileInfo, _ = os.Stat(filePath)
-	fmt.Println(fileInfo)
 
 	if len(media) == 0 {
 		//Todo: send proper feedback
@@ -198,10 +179,7 @@ func PostImageSet(c *fiber.Ctx) error {
 
 		/**		save media		**/
 
-		//Todo: Test for invalid symbols
-
-		//test if file name is to long
-		fileName := ImageFileName(imageSet.Title, imageSet.ID, index)
+		fileName := ImageFileName(imageSet.Title, imageSet.ID, index, getType(item.Filename))
 		fullPath := fmt.Sprintf("%s/%s", filePath, fileName)
 
 		log.Print("FilePath: " + fullPath)
@@ -213,7 +191,6 @@ func PostImageSet(c *fiber.Ctx) error {
 		imageSet.ImageLinks = append(imageSet.ImageLinks, fullPath)
 
 		/** 	get hash 	**/
-		//hash is used as the part of the image file name
 		file, _ := item.Open()
 
 		img, _, err := image.Decode(file)
@@ -229,7 +206,6 @@ func PostImageSet(c *fiber.Ctx) error {
 	}
 	log.Print("Files Uploaded")
 
-	//filter := bson.M{"_id": imageSet.ID}
 	update := bson.M{"$set": imageSet}
 	log.Print("Test 1 ++++")
 	result, err := collection.UpdateByID(context.Background(), imageSet.ID, update)
