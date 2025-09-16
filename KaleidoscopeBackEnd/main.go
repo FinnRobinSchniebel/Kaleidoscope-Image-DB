@@ -1,7 +1,6 @@
 package main
 
 import (
-	//"KaleidoscopeBackend/utility"
 	"context"
 	"fmt"
 	"image"
@@ -26,18 +25,18 @@ type SourceInfo struct {
 
 type ImageSetMongo struct {
 	ID               bson.ObjectID `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
-	Title            string        `json:"title" form:"title"`
-	Tags             []string      `json:"tags" form:"tags"`
-	Sources          []SourceInfo  `json:"source" form:"source"`
-	Authors          []string      `json:"authors" form:"authors"`
-	ImageLinks       []string      `json:"images" form:"images"`
-	LowImageLinks    []string      `json:"lowimage" form:"lowimage"`
-	ImageHash        []string      `json:"hash" form:"hash"`
-	AutoTags         []string      `json:"autotags" form:"autotags"`
-	TagRuleOverrides []string      `json:"tagruleoverrides" form:"tagruleoverrides"`
-	Itype            string        `json:"type" form:"type"`
-	Description      string        `json:"description" form:"description"`
-	other            string        `json:"other" form:"other"`
+	Title            string        `json:"title" bson:"title,omitempty" form:"title"`
+	Tags             []string      `json:"tags" bson:"tags,omitempty" form:"tags"`
+	Sources          []SourceInfo  `json:"sources" bson:"sources,omitempty" form:"sources"`
+	Authors          []string      `json:"authors" bson:"authors,omitempty" form:"authors"`
+	ImageLinks       []string      `json:"images" bson:"images,omitempty" form:"images"`
+	LowImageLinks    []string      `json:"lowimages" bson:"lowimages,omitempty" form:"lowimages"`
+	ImageHash        []string      `json:"hash" bson:"hash,omitempty" form:"hash"`
+	AutoTags         []string      `json:"autotags" bson:"autotags,omitempty" form:"autotags"`
+	TagRuleOverrides []string      `json:"tagruleoverrides" bson:"tagruleoverrides,omitempty" form:"tagruleoverrides"`
+	Itype            string        `json:"type" bson:"type,omitempty" form:"type"`
+	Description      string        `json:"description" bson:"description,omitempty" form:"description"`
+	other            string        `json:"other" bson:"other,omitempty" form:"other"`
 	// API will send file as well but it will not be placed in the struct: `json: media`
 }
 
@@ -89,6 +88,8 @@ func StartAPI() {
 		serverPort = "3000"
 	}
 
+	//Todo: get certificate and enable https
+
 	log.Print("Starting API")
 	app := fiber.New()
 
@@ -130,8 +131,10 @@ func PostImageSet(c *fiber.Ctx) error {
 	}
 	// imageSet.ID = primitive.NilObjectID
 
+	//A id was sent which is invalid
 	if imageSet.ID != bson.NilObjectID {
 		//TODO : item sent to wrong api
+		return c.Status(400).SendString("Called API to add while trying to update.")
 	}
 
 	//add to DB
@@ -159,8 +162,10 @@ func PostImageSet(c *fiber.Ctx) error {
 
 	if len(media) == 0 {
 		//Todo: send proper feedback
-		return c.JSON(imageSet)
+		return c.Status(400).SendString("No files attached.")
 	}
+
+	hashHits := make(map[int][]bson.ObjectID)
 
 	for index, item := range media {
 		fmt.Println(item.Filename, item.Size, item.Header["Content-Type"][0])
@@ -180,7 +185,7 @@ func PostImageSet(c *fiber.Ctx) error {
 		/**		save media		**/
 
 		fileName := ImageFileName(imageSet.Title, imageSet.ID, index, getType(item.Filename))
-		fullPath := fmt.Sprintf("%s/%s", filePath, fileName)
+		fullPath := fmt.Sprintf("%s%s", filePath, fileName)
 
 		log.Print("FilePath: " + fullPath)
 
@@ -195,7 +200,7 @@ func PostImageSet(c *fiber.Ctx) error {
 
 		img, _, err := image.Decode(file)
 		if err != nil {
-			os.Remove(BackendVolumeLocation + item.Filename)
+			os.Remove(fullPath)
 			return err
 		}
 		phash := imghash.NewPHash()
@@ -203,21 +208,42 @@ func PostImageSet(c *fiber.Ctx) error {
 		fmt.Printf("Hashed to: %v\n", ihash)
 		imageSet.ImageHash = append(imageSet.ImageHash, ihash.String())
 		file.Close()
+
+		//compare hash in DB
+
+		HitResults, err := findOverlappingHashes(ihash.String())
+
+		if err != nil {
+			return err
+		}
+		if len(HitResults) != 0 {
+			fmt.Println("Hash Hit")
+			hashHits[index] = HitResults
+		}
+
+		//cursor, err := collection.Find(context.Background(), bson.M{"hash": ihash.String()})
+
 	}
+
 	log.Print("Files Uploaded")
 
 	update := bson.M{"$set": imageSet}
-	log.Print("Test 1 ++++")
 	result, err := collection.UpdateByID(context.Background(), imageSet.ID, update)
+
 	if err != nil {
 		fmt.Println("Update Failed")
 		return err
 	}
-	log.Print("Test 2 ++++")
+
 	if result.MatchedCount == 0 {
 		log.Print("COULD NOT UPDATE FILE AFTER ADDING INFO")
-
+		return c.Status(500).SendString("Error while updating db entry after saving files")
 	}
 	log.Print("---Upload complete---")
-	return c.JSON(imageSet)
+	//hash conflict detected
+	if len(hashHits) != 0 {
+		return c.Status(202).JSON(hashHits)
+	}
+
+	return c.SendStatus(201)
 }
