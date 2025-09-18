@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ajdnik/imghash"
@@ -30,10 +32,10 @@ type ImageSetMongo struct {
 	Sources          []SourceInfo  `json:"sources" bson:"sources,omitempty" form:"sources"`
 	Authors          []string      `json:"authors" bson:"authors,omitempty" form:"authors"`
 	ImageLinks       []string      `json:"images" bson:"images,omitempty" form:"images"`
-	LowImageLinks    []string      `json:"lowimages" bson:"lowimages,omitempty" form:"lowimages"`
+	LowImageLinks    []string      `json:"low_images" bson:"low_images,omitempty" form:"low_images"`
 	ImageHash        []string      `json:"hash" bson:"hash,omitempty" form:"hash"`
 	AutoTags         []string      `json:"autotags" bson:"autotags,omitempty" form:"autotags"`
-	TagRuleOverrides []string      `json:"tagruleoverrides" bson:"tagruleoverrides,omitempty" form:"tagruleoverrides"`
+	TagRuleOverrides []string      `json:"tag_rule_overrides" bson:"tag_rule_overrides,omitempty" form:"tag_rule_overrides"`
 	Itype            string        `json:"type" bson:"type,omitempty" form:"type"`
 	Description      string        `json:"description" bson:"description,omitempty" form:"description"`
 	other            string        `json:"other" bson:"other,omitempty" form:"other"`
@@ -96,6 +98,8 @@ func StartAPI() {
 	app.Get("/api/ImageSets", GetAllImages)
 
 	app.Post("/api/ImageSets", PostImageSet)
+
+	app.Delete("/api/ImageSets", DeleteImageSets)
 
 	//set to listen on port 3000
 	app.Listen(":" + serverPort)
@@ -239,11 +243,98 @@ func PostImageSet(c *fiber.Ctx) error {
 		log.Print("COULD NOT UPDATE FILE AFTER ADDING INFO")
 		return c.Status(500).SendString("Error while updating db entry after saving files")
 	}
-	log.Print("---Upload complete---")
+	log.Println("---Upload complete---")
 	//hash conflict detected
 	if len(hashHits) != 0 {
-		return c.Status(202).JSON(hashHits)
+		return c.Status(202).JSON(fiber.Map{"hash_hits": hashHits})
 	}
 
 	return c.SendStatus(201)
+}
+
+func DeleteImageSets(c *fiber.Ctx) error {
+
+	//get all params of type 'ids' and split the param by delimiter "," to get a list of all ids to be deleted
+	paramIdRaw := c.Context().QueryArgs().PeekMulti("ids")
+
+	var paramid []string
+	for _, groupedIds := range paramIdRaw {
+		paramid = append(paramid, strings.Split(string(groupedIds), ",")...)
+	}
+
+	log.Println("List of Items to delete:\n" + strings.Join(paramid, ", "))
+
+	if paramid == nil {
+		return c.Status(400).SendString("Requires an 'ids' param to be sent with the request (eg: ?ids=12345,49325,...)")
+	}
+
+	var DeletedList []string
+
+	var errList error
+	for _, id := range paramid {
+
+		ObjId, err := bson.ObjectIDFromHex(id)
+		if err != nil {
+			errList = errors.Join(errList, err)
+
+			continue
+		}
+
+		err = DeleteImageSetInDB(ObjId)
+		if err != nil {
+			errList = errors.Join(errList, err)
+			continue
+		}
+		DeletedList = append(DeletedList, id)
+	}
+
+	if errList != nil {
+		return c.JSON(fiber.Map{"deleted": DeletedList, "errors": errList.Error()})
+	}
+
+	if DeletedList == nil {
+		return c.Status(404).SendString("Invalid IDs: " + strings.Join(paramid, ", "))
+	}
+
+	return c.Status(200).JSON(fiber.Map{"deleted": DeletedList})
+}
+
+func DeleteImageSetInDB(id bson.ObjectID) error {
+	var entryToDelete ImageSetMongo
+
+	//check if entry exists and get it as a struct for processing
+	err := collection.FindOne(context.Background(), bson.D{{"_id", id}}).Decode(&entryToDelete)
+	if err != nil {
+		log.Println("Failed to find file!")
+		return err
+	}
+	log.Println("Image links to delete:" + strings.Join(entryToDelete.ImageLinks, ", "))
+
+	//delete the entry
+	result, err := collection.DeleteOne(context.Background(), bson.D{{"_id", id}})
+	if err != nil || result.DeletedCount == 0 {
+		log.Println("Failed to delete file")
+		return err
+	}
+
+	//delete files
+	var errList error
+
+	err = DeleteFileList(entryToDelete.ImageLinks)
+	if err != nil {
+		errList = errors.Join(errList, err)
+	}
+
+	err = DeleteFileList(entryToDelete.LowImageLinks)
+	if err != nil {
+		errList = errors.Join(errList, err)
+	}
+
+	if errList != nil {
+		return errList
+	}
+
+	log.Print("---delete complete--- ")
+
+	return nil
 }
