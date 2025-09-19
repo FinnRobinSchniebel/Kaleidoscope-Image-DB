@@ -137,7 +137,7 @@ func DeleteFileList(links []string) error {
 
 // }
 
-func AddImageSet(imageSet ImageSetMongo, media []*multipart.FileHeader) (InternalResponse, map[int][]CollisionResponsePair) {
+func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader) (InternalResponse, map[int][]CollisionResponsePair) {
 
 	//add to DB
 	insertResult, err := collection.InsertOne(context.Background(), imageSet)
@@ -242,4 +242,44 @@ func AddImageSet(imageSet ImageSetMongo, media []*multipart.FileHeader) (Interna
 	}
 
 	return InternalResponse{201, "Ok, Added to DB"}, nil
+}
+
+func DeleteImageSetInDB(id bson.ObjectID) error {
+	var entryToDelete ImageSetMongo
+
+	//check if entry exists and get it as a struct for processing
+	err := collection.FindOne(context.Background(), bson.D{{"_id", id}}).Decode(&entryToDelete)
+	if err != nil {
+		log.Println("Failed to find file!")
+		return err
+	}
+	log.Println("Image links to delete:" + strings.Join(entryToDelete.ImageLinks, ", "))
+
+	//delete the entry
+	result, err := collection.DeleteOne(context.Background(), bson.D{{"_id", id}})
+	if err != nil || result.DeletedCount == 0 {
+		log.Println("Failed to delete file")
+		return err
+	}
+
+	//delete files
+	var errList error
+
+	err = DeleteFileList(entryToDelete.ImageLinks)
+	if err != nil {
+		errList = errors.Join(errList, err)
+	}
+
+	err = DeleteFileList(entryToDelete.LowImageLinks)
+	if err != nil {
+		errList = errors.Join(errList, err)
+	}
+
+	if errList != nil {
+		return errList
+	}
+
+	log.Print("---delete complete--- ")
+
+	return nil
 }

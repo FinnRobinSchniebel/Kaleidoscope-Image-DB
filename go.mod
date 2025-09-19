@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/ajdnik/imghash v1.0.0
 	github.com/gofiber/fiber/v2 v2.52.9
+	github.com/valyala/fasthttp v1.66.0
 	go.mongodb.org/mongo-driver/v2 v2.3.0
 )
 
@@ -21,7 +22,6 @@ require (
 	github.com/r9y9/gossp v0.0.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	github.com/valyala/fasthttp v1.66.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.1.2 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
