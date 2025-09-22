@@ -28,23 +28,25 @@ type ImageSetMongo struct {
 	Tags             []string      `json:"tags" bson:"tags,omitempty" form:"tags"`
 	Sources          []SourceInfo  `json:"sources" bson:"sources,omitempty" form:"sources"`
 	Authors          []string      `json:"authors" bson:"authors,omitempty" form:"authors"`
-	ImageLinks       []string      `json:"images" bson:"images,omitempty" form:"images"`
-	LowImageLinks    []string      `json:"low_images" bson:"low_images,omitempty" form:"low_images"`
+	ImageLinks       []string      `json:"images,omitempty" bson:"images,omitempty" form:"images"`
+	LowImageLinks    []string      `json:"low_images,omitempty" bson:"low_images,omitempty" form:"low_images"`
 	ImageHash        []string      `json:"hash" bson:"hash,omitempty" form:"hash"`
 	AutoTags         []string      `json:"autotags" bson:"autotags,omitempty" form:"autotags"`
 	TagRuleOverrides []string      `json:"tag_rule_overrides" bson:"tag_rule_overrides,omitempty" form:"tag_rule_overrides"`
 	Itype            string        `json:"type" bson:"type,omitempty" form:"type"`
 	Description      string        `json:"description" bson:"description,omitempty" form:"description"`
-	other            string        `json:"other" bson:"other,omitempty" form:"other"`
+	Other            string        `json:"other" bson:"other,omitempty" form:"other"`
 	// API will send file as well but it will not be placed in the struct: `json: media`
 }
 
 var ImageDbName string = "ImageSets"
+var UserDbName string = "Users"
 var BackendVolumeLocation string
 
 var client *mongo.Client
 var db *mongo.Database
 var collection *mongo.Collection
+var userCollection *mongo.Collection
 
 func main() {
 	BackendVolumeLocation = os.Getenv("BACKEND_VOLUME_LOCATION")
@@ -75,6 +77,7 @@ func ConnectDB() {
 
 	//points to the collection and creates it if none exists
 	collection = db.Collection(ImageDbName)
+	userCollection = db.Collection(UserDbName)
 
 	log.Print("Connected, no issues ---------------------")
 
@@ -92,38 +95,57 @@ func StartAPI() {
 	log.Print("Starting API")
 	app := fiber.New()
 
-	app.Get("/api/ImageSets", GetAllImages)
+	//authentication
+
+	//imageSet retrievel
+	app.Get("/api/ImageSets", GetImageSetById)
 
 	app.Post("/api/ImageSets", PostImageSet)
 
 	app.Delete("/api/ImageSets", DeleteImageSets)
 
+	app.Post("/api/register", RegisterUser)
+	app.Post("/api/login", LoginUser)
+
 	//set to listen on port 3000
 	app.Listen(":" + serverPort)
 }
 
-func GetAllImages(c *fiber.Ctx) error {
-	var imageSets []ImageSetMongo
+// This api Call is to get info about the Image.
+// It does not provide the image itself.
+func GetImageSetById(c *fiber.Ctx) error {
 
-	cursor, err := collection.Find(context.Background(), bson.M{})
-
+	err := BasicAuthorize(c)
 	if err != nil {
 		return err
 	}
-	defer cursor.Close(context.Background())
 
-	for cursor.Next(context.Background()) {
-		var imageSet ImageSetMongo
-		if err := cursor.Decode(&imageSet); err != nil {
-			return err
-		}
-		imageSets = append(imageSets, imageSet)
+	paramIdRaw := c.Context().QueryArgs().PeekMulti("ids")
+
+	var paramid []string
+	for _, groupedIds := range paramIdRaw {
+		paramid = append(paramid, strings.Split(string(groupedIds), ",")...)
+	}
+	if paramid == nil {
+		return c.Status(400).SendString("Requires an 'ids' param to be sent with the request (eg: ?ids=12345,49325,...)")
+	}
+	iSets, err := GetFromID(paramid...)
+	iSets = CleanImagSetForFrontEnd(iSets...)
+	if err != nil {
+		log.Println("Could Not fetch Items from DB")
+		return err
 	}
 
-	return c.JSON(imageSets)
+	return c.Status(200).JSON(iSets)
+
 }
 
 func PostImageSet(c *fiber.Ctx) error {
+
+	err := BasicAuthorize(c)
+	if err != nil {
+		return err
+	}
 
 	var imageSet *ImageSetMongo = new(ImageSetMongo)
 
@@ -152,6 +174,11 @@ func PostImageSet(c *fiber.Ctx) error {
 }
 
 func DeleteImageSets(c *fiber.Ctx) error {
+
+	err := BasicAuthorize(c)
+	if err != nil {
+		return err
+	}
 
 	//get all params of type 'ids' and split the param by delimiter "," to get a list of all ids to be deleted
 	paramIdRaw := c.Context().QueryArgs().PeekMulti("ids")
@@ -196,4 +223,110 @@ func DeleteImageSets(c *fiber.Ctx) error {
 	}
 
 	return c.Status(200).JSON(fiber.Map{"deleted": DeletedList})
+}
+
+func RegisterUser(c *fiber.Ctx) error {
+
+	username := c.FormValue("username")
+	password := c.FormValue("password")
+	if len(username) < 3 {
+		return errors.New("user Name Not long enough")
+	}
+	if len(password) < 6 {
+		return errors.New("password is not long enough")
+	}
+	var single user
+
+	err := collection.FindOne(context.Background(), bson.M{"username": username}).Decode(single)
+	if err != mongo.ErrNoDocuments {
+		return c.Status(400).SendString("username already in use")
+	}
+
+	hashedPassword, err := hashPassword(password)
+	if err != nil {
+		return c.Status(400).SendString("bad password")
+	}
+
+	newuser := user{
+		Username:       username,
+		HashedPassword: hashedPassword,
+	}
+
+	log.Println("User: " + newuser.Username + " pass: " + password)
+
+	_, err = userCollection.InsertOne(context.Background(), newuser)
+
+	if err != nil {
+		return err
+	}
+
+	return c.SendStatus(200)
+}
+
+func LoginUser(c *fiber.Ctx) error {
+
+	username := c.FormValue("username")
+	password := c.FormValue("password")
+
+	var userInfo user
+	err := userCollection.FindOne(context.Background(), bson.M{"username": username}).Decode(&userInfo)
+	if err != nil {
+		//return err
+		return c.Status(400).SendString("user does not exist")
+	}
+
+	if !comparePassword(password, userInfo.HashedPassword) {
+		return c.Status(400).SendString("username and password did not match")
+	}
+	sessionToken := generateToken(32)
+	csrfToken := generateToken(32)
+
+	c.Cookie(&fiber.Cookie{
+		Name:     "session_token",
+		Value:    sessionToken,
+		Expires:  time.Now().Add(48 * time.Hour),
+		HTTPOnly: true,
+	})
+	c.Cookie(&fiber.Cookie{
+		Name:     "csrf_token",
+		Value:    csrfToken,
+		Expires:  time.Now().Add(48 * time.Hour),
+		HTTPOnly: false,
+	})
+	userInfo.CsrfToken = csrfToken
+	userInfo.SessionCookie = sessionToken
+
+	_, err = userCollection.UpdateOne(context.Background(), bson.M{"_id": userInfo.Id}, bson.M{"$set": userInfo})
+
+	if err != nil {
+		return err
+	}
+
+	return c.SendStatus(200)
+}
+
+func BasicAuthorize(c *fiber.Ctx) error {
+	sessionT := c.Cookies("session_token")
+	//log.Println("token: " + sessionT)
+	if sessionT == "" {
+		return errors.New("not authorized")
+	}
+
+	var userInfo user
+	err := userCollection.FindOne(context.Background(), bson.M{"session_token": sessionT}).Decode(&userInfo)
+	if err != nil {
+		return err
+		//return c.Status(400).SendString("user does not exist")
+	}
+	//sessionT := c.Cookies("session_token", "")
+
+	csrf := c.Get("csrf_token")
+	//log.Println("csrf: " + csrf)
+	//log.Println("server csrf: " + userInfo.CsrfToken)
+	if csrf != userInfo.CsrfToken {
+		return errors.New("not authorized")
+	}
+
+	return nil
+
 }

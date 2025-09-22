@@ -2,9 +2,18 @@ package main
 
 import (
 	"context"
+	"log"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+type user struct {
+	Id             bson.ObjectID `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
+	Username       string        `json:"username" bson:"username" form:"username"`
+	HashedPassword string        `json:"password" bson:"password" form:"password"`
+	SessionCookie  string        `json:"session_token" bson:"session_token" form:"session_token"`
+	CsrfToken      string        `json:"csrf_token" bson:"csrf_token" form:"csrf_token"`
+}
 
 type CollisionResponsePair struct {
 	IdOfHashCollision bson.ObjectID
@@ -44,4 +53,31 @@ func findOverlappingHashes(hash string) ([]CollisionResponsePair, error) {
 	}
 
 	return idList, nil
+}
+
+func GetFromID(id ...string) ([]ImageSetMongo, error) {
+
+	var IdBson []bson.ObjectID
+
+	for _, item := range id {
+		ObjId, err := bson.ObjectIDFromHex(item)
+		if err != nil {
+			return nil, err
+		}
+		IdBson = append(IdBson, ObjId)
+	}
+
+	var iSets []ImageSetMongo
+
+	var entry ImageSetMongo
+
+	for _, ObjId := range IdBson {
+		err := collection.FindOne(context.Background(), bson.D{{"_id", ObjId}}).Decode(&entry)
+		if err != nil {
+			log.Println("Failed to find file!")
+			return nil, err
+		}
+		iSets = append(iSets, entry)
+	}
+	return iSets, nil
 }
