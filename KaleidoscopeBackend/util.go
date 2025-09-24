@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
@@ -16,7 +14,6 @@ import (
 	"github.com/ajdnik/imghash"
 	"github.com/valyala/fasthttp"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type InternalResponse struct {
@@ -298,24 +295,4 @@ func CleanImagSetForFrontEnd(iSet ...ImageSetMongo) []ImageSetMongo {
 		iSet[index].LowImageLinks = nil
 	}
 	return iSet
-}
-
-func hashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 10)
-	if err != nil {
-		return "", err
-	}
-	return string(bytes), err
-}
-func comparePassword(password, hash string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	return err == nil
-
-}
-func generateToken(length int) string {
-	bytes := make([]byte, length)
-	if _, err := rand.Read(bytes); err != nil {
-		log.Fatalf("failed to generate token: %v", err)
-	}
-	return base64.URLEncoding.EncodeToString(bytes)
 }

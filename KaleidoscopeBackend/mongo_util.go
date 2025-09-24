@@ -1,23 +1,23 @@
 package main
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authUtil"
 	"context"
+	"fmt"
 	"log"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-type user struct {
-	Id             bson.ObjectID `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
-	Username       string        `json:"username" bson:"username" form:"username"`
-	HashedPassword string        `json:"password" bson:"password" form:"password"`
-	SessionCookie  string        `json:"session_token" bson:"session_token" form:"session_token"`
-	CsrfToken      string        `json:"csrf_token" bson:"csrf_token" form:"csrf_token"`
-}
-
 type CollisionResponsePair struct {
 	IdOfHashCollision bson.ObjectID
 	ImageNumber       int
+}
+type SessionSettings struct {
+	Id            bson.ObjectID      `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
+	SessionID     string             `json:"sessionid" bson:"sessionid" form:"sessionid"`
+	RefreshToken  authUtil.JWTClaims `json:"refreshtoken" bson:"refreshtoken" form:"refreshtoken"`
+	IndefiniteRef bool               `json:"indefiniteref" bson:"indefiniteref" form:"indefiniteref"`
 }
 
 func findOverlappingHashes(hash string) ([]CollisionResponsePair, error) {
@@ -80,4 +80,20 @@ func GetFromID(id ...string) ([]ImageSetMongo, error) {
 		iSets = append(iSets, entry)
 	}
 	return iSets, nil
+}
+
+func StoreRefresh(token *authUtil.JWTClaims, canRefresh bool) error {
+
+	entry := SessionSettings{
+		SessionID:     token.ID,
+		RefreshToken:  *token,
+		IndefiniteRef: canRefresh,
+	}
+
+	_, err := SessionDb.InsertOne(context.Background(), entry)
+
+	if err != nil {
+		return fmt.Errorf("could Not create session on db: %d", err)
+	}
+	return nil
 }

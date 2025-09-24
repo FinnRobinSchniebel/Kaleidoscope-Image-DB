@@ -1,6 +1,7 @@
 package main
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authUtil"
 	"context"
 	"errors"
 	"log"
@@ -39,17 +40,29 @@ type ImageSetMongo struct {
 	// API will send file as well but it will not be placed in the struct: `json: media`
 }
 
-var ImageDbName string = "ImageSets"
-var UserDbName string = "Users"
 var BackendVolumeLocation string
 
 var client *mongo.Client
 var db *mongo.Database
 var collection *mongo.Collection
 var userCollection *mongo.Collection
+var SessionDb *mongo.Collection
+
+const minSecretKeySize = 32
+const ImageDbName = "ImageSets"
+const UserDbName = "Users"
+const SessionDbName = "Sessions"
 
 func main() {
 	BackendVolumeLocation = os.Getenv("BACKEND_VOLUME_LOCATION")
+	SecretKey := os.Getenv("JWT_SECRET")
+
+	if minSecretKeySize > len(SecretKey) {
+		log.Fatalf("Secret Key Must be at least %d character is length", minSecretKeySize)
+	}
+
+	authUtil.JWTSecret = []byte(SecretKey)
+
 	ConnectDB()
 	defer client.Disconnect(context.Background())
 	StartAPI()
@@ -78,6 +91,7 @@ func ConnectDB() {
 	//points to the collection and creates it if none exists
 	collection = db.Collection(ImageDbName)
 	userCollection = db.Collection(UserDbName)
+	SessionDb = db.Collection((SessionDbName))
 
 	log.Print("Connected, no issues ---------------------")
 
@@ -115,7 +129,7 @@ func StartAPI() {
 // It does not provide the image itself.
 func GetImageSetById(c *fiber.Ctx) error {
 
-	err := BasicAuthorize(c)
+	err := authUtil.BasicAuthorize(c, userCollection)
 	if err != nil {
 		return err
 	}
@@ -142,7 +156,7 @@ func GetImageSetById(c *fiber.Ctx) error {
 
 func PostImageSet(c *fiber.Ctx) error {
 
-	err := BasicAuthorize(c)
+	err := authUtil.BasicAuthorize(c, userCollection)
 	if err != nil {
 		return err
 	}
@@ -175,7 +189,7 @@ func PostImageSet(c *fiber.Ctx) error {
 
 func DeleteImageSets(c *fiber.Ctx) error {
 
-	err := BasicAuthorize(c)
+	err := authUtil.BasicAuthorize(c, userCollection)
 	if err != nil {
 		return err
 	}
@@ -235,19 +249,19 @@ func RegisterUser(c *fiber.Ctx) error {
 	if len(password) < 6 {
 		return errors.New("password is not long enough")
 	}
-	var single user
+	var single authUtil.User
 
-	err := collection.FindOne(context.Background(), bson.M{"username": username}).Decode(single)
+	err := userCollection.FindOne(context.Background(), bson.M{"username": username}).Decode(single)
 	if err != mongo.ErrNoDocuments {
 		return c.Status(400).SendString("username already in use")
 	}
 
-	hashedPassword, err := hashPassword(password)
+	hashedPassword, err := authUtil.HashPassword(password)
 	if err != nil {
 		return c.Status(400).SendString("bad password")
 	}
 
-	newuser := user{
+	newuser := authUtil.User{
 		Username:       username,
 		HashedPassword: hashedPassword,
 	}
@@ -267,66 +281,89 @@ func LoginUser(c *fiber.Ctx) error {
 
 	username := c.FormValue("username")
 	password := c.FormValue("password")
+	StayLoggedIn := c.QueryBool("stay_logged_in")
 
-	var userInfo user
+	/**** Check valid login ****/
+	var userInfo authUtil.User
 	err := userCollection.FindOne(context.Background(), bson.M{"username": username}).Decode(&userInfo)
 	if err != nil {
 		//return err
 		return c.Status(400).SendString("user does not exist")
 	}
 
-	if !comparePassword(password, userInfo.HashedPassword) {
+	if !authUtil.ComparePassword(password, userInfo.HashedPassword) {
 		return c.Status(400).SendString("username and password did not match")
 	}
-	sessionToken := generateToken(32)
-	csrfToken := generateToken(32)
 
-	c.Cookie(&fiber.Cookie{
-		Name:     "session_token",
-		Value:    sessionToken,
-		Expires:  time.Now().Add(48 * time.Hour),
-		HTTPOnly: true,
-	})
-	c.Cookie(&fiber.Cookie{
-		Name:     "csrf_token",
-		Value:    csrfToken,
-		Expires:  time.Now().Add(48 * time.Hour),
-		HTTPOnly: false,
-	})
-	userInfo.CsrfToken = csrfToken
-	userInfo.SessionCookie = sessionToken
+	/**** create tokens ****/
+	sessionToken, _, err := authUtil.GenerateToken(userInfo)
+	if err != nil {
+		//return err
+		return err
+	}
 
-	_, err = userCollection.UpdateOne(context.Background(), bson.M{"_id": userInfo.Id}, bson.M{"$set": userInfo})
+	RefreshToken, token, err := authUtil.GenerateToken(userInfo)
+	if err != nil {
+		//return err
+		return err
+	}
 
+	/**** store refresh token ****/
+	err = StoreRefresh(token, StayLoggedIn)
 	if err != nil {
 		return err
 	}
+
+	/**** send tokens ****/
+	c.Cookie(&fiber.Cookie{
+		Name:    "token",
+		Value:   RefreshToken,
+		Expires: time.Now().Add(time.Minute * 25),
+		Path:    "/session",
+		//Secure:   true,
+		HTTPOnly: true,
+	})
+
+	res := fiber.Map{
+		"session_token": sessionToken,
+	}
+
+	return c.Status(200).JSON(res)
+
+	// sessionToken := generateToken(32)
+	// csrfToken := generateToken(32)
+
+	// c.Cookie(&fiber.Cookie{
+	// 	Name:     "session_token",
+	// 	Value:    sessionToken,
+	// 	Expires:  time.Now().Add(48 * time.Hour),
+	// 	HTTPOnly: true,
+	// })
+	// c.Cookie(&fiber.Cookie{
+	// 	Name:     "csrf_token",
+	// 	Value:    csrfToken,
+	// 	Expires:  time.Now().Add(48 * time.Hour),
+	// 	HTTPOnly: false,
+	// })
+	// userInfo.CsrfToken = csrfToken
+	// userInfo.SessionCookie = sessionToken
+
+	// _, err = userCollection.UpdateOne(context.Background(), bson.M{"_id": userInfo.Id}, bson.M{"$set": userInfo})
+
+	// if err != nil {
+	// 	return err
+	// }
 
 	return c.SendStatus(200)
 }
 
-func BasicAuthorize(c *fiber.Ctx) error {
-	sessionT := c.Cookies("session_token")
-	//log.Println("token: " + sessionT)
-	if sessionT == "" {
-		return errors.New("not authorized")
-	}
+func NewRefreshToken(c *fiber.Ctx, userInfo authUtil.User) error {
 
-	var userInfo user
-	err := userCollection.FindOne(context.Background(), bson.M{"session_token": sessionT}).Decode(&userInfo)
-	if err != nil {
-		return err
-		//return c.Status(400).SendString("user does not exist")
-	}
-	//sessionT := c.Cookies("session_token", "")
+	//refTok, _, err := authUtil.GenerateToken(userInfo)
 
-	csrf := c.Get("csrf_token")
-	//log.Println("csrf: " + csrf)
-	//log.Println("server csrf: " + userInfo.CsrfToken)
-	if csrf != userInfo.CsrfToken {
-		return errors.New("not authorized")
-	}
+	// if err != nil {
+	// 	return err
+	// }
 
 	return nil
-
 }

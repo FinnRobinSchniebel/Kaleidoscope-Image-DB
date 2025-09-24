@@ -21,6 +21,7 @@ services:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@db:27017
       SERVERPORT: ${SERVERPORT}
       BACKEND_VOLUME_LOCATION: ${BACKEND_VOLUME_LOCATION}
+      JWT_SECRET: ${JWT_SECRET}
     volumes:
       - Image_data:${BACKEND_VOLUME_LOCATION}
     depends_on:
