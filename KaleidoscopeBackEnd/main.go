@@ -1,10 +1,12 @@
 package main
 
 import (
-	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authUtil"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -37,6 +39,7 @@ type ImageSetMongo struct {
 	Itype            string        `json:"type" bson:"type,omitempty" form:"type"`
 	Description      string        `json:"description" bson:"description,omitempty" form:"description"`
 	Other            string        `json:"other" bson:"other,omitempty" form:"other"`
+	KscopeUserId     string        `json:"kscope_userid" bson:"kscope_userid,omitempty" form:"kscope_userid"`
 	// API will send file as well but it will not be placed in the struct: `json: media`
 }
 
@@ -45,8 +48,6 @@ var BackendVolumeLocation string
 var client *mongo.Client
 var db *mongo.Database
 var collection *mongo.Collection
-var userCollection *mongo.Collection
-var SessionDb *mongo.Collection
 
 const minSecretKeySize = 32
 const ImageDbName = "ImageSets"
@@ -61,7 +62,7 @@ func main() {
 		log.Fatalf("Secret Key Must be at least %d character is length", minSecretKeySize)
 	}
 
-	authUtil.JWTSecret = []byte(SecretKey)
+	authutil.JWTSecret = []byte(SecretKey)
 
 	ConnectDB()
 	defer client.Disconnect(context.Background())
@@ -90,8 +91,8 @@ func ConnectDB() {
 
 	//points to the collection and creates it if none exists
 	collection = db.Collection(ImageDbName)
-	userCollection = db.Collection(UserDbName)
-	SessionDb = db.Collection((SessionDbName))
+	authutil.UserCollection = db.Collection(UserDbName)
+	authutil.SessionDb = db.Collection((SessionDbName))
 
 	log.Print("Connected, no issues ---------------------")
 
@@ -112,14 +113,19 @@ func StartAPI() {
 	//authentication
 
 	//imageSet retrievel
-	app.Get("/api/ImageSets", GetImageSetById)
+	app.Get("/api/ImageSets", AuthSessionToken, GetImageSetById)
 
-	app.Post("/api/ImageSets", PostImageSet)
+	app.Post("/api/ImageSets", AuthSessionToken, PostImageSet)
 
-	app.Delete("/api/ImageSets", DeleteImageSets)
+	app.Delete("/api/ImageSets", AuthSessionToken, DeleteImageSets)
 
-	app.Post("/api/register", RegisterUser)
-	app.Post("/api/login", LoginUser)
+	//authentication
+	app.Post("/api/session/register", RegisterUser)
+	app.Post("/api/session/login", LoginUser)
+	app.Post("/api/session/logout", LogoutUser)
+	//jwt
+	app.Get("/api/session", AuthSessionToken, NewSessionToken)
+	app.Delete("/api/session", AuthSessionToken, InvalidateRefreshToken)
 
 	//set to listen on port 3000
 	app.Listen(":" + serverPort)
@@ -128,11 +134,6 @@ func StartAPI() {
 // This api Call is to get info about the Image.
 // It does not provide the image itself.
 func GetImageSetById(c *fiber.Ctx) error {
-
-	err := authUtil.BasicAuthorize(c, userCollection)
-	if err != nil {
-		return err
-	}
 
 	paramIdRaw := c.Context().QueryArgs().PeekMulti("ids")
 
@@ -155,11 +156,6 @@ func GetImageSetById(c *fiber.Ctx) error {
 }
 
 func PostImageSet(c *fiber.Ctx) error {
-
-	err := authUtil.BasicAuthorize(c, userCollection)
-	if err != nil {
-		return err
-	}
 
 	var imageSet *ImageSetMongo = new(ImageSetMongo)
 
@@ -188,11 +184,6 @@ func PostImageSet(c *fiber.Ctx) error {
 }
 
 func DeleteImageSets(c *fiber.Ctx) error {
-
-	err := authUtil.BasicAuthorize(c, userCollection)
-	if err != nil {
-		return err
-	}
 
 	//get all params of type 'ids' and split the param by delimiter "," to get a list of all ids to be deleted
 	paramIdRaw := c.Context().QueryArgs().PeekMulti("ids")
@@ -249,26 +240,26 @@ func RegisterUser(c *fiber.Ctx) error {
 	if len(password) < 6 {
 		return errors.New("password is not long enough")
 	}
-	var single authUtil.User
+	_, err := authutil.GetUserByName(username)
 
-	err := userCollection.FindOne(context.Background(), bson.M{"username": username}).Decode(single)
-	if err != mongo.ErrNoDocuments {
+	//if quary succeeds return an error
+	if err == nil {
 		return c.Status(400).SendString("username already in use")
 	}
 
-	hashedPassword, err := authUtil.HashPassword(password)
+	hashedPassword, err := authutil.HashPassword(password)
 	if err != nil {
 		return c.Status(400).SendString("bad password")
 	}
 
-	newuser := authUtil.User{
+	newuser := authutil.User{
 		Username:       username,
 		HashedPassword: hashedPassword,
 	}
 
 	log.Println("User: " + newuser.Username + " pass: " + password)
 
-	_, err = userCollection.InsertOne(context.Background(), newuser)
+	_, err = authutil.AddUser(newuser)
 
 	if err != nil {
 		return err
@@ -284,42 +275,43 @@ func LoginUser(c *fiber.Ctx) error {
 	StayLoggedIn := c.QueryBool("stay_logged_in")
 
 	/**** Check valid login ****/
-	var userInfo authUtil.User
-	err := userCollection.FindOne(context.Background(), bson.M{"username": username}).Decode(&userInfo)
+	var userInfo authutil.User
+	userInfo, err := authutil.GetUserByName(username)
 	if err != nil {
 		//return err
 		return c.Status(400).SendString("user does not exist")
 	}
 
-	if !authUtil.ComparePassword(password, userInfo.HashedPassword) {
+	if !authutil.ComparePassword(password, userInfo.HashedPassword) {
 		return c.Status(400).SendString("username and password did not match")
 	}
 
 	/**** create tokens ****/
-	sessionToken, _, err := authUtil.GenerateToken(userInfo)
+	sessionToken, _, err := authutil.GenerateToken(userInfo, 15*time.Minute)
 	if err != nil {
 		//return err
 		return err
 	}
 
-	RefreshToken, token, err := authUtil.GenerateToken(userInfo)
+	//refresh token
+	RefreshToken, token, err := authutil.GenerateToken(userInfo, 48*time.Hour)
 	if err != nil {
 		//return err
 		return err
 	}
 
 	/**** store refresh token ****/
-	err = StoreRefresh(token, StayLoggedIn)
+	err = authutil.StoreRefresh(token, StayLoggedIn)
 	if err != nil {
 		return err
 	}
 
 	/**** send tokens ****/
 	c.Cookie(&fiber.Cookie{
-		Name:    "token",
+		Name:    "refresh_token",
 		Value:   RefreshToken,
 		Expires: time.Now().Add(time.Minute * 25),
-		Path:    "/session",
+		Path:    "/api/session",
 		//Secure:   true,
 		HTTPOnly: true,
 	})
@@ -329,41 +321,138 @@ func LoginUser(c *fiber.Ctx) error {
 	}
 
 	return c.Status(200).JSON(res)
-
-	// sessionToken := generateToken(32)
-	// csrfToken := generateToken(32)
-
-	// c.Cookie(&fiber.Cookie{
-	// 	Name:     "session_token",
-	// 	Value:    sessionToken,
-	// 	Expires:  time.Now().Add(48 * time.Hour),
-	// 	HTTPOnly: true,
-	// })
-	// c.Cookie(&fiber.Cookie{
-	// 	Name:     "csrf_token",
-	// 	Value:    csrfToken,
-	// 	Expires:  time.Now().Add(48 * time.Hour),
-	// 	HTTPOnly: false,
-	// })
-	// userInfo.CsrfToken = csrfToken
-	// userInfo.SessionCookie = sessionToken
-
-	// _, err = userCollection.UpdateOne(context.Background(), bson.M{"_id": userInfo.Id}, bson.M{"$set": userInfo})
-
-	// if err != nil {
-	// 	return err
-	// }
-
-	return c.SendStatus(200)
 }
 
-func NewRefreshToken(c *fiber.Ctx, userInfo authUtil.User) error {
+func AuthSessionToken(c *fiber.Ctx) error {
 
-	//refTok, _, err := authUtil.GenerateToken(userInfo)
+	sessionToken := c.Get("session_token", "")
 
-	// if err != nil {
-	// 	return err
-	// }
+	if sessionToken == "" || sessionToken == "Bearer " || !strings.HasPrefix(sessionToken, "Bearer ") {
+		log.Printf("recieved invalid session token: %s", sessionToken)
+		return fmt.Errorf("no valid Session token received")
+	}
+	sessionToken = strings.TrimPrefix(sessionToken, "Bearer ")
 
-	return nil
+	_, err := authutil.VerifyToken(sessionToken)
+	if err != nil {
+		return err
+	}
+
+	return c.Next()
+}
+
+func NewSessionToken(c *fiber.Ctx) error {
+
+	userRefTok := c.Cookies("refresh_token", "")
+	if userRefTok == "" {
+		return c.Status(http.StatusBadRequest).SendString("no refresh token given")
+	}
+
+	userRefClaim, err := authutil.VerifyToken(userRefTok)
+	if err != nil {
+		return c.Status(http.StatusBadRequest).SendString("Invalid token")
+	}
+
+	serverClaim, _, err := authutil.GetRefreshToken(userRefClaim.ID)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString("no session on server")
+	}
+
+	if serverClaim.Is_revoked {
+		return c.Status(http.StatusUnauthorized).SendString("access revoked")
+	}
+
+	if serverClaim.UserID != userRefClaim.UserID {
+		return c.Status(http.StatusUnauthorized).SendString("invalid session")
+	}
+
+	//creating User without checking db to improve speed (if something passes all of the checks we already assume the request is trustworthy but still user our claim to avoid injection)
+	bId, err := bson.ObjectIDFromHex(serverClaim.UserID)
+	if err != nil {
+		return err
+	}
+
+	sessionToken, _, err := authutil.GenerateToken(authutil.User{Id: bId, Username: serverClaim.Subject}, 15*time.Minute)
+	if err != nil {
+		return err
+	}
+
+	res := fiber.Map{
+		"session_token": sessionToken,
+	}
+
+	log.Println("New session token created for user: " + userRefClaim.UserID)
+
+	return c.Status(200).JSON(res)
+}
+
+// Accepts a single id of a refresh token (Must be admin to do so).
+// If none is given it will try to invalidate the used token
+func InvalidateRefreshToken(c *fiber.Ctx) error {
+
+	userRefTok := c.Cookies("refresh_token", "")
+	claim, _ := authutil.VerifyToken(userRefTok)
+	tokenId := claim.ID
+
+	param := c.Params("id", "")
+
+	if userRefTok == "" {
+		return c.Status(http.StatusBadRequest).SendString("no refresh token provided in request")
+	}
+
+	if param != "" && tokenId != param {
+		bid, err := bson.ObjectIDFromHex(claim.UserID)
+		if err != nil {
+			return c.Status(http.StatusBadRequest).SendString("Failed to turn user ID into a valid ID")
+		}
+		user, err := authutil.GetUserById(bid)
+
+		if err != nil {
+			return c.Status(http.StatusBadRequest).SendString("Invalid user ID in token")
+		}
+		if !user.IsAdmin {
+			return c.Status(http.StatusUnauthorized).SendString("Must be Admin to Invalidate another users Token")
+		}
+		tokenId = param
+	}
+
+	err := authutil.InvalidateRefreshTokenById(tokenId)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString("Could not Invalidate token")
+	}
+
+	log.Println("Session token invalidated for user: " + claim.UserID)
+
+	return c.Status(200).SendString("session invalidated successfully")
+}
+
+// Uses the Refresh_token to invalidate the session and sends a new session token that expires immediately
+// Does not send a new refresh token as any check with the old token will fail anyway.
+func LogoutUser(c *fiber.Ctx) error {
+	userRefTok := c.Cookies("refresh_token", "")
+	claim, _ := authutil.VerifyToken(userRefTok)
+	tokenId := claim.ID
+
+	err := authutil.InvalidateRefreshTokenById(tokenId)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString("Could not Invalidate token")
+	}
+
+	bId, err := bson.ObjectIDFromHex(claim.UserID)
+	if err != nil {
+		return err
+	}
+
+	sessionToken, _, err := authutil.GenerateToken(authutil.User{Id: bId, Username: claim.Subject}, 0)
+	if err != nil {
+		//return err
+		return err
+	}
+	res := fiber.Map{
+		"session_token": sessionToken,
+	}
+	//"User Loggedout succesfully"
+	log.Printf("User: %s logged out successfully from session %s", claim.UserID, claim.ID)
+
+	return c.Status(200).JSON(res)
 }
