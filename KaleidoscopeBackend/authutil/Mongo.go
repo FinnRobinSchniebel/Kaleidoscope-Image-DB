@@ -6,6 +6,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 var UserCollection *mongo.Collection
@@ -90,4 +91,14 @@ func InvalidateRefreshTokenById(tokenID string) error {
 	fmt.Println("Session invalidated: " + session.SessionID)
 
 	return nil
+}
+func IsAdmin(id string) bool {
+	var boolResult bson.M
+	err := UserCollection.FindOne(context.Background(), bson.M{"_id": id}, options.FindOne().SetProjection(bson.M{"_id": 0, "IsAdmin": 1})).Decode(&boolResult)
+	if err != nil {
+		//return err
+		return false
+	}
+
+	return boolResult["IsAdmin"].(bool)
 }

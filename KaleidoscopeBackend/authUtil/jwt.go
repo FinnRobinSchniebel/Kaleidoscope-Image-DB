@@ -2,8 +2,11 @@ package authutil
 
 import (
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
+	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -81,4 +84,15 @@ func VerifyToken(tokenString string) (*JWTClaims, error) {
 
 	return claims, nil
 
+}
+func GetSessionTokenFromApiHelper(c *fiber.Ctx) (string, error) {
+	sessionToken := c.Get("session_token", "")
+
+	if sessionToken == "" || sessionToken == "Bearer " || !strings.HasPrefix(sessionToken, "Bearer ") {
+		log.Printf("recieved invalid session token: %s", sessionToken)
+		return "", fmt.Errorf("no valid Session token received")
+	}
+	sessionToken = strings.TrimPrefix(sessionToken, "Bearer ")
+
+	return sessionToken, nil
 }

@@ -137,12 +137,16 @@ func DeleteFileList(links []string) error {
 
 // }
 
-func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader) (InternalResponse, map[int][]CollisionResponsePair) {
+func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId string) (InternalResponse, map[int][]CollisionResponsePair) {
 
 	//clean file paths to avoid unauthorized access
 	imageSet.ImageLinks = nil
 	imageSet.LowImageLinks = nil
 	imageSet.ImageHash = nil
+	imageSet.KscopeUserId = ""
+
+	//add userId (done as seperate step to avoid exploits if changes are made)
+	imageSet.KscopeUserId = userId
 
 	//add to DB
 	insertResult, err := collection.InsertOne(context.Background(), imageSet)

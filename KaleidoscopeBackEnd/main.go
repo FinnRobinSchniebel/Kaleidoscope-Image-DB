@@ -4,7 +4,6 @@ import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -39,7 +38,7 @@ type ImageSetMongo struct {
 	Itype            string        `json:"type" bson:"type,omitempty" form:"type"`
 	Description      string        `json:"description" bson:"description,omitempty" form:"description"`
 	Other            string        `json:"other" bson:"other,omitempty" form:"other"`
-	KscopeUserId     string        `json:"kscope_userid" bson:"kscope_userid,omitempty" form:"kscope_userid"`
+	KscopeUserId     string        `json:"kscope_userid" bson:"kscope_userid" form:"kscope_userid"`
 	// API will send file as well but it will not be placed in the struct: `json: media`
 }
 
@@ -67,7 +66,6 @@ func main() {
 	ConnectDB()
 	defer client.Disconnect(context.Background())
 	StartAPI()
-
 }
 
 func ConnectDB() {
@@ -114,18 +112,22 @@ func StartAPI() {
 
 	//imageSet retrievel
 	app.Get("/api/ImageSets", AuthSessionToken, GetImageSetById)
-
 	app.Post("/api/ImageSets", AuthSessionToken, PostImageSet)
-
 	app.Delete("/api/ImageSets", AuthSessionToken, DeleteImageSets)
+	//TODO: Edit imageset api
+	//TODO: MarkForDepetion api
 
 	//authentication
 	app.Post("/api/session/register", RegisterUser)
 	app.Post("/api/session/login", LoginUser)
 	app.Post("/api/session/logout", LogoutUser)
+	//TODO: User Delete API
+
 	//jwt
 	app.Get("/api/session", AuthSessionToken, NewSessionToken)
 	app.Delete("/api/session", AuthSessionToken, InvalidateRefreshToken)
+
+	//ImageRetrieve
 
 	//set to listen on port 3000
 	app.Listen(":" + serverPort)
@@ -134,7 +136,7 @@ func StartAPI() {
 // This api Call is to get info about the Image.
 // It does not provide the image itself.
 func GetImageSetById(c *fiber.Ctx) error {
-
+	//get the ids from the api
 	paramIdRaw := c.Context().QueryArgs().PeekMulti("ids")
 
 	var paramid []string
@@ -144,14 +146,38 @@ func GetImageSetById(c *fiber.Ctx) error {
 	if paramid == nil {
 		return c.Status(400).SendString("Requires an 'ids' param to be sent with the request (eg: ?ids=12345,49325,...)")
 	}
+	//get token for validation
+	sessionToken, _ := authutil.GetSessionTokenFromApiHelper(c)
+	claims, _ := authutil.VerifyToken(sessionToken)
+
+	//check if user can access the images and remove any images that would not be valid
 	iSets, err := GetFromID(paramid...)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString("could nod get imageset Id from the request")
+	}
+
+	var UnauthorizedImageIDs []bson.ObjectID
+	for index := range iSets {
+		if iSets[index].KscopeUserId != claims.UserID && iSets[index].KscopeUserId != "" {
+			UnauthorizedImageIDs = append(UnauthorizedImageIDs, iSets[index].ID)
+			iSets[index] = ImageSetMongo{}
+		}
+	}
+
+	//clean response to avoid backend info reaching the front end and create api Json response
 	iSets = CleanImagSetForFrontEnd(iSets...)
+
+	res := fiber.Map{
+		"image_sets":       iSets,
+		"unauthorized_ids": UnauthorizedImageIDs,
+	}
+
 	if err != nil {
 		log.Println("Could Not fetch Items from DB")
 		return err
 	}
 
-	return c.Status(200).JSON(iSets)
+	return c.Status(200).JSON(res)
 
 }
 
@@ -159,10 +185,23 @@ func PostImageSet(c *fiber.Ctx) error {
 
 	var imageSet *ImageSetMongo = new(ImageSetMongo)
 
+	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
+
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString("could not find the user id in the sent token")
+	}
+
+	//Note: We assume the token was provided a valid user ID and don't check the database.
+
+	claims, err := authutil.VerifyToken(sessionToken)
+	//Note: error check could be removed
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString("Failed to find claims in valid Verification token")
+	}
+
 	if err := c.BodyParser(imageSet); err != nil {
 		return err
 	}
-	// imageSet.ID = primitive.NilObjectID
 
 	//A id was sent which is invalid
 	if imageSet.ID != bson.NilObjectID {
@@ -178,11 +217,13 @@ func PostImageSet(c *fiber.Ctx) error {
 
 	media := form.File["media"]
 
-	response, hashHits := AddImageSet(imageSet, media)
+	response, hashHits := AddImageSet(imageSet, media, claims.UserID)
 
 	return c.Status(response.errorCode).JSON(fiber.Map{"error": response.errorString, "hash_hits": hashHits})
 }
 
+// takes in one or multiple "ids" in a coma separated list (no spaces)
+// returns a list of Ids that were deleted.
 func DeleteImageSets(c *fiber.Ctx) error {
 
 	//get all params of type 'ids' and split the param by delimiter "," to get a list of all ids to be deleted
@@ -197,6 +238,29 @@ func DeleteImageSets(c *fiber.Ctx) error {
 
 	if paramid == nil {
 		return c.Status(400).SendString("Requires an 'ids' param to be sent with the request (eg: ?ids=12345,49325,...)")
+	}
+
+	//get token for validation
+	sessionToken, _ := authutil.GetSessionTokenFromApiHelper(c)
+	claims, _ := authutil.VerifyToken(sessionToken)
+
+	var UnauthorizedImageIDs []bson.ObjectID
+
+	//If user is not admin check for authority to do deletions to avoid users trying to delete other peoples images
+	if !authutil.IsAdmin(claims.UserID) {
+		//check if user can access the images and remove any images that would not be valid
+		iSets, err := GetFromID(paramid...)
+		if err != nil {
+			return c.Status(http.StatusInternalServerError).SendString("Could not get ID from the Request")
+		}
+
+		for index := range iSets {
+			if iSets[index].KscopeUserId != claims.UserID {
+				UnauthorizedImageIDs = append(UnauthorizedImageIDs, iSets[index].ID)
+				//Must remove unauthorized items to avoid deletion during next step
+				iSets = append(iSets[:index], iSets[(index+1):]...)
+			}
+		}
 	}
 
 	var DeletedList []string
@@ -219,15 +283,21 @@ func DeleteImageSets(c *fiber.Ctx) error {
 		DeletedList = append(DeletedList, id)
 	}
 
-	if errList != nil {
-		return c.JSON(fiber.Map{"deleted": DeletedList, "errors": errList.Error()})
+	res := fiber.Map{
+		"deleted":      DeletedList,
+		"unauthorized": UnauthorizedImageIDs,
+		"errors":       errList.Error(),
+	}
+
+	if DeletedList != nil && (errList != nil || UnauthorizedImageIDs != nil) {
+		return c.Status(http.StatusPartialContent).JSON(res)
 	}
 
 	if DeletedList == nil {
-		return c.Status(404).SendString("Invalid IDs: " + strings.Join(paramid, ", "))
+		return c.Status(404).JSON(res)
 	}
 
-	return c.Status(200).JSON(fiber.Map{"deleted": DeletedList})
+	return c.Status(200).JSON(res)
 }
 
 func RegisterUser(c *fiber.Ctx) error {
@@ -325,15 +395,12 @@ func LoginUser(c *fiber.Ctx) error {
 
 func AuthSessionToken(c *fiber.Ctx) error {
 
-	sessionToken := c.Get("session_token", "")
-
-	if sessionToken == "" || sessionToken == "Bearer " || !strings.HasPrefix(sessionToken, "Bearer ") {
-		log.Printf("recieved invalid session token: %s", sessionToken)
-		return fmt.Errorf("no valid Session token received")
+	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
 	}
-	sessionToken = strings.TrimPrefix(sessionToken, "Bearer ")
 
-	_, err := authutil.VerifyToken(sessionToken)
+	_, err = authutil.VerifyToken(sessionToken)
 	if err != nil {
 		return err
 	}
