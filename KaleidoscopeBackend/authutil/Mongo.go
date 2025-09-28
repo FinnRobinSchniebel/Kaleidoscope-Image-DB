@@ -94,11 +94,19 @@ func InvalidateRefreshTokenById(tokenID string) error {
 }
 func IsAdmin(id string) bool {
 	var boolResult bson.M
-	err := UserCollection.FindOne(context.Background(), bson.M{"_id": id}, options.FindOne().SetProjection(bson.M{"_id": 0, "IsAdmin": 1})).Decode(&boolResult)
+	mongId, err := bson.ObjectIDFromHex(id)
 	if err != nil {
-		//return err
+		fmt.Println(err)
 		return false
 	}
 
-	return boolResult["IsAdmin"].(bool)
+	err = UserCollection.FindOne(context.Background(), bson.M{"_id": mongId}, options.FindOne().SetProjection(bson.M{"_id": 0, "is_admin": 1})).Decode(&boolResult)
+	if err != nil {
+		fmt.Println(err)
+		return false
+	}
+
+	//fmt.Printf("isAdmin: %s\n", boolResult)
+
+	return boolResult["is_admin"].(bool)
 }

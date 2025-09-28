@@ -253,12 +253,15 @@ func DeleteImageSets(c *fiber.Ctx) error {
 		if err != nil {
 			return c.Status(http.StatusInternalServerError).SendString("Could not get ID from the Request")
 		}
+		if len(iSets) != len(paramid) {
+			return c.Status(500).SendString("something has gone wrong with getting image sets from the IDs")
+		}
 
 		for index := range iSets {
 			if iSets[index].KscopeUserId != claims.UserID {
 				UnauthorizedImageIDs = append(UnauthorizedImageIDs, iSets[index].ID)
 				//Must remove unauthorized items to avoid deletion during next step
-				iSets = append(iSets[:index], iSets[(index+1):]...)
+				paramid = append(paramid[:index], paramid[(index+1):]...)
 			}
 		}
 	}
@@ -283,10 +286,15 @@ func DeleteImageSets(c *fiber.Ctx) error {
 		DeletedList = append(DeletedList, id)
 	}
 
+	var errorText string
+	if errList != nil {
+		errorText = errList.Error()
+	}
+
 	res := fiber.Map{
 		"deleted":      DeletedList,
 		"unauthorized": UnauthorizedImageIDs,
-		"errors":       errList.Error(),
+		"errors":       errorText,
 	}
 
 	if DeletedList != nil && (errList != nil || UnauthorizedImageIDs != nil) {
