@@ -2,6 +2,7 @@ package main
 
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"context"
 	"errors"
 	"log"
@@ -11,42 +12,14 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-type SourceInfo struct {
-	Name     string   `json:"name" form:"name"`
-	ID       string   `json:"id" form:"id"`
-	Title    string   `json:"title" form:"title"`
-	SourceID string   `json:"sourceid" form:"sourceid"`
-	Tags     []string `json:"tags" form:"tags"`
-}
-
-type ImageSetMongo struct {
-	ID               bson.ObjectID `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
-	Title            string        `json:"title" bson:"title,omitempty" form:"title"`
-	Tags             []string      `json:"tags" bson:"tags,omitempty" form:"tags"`
-	Sources          []SourceInfo  `json:"sources" bson:"sources,omitempty" form:"sources"`
-	Authors          []string      `json:"authors" bson:"authors,omitempty" form:"authors"`
-	ImageLinks       []string      `json:"images,omitempty" bson:"images,omitempty" form:"images"`
-	LowImageLinks    []string      `json:"low_images,omitempty" bson:"low_images,omitempty" form:"low_images"`
-	ImageHash        []string      `json:"hash" bson:"hash,omitempty" form:"hash"`
-	AutoTags         []string      `json:"autotags" bson:"autotags,omitempty" form:"autotags"`
-	TagRuleOverrides []string      `json:"tag_rule_overrides" bson:"tag_rule_overrides,omitempty" form:"tag_rule_overrides"`
-	Itype            string        `json:"type" bson:"type,omitempty" form:"type"`
-	Description      string        `json:"description" bson:"description,omitempty" form:"description"`
-	Other            string        `json:"other" bson:"other,omitempty" form:"other"`
-	KscopeUserId     string        `json:"kscope_userid" bson:"kscope_userid" form:"kscope_userid"`
-	// API will send file as well but it will not be placed in the struct: `json: media`
-}
-
-var BackendVolumeLocation string
-
 var client *mongo.Client
 var db *mongo.Database
-var collection *mongo.Collection
 
 const minSecretKeySize = 32
 const ImageDbName = "ImageSets"
@@ -54,7 +27,7 @@ const UserDbName = "Users"
 const SessionDbName = "Sessions"
 
 func main() {
-	BackendVolumeLocation = os.Getenv("BACKEND_VOLUME_LOCATION")
+	imageset.BackendVolumeLocation = os.Getenv("BACKEND_VOLUME_LOCATION")
 	SecretKey := os.Getenv("JWT_SECRET")
 
 	if minSecretKeySize > len(SecretKey) {
@@ -88,7 +61,7 @@ func ConnectDB() {
 	db = client.Database("KaleidoScopedb")
 
 	//points to the collection and creates it if none exists
-	collection = db.Collection(ImageDbName)
+	imageset.Collection = db.Collection(ImageDbName)
 	authutil.UserCollection = db.Collection(UserDbName)
 	authutil.SessionDb = db.Collection((SessionDbName))
 
@@ -151,7 +124,7 @@ func GetImageSetById(c *fiber.Ctx) error {
 	claims, _ := authutil.VerifyToken(sessionToken)
 
 	//check if user can access the images and remove any images that would not be valid
-	iSets, err := GetFromID(paramid...)
+	iSets, err := imageset.GetFromID(paramid...)
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).SendString("could nod get imageset Id from the request")
 	}
@@ -160,12 +133,12 @@ func GetImageSetById(c *fiber.Ctx) error {
 	for index := range iSets {
 		if iSets[index].KscopeUserId != claims.UserID && iSets[index].KscopeUserId != "" {
 			UnauthorizedImageIDs = append(UnauthorizedImageIDs, iSets[index].ID)
-			iSets[index] = ImageSetMongo{}
+			iSets[index] = imageset.ImageSetMongo{}
 		}
 	}
 
 	//clean response to avoid backend info reaching the front end and create api Json response
-	iSets = CleanImagSetForFrontEnd(iSets...)
+	iSets = imageset.CleanImagSetForFrontEnd(iSets...)
 
 	res := fiber.Map{
 		"image_sets":       iSets,
@@ -183,7 +156,7 @@ func GetImageSetById(c *fiber.Ctx) error {
 
 func PostImageSet(c *fiber.Ctx) error {
 
-	var imageSet *ImageSetMongo = new(ImageSetMongo)
+	var imageSet *imageset.ImageSetMongo = new(imageset.ImageSetMongo)
 
 	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
 
@@ -217,9 +190,9 @@ func PostImageSet(c *fiber.Ctx) error {
 
 	media := form.File["media"]
 
-	response, hashHits := AddImageSet(imageSet, media, claims.UserID)
+	response, hashHits := imageset.AddImageSet(imageSet, media, claims.UserID)
 
-	return c.Status(response.errorCode).JSON(fiber.Map{"error": response.errorString, "hash_hits": hashHits})
+	return c.Status(response.ErrorCode).JSON(fiber.Map{"error": response.ErrorString, "hash_hits": hashHits})
 }
 
 // takes in one or multiple "ids" in a coma separated list (no spaces)
@@ -249,7 +222,7 @@ func DeleteImageSets(c *fiber.Ctx) error {
 	//If user is not admin check for authority to do deletions to avoid users trying to delete other peoples images
 	if !authutil.IsAdmin(claims.UserID) {
 		//check if user can access the images and remove any images that would not be valid
-		iSets, err := GetFromID(paramid...)
+		iSets, err := imageset.GetFromID(paramid...)
 		if err != nil {
 			return c.Status(http.StatusInternalServerError).SendString("Could not get ID from the Request")
 		}
@@ -278,7 +251,7 @@ func DeleteImageSets(c *fiber.Ctx) error {
 			continue
 		}
 
-		err = DeleteImageSetInDB(ObjId)
+		err = imageset.DeleteImageSetInDB(ObjId)
 		if err != nil {
 			errList = errors.Join(errList, err)
 			continue
@@ -530,4 +503,70 @@ func LogoutUser(c *fiber.Ctx) error {
 	log.Printf("User: %s logged out successfully from session %s", claim.UserID, claim.ID)
 
 	return c.Status(200).JSON(res)
+}
+
+/*
+Will take in ONE imagset ID ('image_set_id') and one or multiple Index (index) of the image to provide.
+If no Index is given it will return all images from the image set
+TODO: passing a value 'lowres' with true will result in a low res version of the image being sent
+
+	WARNING: this code assumes that the token has already been validated before running the function
+	Returns an array of images in the 'images' field
+*/
+func GetImageFromID(c *fiber.Ctx) error {
+
+	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
+	if err != nil {
+		return c.Status(500).SendString("could not parse token values for access varification")
+	}
+
+	var requestBody struct {
+		ImageSetId bson.ObjectID `json:"image_set_id"`
+		IndexList  []int         `json:"index"`
+		LowRes     bool          `json:"lowres"`
+	}
+
+	err = c.BodyParser(requestBody)
+	if err != nil {
+		return c.Status(http.StatusBadRequest).SendString("could not parse request")
+	}
+	if requestBody.ImageSetId == bson.NilObjectID {
+		return c.Status(http.StatusBadRequest).SendString("no image set ID provided")
+	}
+
+	var claim authutil.JWTClaims
+	//WARNING Source blow
+	_, _, err = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
+
+	imageset, err := imageset.GetFromID(requestBody.ImageSetId.String())
+	if err != nil {
+		return c.Status(http.StatusNotFound).SendString("imageSet could not be found")
+	}
+
+	var imageLinkList []string
+
+	if requestBody.LowRes {
+		//get lowres
+		if len(requestBody.IndexList) == 0 {
+			//all images
+			imageLinkList = imageset[0].ImageLinks
+		} else {
+			for index := range requestBody.IndexList {
+				imageLinkList = append(imageLinkList, imageset[0].LowImageLinks[index])
+			}
+		}
+	} else {
+		//get highres
+		if len(requestBody.IndexList) == 0 {
+			//all images
+			imageLinkList = imageset[0].ImageLinks
+		} else {
+			for index := range requestBody.IndexList {
+				imageLinkList = append(imageLinkList, imageset[0].ImageLinks[index])
+			}
+		}
+
+	}
+
+	return nil
 }

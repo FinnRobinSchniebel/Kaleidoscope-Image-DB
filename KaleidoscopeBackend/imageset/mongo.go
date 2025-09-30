@@ -1,11 +1,14 @@
-package main
+package imageset
 
 import (
 	"context"
 	"log"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
+
+var Collection *mongo.Collection
 
 type CollisionResponsePair struct {
 	IdOfHashCollision bson.ObjectID
@@ -13,7 +16,7 @@ type CollisionResponsePair struct {
 }
 
 func findOverlappingHashes(hash string) ([]CollisionResponsePair, error) {
-	cursor, err := collection.Find(context.Background(), bson.D{{"hash", hash}})
+	cursor, err := Collection.Find(context.Background(), bson.D{{"hash", hash}})
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +67,7 @@ func GetFromID(id ...string) ([]ImageSetMongo, error) {
 	var entry ImageSetMongo
 
 	for _, ObjId := range IdBson {
-		err := collection.FindOne(context.Background(), bson.D{{"_id", ObjId}}).Decode(&entry)
+		err := Collection.FindOne(context.Background(), bson.D{{"_id", ObjId}}).Decode(&entry)
 		if err != nil {
 			log.Println("Failed to find file!")
 			return nil, err

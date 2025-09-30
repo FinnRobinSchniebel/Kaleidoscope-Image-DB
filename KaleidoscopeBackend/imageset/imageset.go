@@ -1,4 +1,4 @@
-package main
+package imageset
 
 import (
 	"context"
@@ -16,10 +16,38 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-type InternalResponse struct {
-	errorCode   int
-	errorString string
+type SourceInfo struct {
+	Name     string   `json:"name" form:"name"`
+	ID       string   `json:"id" form:"id"`
+	Title    string   `json:"title" form:"title"`
+	SourceID string   `json:"sourceid" form:"sourceid"`
+	Tags     []string `json:"tags" form:"tags"`
 }
+
+type ImageSetMongo struct {
+	ID               bson.ObjectID `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
+	Title            string        `json:"title" bson:"title,omitempty" form:"title"`
+	Tags             []string      `json:"tags" bson:"tags,omitempty" form:"tags"`
+	Sources          []SourceInfo  `json:"sources" bson:"sources,omitempty" form:"sources"`
+	Authors          []string      `json:"authors" bson:"authors,omitempty" form:"authors"`
+	ImageLinks       []string      `json:"images,omitempty" bson:"images,omitempty" form:"images"`
+	LowImageLinks    []string      `json:"low_images,omitempty" bson:"low_images,omitempty" form:"low_images"`
+	ImageHash        []string      `json:"hash" bson:"hash,omitempty" form:"hash"`
+	AutoTags         []string      `json:"autotags" bson:"autotags,omitempty" form:"autotags"`
+	TagRuleOverrides []string      `json:"tag_rule_overrides" bson:"tag_rule_overrides,omitempty" form:"tag_rule_overrides"`
+	Itype            string        `json:"type" bson:"type,omitempty" form:"type"`
+	Description      string        `json:"description" bson:"description,omitempty" form:"description"`
+	Other            string        `json:"other" bson:"other,omitempty" form:"other"`
+	KscopeUserId     string        `json:"kscope_userid" bson:"kscope_userid" form:"kscope_userid"`
+	// API will send file as well but it will not be placed in the struct: `json: media`
+}
+
+type InternalResponse struct {
+	ErrorCode   int
+	ErrorString string
+}
+
+var BackendVolumeLocation string
 
 func ImageFileName(imageTitle string, imageId bson.ObjectID, setIndex int, fileEnding string) string {
 
@@ -149,7 +177,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId 
 	imageSet.KscopeUserId = userId
 
 	//add to DB
-	insertResult, err := collection.InsertOne(context.Background(), imageSet)
+	insertResult, err := Collection.InsertOne(context.Background(), imageSet)
 
 	if err != nil {
 		return InternalResponse{500, err.Error()}, nil
@@ -164,7 +192,6 @@ func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId 
 	}
 
 	if len(media) == 0 {
-		//Todo: send proper feedback
 		return InternalResponse{400, "No Media attached"}, nil
 	}
 
@@ -231,7 +258,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId 
 	log.Print("Files Uploaded")
 
 	update := bson.M{"$set": imageSet}
-	result, err := collection.UpdateByID(context.Background(), imageSet.ID, update)
+	result, err := Collection.UpdateByID(context.Background(), imageSet.ID, update)
 
 	if err != nil {
 		fmt.Println("Update Failed")
@@ -257,7 +284,7 @@ func DeleteImageSetInDB(id bson.ObjectID) error {
 	var entryToDelete ImageSetMongo
 
 	//check if entry exists and get it as a struct for processing
-	err := collection.FindOne(context.Background(), bson.D{{"_id", id}}).Decode(&entryToDelete)
+	err := Collection.FindOne(context.Background(), bson.D{{"_id", id}}).Decode(&entryToDelete)
 	if err != nil {
 		log.Println("Failed to find file!")
 		return err
@@ -265,7 +292,7 @@ func DeleteImageSetInDB(id bson.ObjectID) error {
 	log.Println("Image links to delete:" + strings.Join(entryToDelete.ImageLinks, ", "))
 
 	//delete the entry
-	result, err := collection.DeleteOne(context.Background(), bson.D{{"_id", id}})
+	result, err := Collection.DeleteOne(context.Background(), bson.D{{"_id", id}})
 	if err != nil || result.DeletedCount == 0 {
 		log.Println("Failed to delete file")
 		return err
