@@ -93,11 +93,11 @@ func StartAPI() {
 	//authentication
 	app.Post("/api/session/register", RegisterUser)
 	app.Post("/api/session/login", LoginUser)
-	app.Post("/api/session/logout", LogoutUser)
+	app.Post("/api/session/logout", AuthSessionToken, LogoutUser)
 	//TODO: User Delete API
 
 	//jwt
-	app.Get("/api/session", AuthSessionToken, NewSessionToken)
+	app.Get("/api/session", NewSessionToken)
 	app.Delete("/api/session", AuthSessionToken, InvalidateRefreshToken)
 
 	//ImageRetrieve
@@ -538,35 +538,35 @@ func GetImageFromID(c *fiber.Ctx) error {
 	//WARNING Source blow
 	_, _, err = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
 
-	imageset, err := imageset.GetFromID(requestBody.ImageSetId.String())
+	_, err = imageset.GetFromID(requestBody.ImageSetId.String())
 	if err != nil {
 		return c.Status(http.StatusNotFound).SendString("imageSet could not be found")
 	}
 
-	var imageLinkList []string
+	//var imageLinkList []string
 
-	if requestBody.LowRes {
-		//get lowres
-		if len(requestBody.IndexList) == 0 {
-			//all images
-			imageLinkList = imageset[0].ImageLinks
-		} else {
-			for index := range requestBody.IndexList {
-				imageLinkList = append(imageLinkList, imageset[0].LowImageLinks[index])
-			}
-		}
-	} else {
-		//get highres
-		if len(requestBody.IndexList) == 0 {
-			//all images
-			imageLinkList = imageset[0].ImageLinks
-		} else {
-			for index := range requestBody.IndexList {
-				imageLinkList = append(imageLinkList, imageset[0].ImageLinks[index])
-			}
-		}
+	// if requestBody.LowRes {
+	// 	//get lowres
+	// 	if len(requestBody.IndexList) == 0 {
+	// 		//all images
+	// 		imageLinkList = imageset[0].Image
+	// 	} else {
+	// 		for index := range requestBody.IndexList {
+	// 			imageLinkList = append(imageLinkList, imageset[0].LowImage[index])
+	// 		}
+	// 	}
+	// } else {
+	// 	//get highres
+	// 	if len(requestBody.IndexList) == 0 {
+	// 		//all images
+	// 		imageLinkList = imageset[0].Image
+	// 	} else {
+	// 		for index := range requestBody.IndexList {
+	// 			imageLinkList = append(imageLinkList, imageset[0].Image[index])
+	// 		}
+	// 	}
 
-	}
+	// }
 
 	return nil
 }

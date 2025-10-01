@@ -1,18 +1,12 @@
 package imageset
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"image"
-	"log"
-	"mime/multipart"
 	"os"
 	"strconv"
 	"strings"
 
-	"github.com/ajdnik/imghash"
-	"github.com/valyala/fasthttp"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -23,22 +17,29 @@ type SourceInfo struct {
 	SourceID string   `json:"sourceid" form:"sourceid"`
 	Tags     []string `json:"tags" form:"tags"`
 }
+type ImageInfo struct {
+	Name          string `json:"images" bson:"images" form:"images"`
+	LowResName    string `json:"low_images" bson:"low_images" form:"low_images"`
+	IsImageActive bool   `json:"active,omitempty" bson:"active,omitempty" form:"active"`
+}
 
 type ImageSetMongo struct {
-	ID               bson.ObjectID `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
-	Title            string        `json:"title" bson:"title,omitempty" form:"title"`
-	Tags             []string      `json:"tags" bson:"tags,omitempty" form:"tags"`
-	Sources          []SourceInfo  `json:"sources" bson:"sources,omitempty" form:"sources"`
-	Authors          []string      `json:"authors" bson:"authors,omitempty" form:"authors"`
-	ImageLinks       []string      `json:"images,omitempty" bson:"images,omitempty" form:"images"`
-	LowImageLinks    []string      `json:"low_images,omitempty" bson:"low_images,omitempty" form:"low_images"`
-	ImageHash        []string      `json:"hash" bson:"hash,omitempty" form:"hash"`
-	AutoTags         []string      `json:"autotags" bson:"autotags,omitempty" form:"autotags"`
-	TagRuleOverrides []string      `json:"tag_rule_overrides" bson:"tag_rule_overrides,omitempty" form:"tag_rule_overrides"`
-	Itype            string        `json:"type" bson:"type,omitempty" form:"type"`
-	Description      string        `json:"description" bson:"description,omitempty" form:"description"`
-	Other            string        `json:"other" bson:"other,omitempty" form:"other"`
-	KscopeUserId     string        `json:"kscope_userid" bson:"kscope_userid" form:"kscope_userid"`
+	ID      bson.ObjectID `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
+	Title   string        `json:"title" bson:"title,omitempty" form:"title"`
+	Tags    []string      `json:"tags" bson:"tags,omitempty" form:"tags"`
+	Sources []SourceInfo  `json:"sources" bson:"sources,omitempty" form:"sources"`
+	Authors []string      `json:"authors" bson:"authors,omitempty" form:"authors"`
+	Path    string        `json:"path" bson:"path,omitempty" form:"path"`
+	Image   []ImageInfo   `json:"images,omitempty" bson:"images,omitempty" form:"images"`
+	//LowImage         []string      `json:"low_images,omitempty" bson:"low_images,omitempty" form:"low_images"`
+	//IsImageActive    []bool   `json:"active,omitempty" bson:"active,omitempty" form:"active"`
+	ImageHash        []string `json:"hash" bson:"hash,omitempty" form:"hash"`
+	AutoTags         []string `json:"autotags" bson:"autotags,omitempty" form:"autotags"`
+	TagRuleOverrides []string `json:"tag_rule_overrides" bson:"tag_rule_overrides,omitempty" form:"tag_rule_overrides"`
+	Itype            string   `json:"type" bson:"type,omitempty" form:"type"`
+	Description      string   `json:"description" bson:"description,omitempty" form:"description"`
+	Other            string   `json:"other" bson:"other,omitempty" form:"other"`
+	KscopeUserId     string   `json:"kscope_userid" bson:"kscope_userid" form:"kscope_userid"`
 	// API will send file as well but it will not be placed in the struct: `json: media`
 }
 
@@ -124,8 +125,8 @@ func cleanInvalidFileSymbols(name string) string {
 
 func CheckImageSetFileDeletionPermisons(entryToDelete ImageSetMongo) error {
 	//check if the file paths in the imageset are valid and deletable
-	for index, entry := range entryToDelete.ImageLinks {
-		info, err := os.Stat(entry)
+	for index, entry := range entryToDelete.Image {
+		info, err := os.Stat(entryToDelete.Path + entry.Name)
 		if errors.Is(err, os.ErrNotExist) {
 			return errors.New("No File Exists for image number: " + strconv.Itoa(index))
 		}
@@ -133,8 +134,11 @@ func CheckImageSetFileDeletionPermisons(entryToDelete ImageSetMongo) error {
 			return errors.New("No permission to delete image number: " + strconv.Itoa(index))
 		}
 	}
-	for index, entry := range entryToDelete.LowImageLinks {
-		info, err := os.Stat(entry)
+	for index, entry := range entryToDelete.Image {
+		if entry.LowResName == "" {
+			continue
+		}
+		info, err := os.Stat(entryToDelete.Path + entry.LowResName)
 		if errors.Is(err, os.ErrNotExist) {
 			return errors.New("No File Exists for low-res image number: " + strconv.Itoa(index))
 		}
@@ -145,14 +149,25 @@ func CheckImageSetFileDeletionPermisons(entryToDelete ImageSetMongo) error {
 	return nil
 }
 
-func DeleteFileList(links []string) error {
+func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 	var errList error
-	for _, entry := range links {
-		if entry == "" {
+	for _, entry := range info {
+		if entry.Name == "" {
 			continue
 		}
 
-		err := os.Remove(entry)
+		err := os.Remove(path + entry.Name)
+		if err != nil {
+			fmt.Printf("Failed to Find File: %s\n", entry)
+			errList = errors.Join(errList, err)
+		}
+	}
+	for _, entry := range info {
+		if entry.LowResName == "" {
+			continue
+		}
+
+		err := os.Remove(path + entry.LowResName)
 		if err != nil {
 			fmt.Printf("Failed to Find File: %s\n", entry)
 			errList = errors.Join(errList, err)
@@ -165,165 +180,12 @@ func DeleteFileList(links []string) error {
 
 // }
 
-func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId string) (InternalResponse, map[int][]CollisionResponsePair) {
-
-	//clean file paths to avoid unauthorized access
-	imageSet.ImageLinks = nil
-	imageSet.LowImageLinks = nil
-	imageSet.ImageHash = nil
-	imageSet.KscopeUserId = ""
-
-	//add userId (done as seperate step to avoid exploits if changes are made)
-	imageSet.KscopeUserId = userId
-
-	//add to DB
-	insertResult, err := Collection.InsertOne(context.Background(), imageSet)
-
-	if err != nil {
-		return InternalResponse{500, err.Error()}, nil
-	}
-
-	imageSet.ID = insertResult.InsertedID.(bson.ObjectID)
-
-	//determine folder path
-	filePath, err := MakeFileDirectory(imageSet.Authors[0])
-	if err != nil {
-		return InternalResponse{500, err.Error()}, nil
-	}
-
-	if len(media) == 0 {
-		return InternalResponse{400, "No Media attached"}, nil
-	}
-
-	hashHits := make(map[int][]CollisionResponsePair)
-
-	for index, item := range media {
-		fmt.Println(item.Filename, item.Size, item.Header["Content-Type"][0])
-
-		/**		Test FilePath	 **/
-		_, err := os.Stat(BackendVolumeLocation)
-		if err != nil {
-			if os.IsNotExist(err) {
-				fmt.Printf("File or directory does not exist at: %s\n", BackendVolumeLocation)
-			} else {
-				fmt.Printf("Error accessing path %s: %v\n", BackendVolumeLocation, err)
-			}
-		} else {
-			fmt.Printf("File or directory exists at: %s\n", BackendVolumeLocation)
-		}
-
-		/**		save media		**/
-
-		fileName := ImageFileName(imageSet.Title, imageSet.ID, index, getType(item.Filename))
-		fullPath := fmt.Sprintf("%s%s", filePath, fileName)
-
-		log.Print("FilePath: " + fullPath)
-		err = fasthttp.SaveMultipartFile(item, fullPath)
-		//err = SaveMultipartFile(item, fullPath)
-		if err != nil {
-			return InternalResponse{500, err.Error()}, nil
-		}
-		imageSet.ImageLinks = append(imageSet.ImageLinks, fullPath)
-
-		/** 	get hash 	**/
-		file, _ := item.Open()
-
-		img, _, err := image.Decode(file)
-		if err != nil {
-			os.Remove(fullPath)
-			return InternalResponse{500, err.Error()}, nil
-		}
-		phash := imghash.NewPHash()
-		ihash := phash.Calculate(img)
-		fmt.Printf("Hashed to: %v\n", ihash)
-		imageSet.ImageHash = append(imageSet.ImageHash, ihash.String())
-		file.Close()
-
-		//compare hash in DB
-
-		HitResults, err := findOverlappingHashes(ihash.String())
-
-		if err != nil {
-			return InternalResponse{500, err.Error()}, nil
-		}
-		if len(HitResults) != 0 {
-			fmt.Println("Hash Hit")
-			hashHits[index] = HitResults
-		}
-
-		//cursor, err := collection.Find(context.Background(), bson.M{"hash": ihash.String()})
-
-	}
-
-	log.Print("Files Uploaded")
-
-	update := bson.M{"$set": imageSet}
-	result, err := Collection.UpdateByID(context.Background(), imageSet.ID, update)
-
-	if err != nil {
-		fmt.Println("Update Failed")
-		return InternalResponse{500, err.Error()}, nil
-	}
-
-	if result.MatchedCount == 0 {
-		log.Print("COULD NOT UPDATE DB FILE AFTER ADDING INFO")
-		return InternalResponse{500, "Error while updating db entry after saving files"}, nil
-		//return c.Status(500).SendString()
-	}
-	log.Println("---Upload complete---")
-	//hash conflict detected
-	if len(hashHits) != 0 {
-		//return InternalErrorHandle{202, "Error while updating db entry after saving files"}
-		return InternalResponse{202, "Ok, Hash collision detected"}, hashHits
-	}
-
-	return InternalResponse{201, "Ok, Added to DB"}, nil
-}
-
-func DeleteImageSetInDB(id bson.ObjectID) error {
-	var entryToDelete ImageSetMongo
-
-	//check if entry exists and get it as a struct for processing
-	err := Collection.FindOne(context.Background(), bson.D{{"_id", id}}).Decode(&entryToDelete)
-	if err != nil {
-		log.Println("Failed to find file!")
-		return err
-	}
-	log.Println("Image links to delete:" + strings.Join(entryToDelete.ImageLinks, ", "))
-
-	//delete the entry
-	result, err := Collection.DeleteOne(context.Background(), bson.D{{"_id", id}})
-	if err != nil || result.DeletedCount == 0 {
-		log.Println("Failed to delete file")
-		return err
-	}
-
-	//delete files
-	var errList error
-
-	err = DeleteFileList(entryToDelete.ImageLinks)
-	if err != nil {
-		errList = errors.Join(errList, err)
-	}
-
-	err = DeleteFileList(entryToDelete.LowImageLinks)
-	if err != nil {
-		errList = errors.Join(errList, err)
-	}
-
-	if errList != nil {
-		return errList
-	}
-
-	log.Print("---delete complete--- ")
-
-	return nil
-}
-
 func CleanImagSetForFrontEnd(iSet ...ImageSetMongo) []ImageSetMongo {
 	for index, _ := range iSet {
-		iSet[index].ImageLinks = nil
-		iSet[index].LowImageLinks = nil
+		iSet[index].Image = nil
+		//iSet[index].LowImage = nil
+		//iSet[index].IsImageActive = nil
+		iSet[index].Path = ""
 	}
 	return iSet
 }
