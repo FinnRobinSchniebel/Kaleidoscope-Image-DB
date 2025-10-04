@@ -5,6 +5,10 @@ import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"context"
 	"errors"
+	"fmt"
+	"image"
+	"image/gif"
+	"image/png"
 	"log"
 	"net/http"
 	"os"
@@ -25,6 +29,7 @@ const minSecretKeySize = 32
 const ImageDbName = "ImageSets"
 const UserDbName = "Users"
 const SessionDbName = "Sessions"
+const LowResPathAppend = "low/"
 
 func main() {
 	imageset.BackendVolumeLocation = os.Getenv("BACKEND_VOLUME_LOCATION")
@@ -79,7 +84,7 @@ func StartAPI() {
 	//Todo: get certificate and enable https
 
 	log.Print("Starting API")
-	app := fiber.New()
+	app := fiber.New(fiber.Config{BodyLimit: 500 * 1024 * 1024})
 
 	//authentication
 
@@ -101,9 +106,14 @@ func StartAPI() {
 	app.Delete("/api/session", AuthSessionToken, InvalidateRefreshToken)
 
 	//ImageRetrieve
+	app.Get("/api/Image", AuthSessionToken, GetImageFromID)
+	app.Get("/api/search", AuthSessionToken, FilterForImages)
 
 	//set to listen on port 3000
-	app.Listen(":" + serverPort)
+	err := app.Listen(":" + serverPort)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
 }
 
 // This api Call is to get info about the Image.
@@ -361,7 +371,7 @@ func LoginUser(c *fiber.Ctx) error {
 	c.Cookie(&fiber.Cookie{
 		Name:    "refresh_token",
 		Value:   RefreshToken,
-		Expires: time.Now().Add(time.Minute * 25),
+		Expires: time.Now().Add(48 * time.Hour),
 		Path:    "/api/session",
 		//Secure:   true,
 		HTTPOnly: true,
@@ -506,8 +516,7 @@ func LogoutUser(c *fiber.Ctx) error {
 }
 
 /*
-Will take in ONE imagset ID ('image_set_id') and one or multiple Index (index) of the image to provide.
-If no Index is given it will return all images from the image set
+Will take in ONE imagset ID ('image_set_id') and one Index (index) of the image to provide.
 TODO: passing a value 'lowres' with true will result in a low res version of the image being sent
 
 	WARNING: this code assumes that the token has already been validated before running the function
@@ -517,18 +526,18 @@ func GetImageFromID(c *fiber.Ctx) error {
 
 	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
 	if err != nil {
-		return c.Status(500).SendString("could not parse token values for access varification")
+		return c.Status(500).SendString("could not parse token values for access verification")
 	}
 
 	var requestBody struct {
-		ImageSetId bson.ObjectID `json:"image_set_id"`
-		IndexList  []int         `json:"index"`
-		LowRes     bool          `json:"lowres"`
+		ImageSetId bson.ObjectID `json:"image_set_id" form:"image_set_id"`
+		IndexList  int           `json:"index" form:"index"`
+		LowRes     bool          `json:"lowres" form:"lowres"`
 	}
 
-	err = c.BodyParser(requestBody)
+	err = c.BodyParser(&requestBody)
 	if err != nil {
-		return c.Status(http.StatusBadRequest).SendString("could not parse request")
+		return c.Status(http.StatusBadRequest).SendString("could not parse request " + err.Error())
 	}
 	if requestBody.ImageSetId == bson.NilObjectID {
 		return c.Status(http.StatusBadRequest).SendString("no image set ID provided")
@@ -536,37 +545,75 @@ func GetImageFromID(c *fiber.Ctx) error {
 
 	var claim authutil.JWTClaims
 	//WARNING Source blow
-	_, _, err = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
+	_, _, _ = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
 
-	_, err = imageset.GetFromID(requestBody.ImageSetId.String())
-	if err != nil {
-		return c.Status(http.StatusNotFound).SendString("imageSet could not be found")
+	iset, err := imageset.GetFromID(requestBody.ImageSetId.Hex())
+	if err != nil || len(iset) == 0 {
+		return c.Status(http.StatusNotFound).SendString("imageSet could not be found" + err.Error())
+	}
+	if requestBody.IndexList > len(iset[0].Image) || requestBody.IndexList < 0 {
+		return c.Status(http.StatusBadRequest).SendString("Index out of bounds")
+	}
+
+	var imageLink string
+
+	if iset[0].KscopeUserId != "" && claim.UserID != iset[0].KscopeUserId {
+		return c.Status(http.StatusUnauthorized).SendString("user does not have permission to view")
+	}
+
+	var retImage *image.Image
+	var retGif *gif.GIF
+
+	if requestBody.LowRes {
+
+		imageLink = iset[0].Image[requestBody.IndexList].LowResName
+		log.Println("res link: " + imageLink)
+		if imageLink == "" || imageLink == " " {
+			retImage, _, _, err = imageset.GenerateLowResFromHigh(iset[0].Path, iset[0].Image[requestBody.IndexList].Name, 720, 0)
+			if err != nil {
+				return c.Status(500).SendString("failed to create low res image: " + err.Error())
+			}
+			//todo save image
+			go imageset.AddLowresToSetAndStorage(iset[0].Path+LowResPathAppend, iset[0].Title+"_low", retImage, iset[0], requestBody.IndexList)
+
+		} else {
+			retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path+LowResPathAppend, imageLink)
+			if err != nil {
+				return fmt.Errorf("could not retrieve low res: %s", err)
+			}
+		}
+
+	} else {
+		retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path, iset[0].Image[requestBody.IndexList].Name)
+		if err != nil {
+			return fmt.Errorf("could not retrieve image: %s", err)
+		}
+	}
+
+	if retImage != nil {
+		c.Type("png")
+		return png.Encode(c.Response().BodyWriter(), *retImage)
+	} else if retGif != nil {
+		c.Type("gif")
+		return gif.EncodeAll(c.Response().BodyWriter(), retGif)
 	}
 
 	//var imageLinkList []string
 
-	// if requestBody.LowRes {
-	// 	//get lowres
-	// 	if len(requestBody.IndexList) == 0 {
-	// 		//all images
-	// 		imageLinkList = imageset[0].Image
-	// 	} else {
-	// 		for index := range requestBody.IndexList {
-	// 			imageLinkList = append(imageLinkList, imageset[0].LowImage[index])
-	// 		}
-	// 	}
-	// } else {
-	// 	//get highres
-	// 	if len(requestBody.IndexList) == 0 {
-	// 		//all images
-	// 		imageLinkList = imageset[0].Image
-	// 	} else {
-	// 		for index := range requestBody.IndexList {
-	// 			imageLinkList = append(imageLinkList, imageset[0].Image[index])
-	// 		}
-	// 	}
-
-	// }
-
 	return nil
+}
+
+func FilterForImages(c *fiber.Ctx) error {
+	var requestParams imageset.SearchParams
+	c.BodyParser(&requestParams)
+	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
+
+	result, err := imageset.SearchDBForImages(requestParams)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
+	}
+	res := fiber.Map{
+		"imagesets": result,
+	}
+	return c.JSON(res)
 }

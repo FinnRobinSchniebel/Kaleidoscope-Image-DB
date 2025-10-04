@@ -5,18 +5,28 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/gif"
 	"log"
 	"mime/multipart"
 	"os"
 	"strings"
+	"time"
 
-	"github.com/ajdnik/imghash"
-	"github.com/valyala/fasthttp"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 var Collection *mongo.Collection
+
+type SearchParams struct {
+	Tags     []string  `json:"tags" bson:"tags" form:"tags"`
+	Author   []string  `json:"author"`
+	FromDate time.Time `json:"fromDate"`
+	ToDate   time.Time `json:"toDate"`
+	Title    string    `json:"title"`
+
+	//TODO: type, image count,
+}
 
 type CollisionResponsePair struct {
 	IdOfHashCollision bson.ObjectID
@@ -24,7 +34,7 @@ type CollisionResponsePair struct {
 }
 
 func findOverlappingHashes(hash string) ([]CollisionResponsePair, error) {
-	cursor, err := Collection.Find(context.Background(), bson.D{{"hash", hash}})
+	cursor, err := Collection.Find(context.Background(), bson.D{{"images.hash", hash}})
 	if err != nil {
 		return nil, err
 	}
@@ -40,8 +50,8 @@ func findOverlappingHashes(hash string) ([]CollisionResponsePair, error) {
 
 	var idList []CollisionResponsePair
 	for _, item := range itemList {
-		for index, imageH := range item.ImageHash {
-			if imageH == hash {
+		for index, _ := range item.Image {
+			if item.Image[index].ImageHash == hash {
 				idList = append(idList, CollisionResponsePair{item.ID, index})
 			}
 		}
@@ -138,11 +148,43 @@ func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId 
 	//clean file paths to avoid unauthorized access
 	imageSet.Image = nil
 	//imageSet.LowImage = nil
-	imageSet.ImageHash = nil
 	imageSet.KscopeUserId = ""
 
+	//set the author in case of none given to avoid issues with file path creation
+	if len(imageSet.Authors) == 0 || (imageSet.Authors[0] == "") {
+		imageSet.Authors = []string{"unknown"}
+	}
 	//add userId (done as seperate step to avoid exploits if changes are made)
 	imageSet.KscopeUserId = userId
+
+	//check media count first to avoid empty imagsets in db
+	if len(media) == 0 {
+		return InternalResponse{400, "No Media attached"}, nil
+	}
+
+	var err error
+
+	/**		Test FilePath	 **/
+	_, err = os.Stat(BackendVolumeLocation)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("File or directory does not exist at: %s\n", BackendVolumeLocation)
+		} else {
+			fmt.Printf("Error accessing path %s: %v\n", BackendVolumeLocation, err)
+		}
+	} else {
+		fmt.Printf("File or directory exists at: %s\n", BackendVolumeLocation)
+	}
+
+	//determine folder path for images and add the path to the imagset before first insert
+
+	imageSet.Path, err = MakeFileDirectoryFromAuthor(imageSet.Authors[0])
+
+	if err != nil {
+		return InternalResponse{500, err.Error()}, nil
+	}
+
+	imageSet.DateAdded = time.Now()
 
 	//add to DB
 	insertResult, err := Collection.InsertOne(context.Background(), imageSet)
@@ -153,67 +195,50 @@ func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId 
 
 	imageSet.ID = insertResult.InsertedID.(bson.ObjectID)
 
-	//determine folder path
-	filePath, err := MakeFileDirectory(imageSet.Authors[0])
-	if err != nil {
-		return InternalResponse{500, err.Error()}, nil
-	}
-
-	if len(media) == 0 {
-		return InternalResponse{400, "No Media attached"}, nil
-	}
-
 	hashHits := make(map[int][]CollisionResponsePair)
 
-	for index, item := range media {
-		fmt.Println(item.Filename, item.Size, item.Header["Content-Type"][0])
+	for index := range media {
 
-		/**		Test FilePath	 **/
-		_, err := os.Stat(BackendVolumeLocation)
-		if err != nil {
-			if os.IsNotExist(err) {
-				fmt.Printf("File or directory does not exist at: %s\n", BackendVolumeLocation)
-			} else {
-				fmt.Printf("Error accessing path %s: %v\n", BackendVolumeLocation, err)
-			}
-		} else {
-			fmt.Printf("File or directory exists at: %s\n", BackendVolumeLocation)
-		}
+		fmt.Println(media[index].Filename, media[index].Size, media[index].Header["Content-Type"][0])
 
 		/**		save media		**/
+		fileName := media[index].Filename
 
-		fileName := ImageFileName(imageSet.Title, imageSet.ID, index, getType(item.Filename))
-		fullPath := fmt.Sprintf("%s%s", filePath, fileName)
-
-		log.Print("FilePath: " + fullPath)
-		err = fasthttp.SaveMultipartFile(item, fullPath)
-		//err = SaveMultipartFile(item, fullPath)
-		if err != nil {
-			return InternalResponse{500, err.Error()}, nil
-		}
-		imageSet.Image = append(imageSet.Image, ImageInfo{Name: fileName, IsImageActive: true})
-		//imageSet.IsImageActive = append(imageSet.IsImageActive, true)
-
-		/** 	get hash 	**/
-		file, err := item.Open()
+		//Need to know the file type to save it in the correct format
+		itype, err := getFileTypeFromHeader(media[index])
 		if err != nil {
 			return InternalResponse{500, err.Error()}, nil
 		}
 
-		img, _, err := image.Decode(file)
+		var ihash string
+
+		//gifs must be handled differently
+		if itype == "gif" {
+			var igif *gif.GIF
+			igif, err = FileHeaderToGif(media[index])
+			if err != nil {
+				return InternalResponse{500, err.Error()}, nil
+			}
+			fileName, ihash, err = SaveGif(igif, imageSet.Path, fileName, imageSet.ID, index)
+
+		} else {
+			var inImage *image.Image
+			inImage, _, err = FileHeaderToImage(media[index])
+			if err != nil {
+				return InternalResponse{500, err.Error()}, nil
+			}
+			fileName, ihash, err = SaveImage(inImage, imageSet.Path, fileName, imageSet.ID, index, "png")
+		}
+
 		if err != nil {
-			os.Remove(fullPath)
 			return InternalResponse{500, err.Error()}, nil
 		}
-		phash := imghash.NewPHash()
-		ihash := phash.Calculate(img)
-		fmt.Printf("Hashed to: %v\n", ihash)
-		imageSet.ImageHash = append(imageSet.ImageHash, ihash.String())
-		file.Close()
+
+		imageSet.Image = append(imageSet.Image, ImageInfo{Name: fileName, ImageHash: ihash, IsImageActive: true})
 
 		//compare hash in DB
 
-		HitResults, err := findOverlappingHashes(ihash.String())
+		HitResults, err := findOverlappingHashes(ihash)
 
 		if err != nil {
 			return InternalResponse{500, err.Error()}, nil
@@ -222,8 +247,6 @@ func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId 
 			fmt.Println("Hash Hit")
 			hashHits[index] = HitResults
 		}
-
-		//cursor, err := collection.Find(context.Background(), bson.M{"hash": ihash.String()})
 
 	}
 
@@ -250,4 +273,129 @@ func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId 
 	}
 
 	return InternalResponse{201, "Ok, Added to DB"}, nil
+}
+
+func AddLowresToSetAndStorage(pathWithLowAppend string, name string, img *image.Image, imageset ImageSetMongo, index int) {
+
+	if index < 0 || index > len(imageset.Image) {
+		log.Println("Add Lowres: index out of bounds")
+		return
+	}
+	err := os.MkdirAll(pathWithLowAppend, 0700)
+	if err != nil {
+		log.Println("Add Lowres failed to make dir: " + err.Error())
+		return
+	}
+
+	filename, _, err := SaveImage(img, pathWithLowAppend, name, imageset.ID, index, "png")
+	if err != nil {
+		log.Println("Add Lowres: could not save image: " + err.Error())
+		return
+	}
+
+	filter := bson.M{"_id": imageset.ID}
+
+	update := bson.M{
+		"$set": bson.M{
+			fmt.Sprintf("images.%d.low_images", index): filename,
+		},
+	}
+	result, err := Collection.UpdateOne(context.Background(), filter, update)
+	if err != nil || result.ModifiedCount == 0 {
+		err = os.Remove(fmt.Sprintf("%s%s", pathWithLowAppend, name))
+		if err != nil {
+			log.Println("Add Lowres: could not make changes to db...\n COULD NOT remove image from disk")
+		} else {
+			log.Println("Add Lowres: could not make changes to db...\n removed image from disk")
+		}
+		return
+	}
+
+}
+
+func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
+	pipeline := mongo.Pipeline{}
+
+	// Tags will be index (start with them to reduce complexity)
+	if len(params.Tags) > 0 {
+		pipeline = append(pipeline, bson.D{
+			{"$match", bson.D{
+				{"tags", bson.D{{"$all", params.Tags}}},
+			}},
+		})
+	}
+
+	// Add author match
+	if len(params.Author) > 0 {
+		pipeline = append(pipeline, bson.D{
+			{"$match", bson.D{
+				{"author", bson.D{{"$all", params.Author}}},
+			}},
+		})
+	}
+
+	// date will be used later (it will be the date the image was added to db)
+	dateMatch := bson.D{}
+	if !params.FromDate.IsZero() {
+		dateMatch = append(dateMatch, bson.E{"$gte", params.FromDate})
+	}
+	if !params.ToDate.IsZero() {
+		dateMatch = append(dateMatch, bson.E{"$lte", params.ToDate})
+	}
+	if len(dateMatch) > 0 {
+		pipeline = append(pipeline, bson.D{
+			{"$match", bson.D{
+				{"date_added", dateMatch},
+			}},
+		})
+	}
+
+	// Add title regex search (case-insensitive contains)
+	if params.Title != "" {
+		pipeline = append(pipeline, bson.D{
+			{"$match", bson.D{
+				{"title", bson.D{{"$regex", params.Title}, {"$options", "i"}}},
+			}},
+		})
+	}
+
+	pipeline = append(pipeline, bson.D{{Key: "$project", Value: bson.D{
+		{Key: "_id", Value: 1},                // return ID
+		{Key: "tags", Value: 1},               // keep tags
+		{Key: "title", Value: 1},              // keep title
+		{Key: "authors", Value: 1},            // keep authors
+		{Key: "description", Value: 1},        // keep description
+		{Key: "date_added", Value: 1},         // keep dateAdded
+		{Key: "sources", Value: 1},            // keep sources
+		{Key: "tag_rule_overrides", Value: 1}, // keep tag_rule_overrides
+		// count of images where active = true
+		{Key: "activeImageCount", Value: bson.D{
+			{Key: "$size", Value: bson.D{
+				{Key: "$filter", Value: bson.D{
+					{Key: "input", Value: "$images"},
+					{Key: "as", Value: "img"},
+					{Key: "cond", Value: bson.D{{Key: "$eq", Value: bson.A{"$$img.active", true}}}},
+				}},
+			}},
+		}},
+	}}})
+
+	return pipeline
+}
+
+func SearchDBForImages(params SearchParams) ([]bson.M, error) {
+	pipeline := FilterSearchPipeline(params)
+
+	cursor, err := Collection.Aggregate(context.Background(), pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(context.Background())
+
+	var results []bson.M
+	if err := cursor.All(context.Background(), &results); err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
