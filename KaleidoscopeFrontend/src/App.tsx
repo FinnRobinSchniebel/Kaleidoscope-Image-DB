@@ -1,22 +1,33 @@
-import { useState } from 'react'
+
 import './index.css'
-import Navlayout from './NavLayout.tsx'
-import backGround from './assets/random Hexa.png'
+import { Routes, Route, createBrowserRouter, createRoutesFromElements, RouterProvider } from 'react-router'
+import Home from './PageLayouts/Home.tsx'
+import SearchLayout from './PageLayouts/SearchLayout.tsx'
+import AccountLayout from './PageLayouts/AccountLayout.tsx'
+import BookmarksLayout from './PageLayouts/BookmarksLayout.tsx'
+import ScrollFeedLayout from './PageLayouts/ScrollFeedLayout.tsx'
+import RootLayout from './PageLayouts/RootLayout.tsx'
+
+
+const routes = createBrowserRouter(
+  createRoutesFromElements(
+    <Route path='/' element={<RootLayout/>}>
+      <Route index element={<Home/>}/>
+
+      <Route path='search' element={<SearchLayout/>}/>
+      <Route path='account' element={<AccountLayout/>}/>
+      <Route path='bookmarks' element={<BookmarksLayout/>}/>
+      <Route path='feed' element={<ScrollFeedLayout/>}/>
+    </Route>      
+  )
+)
+
 
 function App() {
   //const [count, setCount] = useState(0)
 
-  return (
-    <div className=" w-full"> 
-      <div className="relative h-dvh w-full overflow-hidden 4xl:w-6/10 justify-self-center">
-        <img
-          src={backGround}
-          alt="background"
-          className="absolute inset-0 w-full h-full object-cover"
-        />
-        <Navlayout></Navlayout>
-      </div>
-    </div>
+  return (    
+      <RouterProvider router={routes}/>       
   )
 }
 
