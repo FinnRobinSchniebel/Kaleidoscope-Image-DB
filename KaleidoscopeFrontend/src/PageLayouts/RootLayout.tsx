@@ -1,12 +1,12 @@
 import React from "react";
 import Navlayout from './NavLayout.tsx'
-import backGround from '../assets/random Hexa.png'
+import backGround from '../../public/random hexa.png'
 import { Outlet } from "react-router";
 
 
 function RootLayout() {
   return (
-    <div className="h-dvh bg-cover w-full" style={{ backgroundImage: `url(${backGround})` }}>
+    <div className="h-dvh bg-cover w-full" style={{ backgroundImage: `url(${backGround.src})` }}>
       
         <Outlet/>
         <Navlayout onSelectOption={()=>{}}/>

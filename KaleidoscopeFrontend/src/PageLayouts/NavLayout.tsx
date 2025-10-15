@@ -3,6 +3,8 @@ import { Home, Search, User, GalleryVertical, Grid2x2, Bookmark, Tag } from "luc
 import '../index.css'
 import { cn } from "@/lib/utils"
 
+
+
 import {
   NavigationMenu,
   NavigationMenuContent,
