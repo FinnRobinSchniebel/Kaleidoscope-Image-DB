@@ -4,7 +4,7 @@ import { Home, Search, User, GalleryVertical, Grid2x2, Bookmark, Tag } from "luc
 import './globals.css'
 import { cn } from "@/lib/utils"
 import Link from 'next/link';
-
+import { useSelectedLayoutSegment  } from "next/navigation";
 
 
 import {
@@ -17,6 +17,7 @@ import {
   navigationMenuTriggerStyle,
 
 } from "@/components/ui/navigation-menu"
+import { log } from 'console';
 
 
 
@@ -27,40 +28,39 @@ interface NavProps{
 function Layout() {
   //const [count, setCount] = useState(0)
 
-  const [activeIndex, setActiveIndex] = useState(0);
+  //const [pathname, setpathname] = useState(0);
 
   const navItems = [
-    { icon: Home, label: "Home", goto_link: "/" },
+    { icon: Home, label: "Home", goto_link: "/", ActiveString: "home" },
     //{ icon: Tag, label: "Tag" },
-    { icon: GalleryVertical, label: "Feed", goto_link: "/feed" },
-    { icon: Bookmark, label: "Saved", goto_link: "/bookmarks" },
-    { icon: Search, label: "Search", goto_link: "/search" },
-    { icon: User, label: "account", goto_link: "/account"},
+    { icon: GalleryVertical, label: "Feed", goto_link: "/feed", ActiveString: "feed" },
+    { icon: Bookmark, label: "Saved", goto_link: "/bookmarks", ActiveString: "bookmarks" },
+    { icon: Search, label: "Search", goto_link: "/search", ActiveString: "search" },
+    { icon: User, label: "account", goto_link: "/account", ActiveString: "account" },
   ]
 
+  const pathname = useSelectedLayoutSegment() ?? 'home';
 
+  
 
   return (
+    
     <>
 
       <div className="absolute bottom-0 min-w-full min-h-[5%] max-h-[12%]  backdrop-blur-[2px] border-t border-white/20 z-50">
         <NavigationMenu className="w-full h-full flex xl:max-w-6/10 justify-self-center">
-          {navItems.map(({ icon: Icon, label, goto_link}, index) => (
+          {navItems.map(({ icon: Icon, label, goto_link, ActiveString}, index) => (
             
             <NavigationMenuItem key={label}               
               className={'flex-1 flex flex-col items-center justify-center '}
             >
 
-              <NavigationMenuLink asChild={true} className=''
-                onClick={() => {
-                  //setActiveIndex(index); 
-                 
-                }}
+              <NavigationMenuLink asChild={true}
+                
               >
-
-                <Link href={goto_link} className='h-full w-full items-center justify-center cursor-pointer hover:bg-secondary/20 p-3'>
-                  <Icon  key={label + "-icon"} className="size-auto text-foreground" strokeWidth={activeIndex === index ? 2.5 : 2}/>
-                  <span key={label + "-label"} className={cn( activeIndex === index ? "font-bold" : "","text-center", "text-foreground")}>{label}</span>
+                <Link href={goto_link} className={cn('h-full w-full items-center justify-center cursor-pointer hover:bg-secondary/20 p-3', pathname.startsWith(ActiveString) ? "bg-accent" : "")}>
+                  <Icon  key={label + "-icon"} className="size-auto text-foreground" strokeWidth={pathname === ActiveString ? 3 : 2}/>
+                  <span key={label + "-label"} className={cn( pathname.startsWith(ActiveString) ? "font-bold" : "","text-center", "text-foreground")}>{label}</span>
                 </Link>
                
               </NavigationMenuLink>
