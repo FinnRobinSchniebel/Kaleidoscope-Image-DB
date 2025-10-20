@@ -1,25 +1,56 @@
 # syntax=docker/dockerfile:1
 
 #build docker
-FROM node:24-alpine AS build
+FROM node:24-alpine AS base
+WORKDIR /app
 
-WORKDIR /src
+#### STAGE 1
+FROM base AS build
+RUN apk add --no-cache libc6-compat
 
-COPY package*.json yarn.lock ./
+
+# COPY ./kaleidoscope/app ./app
+# COPY ./kaleidoscope/public ./public
+
+COPY ./kaleidoscope/.yarn/ ./
+COPY ./kaleidoscope/.yarnrc.yml .yarnrc.yml
+
+COPY ./kaleidoscope/package.json ./kaleidoscope/yarn.lock* ./
 #RUN yarn install
 
 
-
+ 
 RUN corepack enable
-RUN yarn install --frozen-lockfile
+RUN corepack prepare yarn@stable --activate
+RUN yarn -v
 
-COPY . .
+RUN yarn --frozen-lockfile
+
+
+COPY ./kaleidoscope/app ./app
+COPY ./kaleidoscope/public ./public
+COPY ./kaleidoscope/lib ./lib
+COPY ./kaleidoscope/postcss.config.mjs ./
+COPY ./kaleidoscope/next.config.ts ./
+#COPY ./kaleidoscope/ .
+
 RUN yarn build
 
 
-#prod docker
-FROM nginx:stable-alpine AS final
-COPY --from=build /src/dist /usr/share/nginx/html
+#### STAGE 2
+FROM base AS final
 
-EXPOSE 3001
-CMD ["nginx", "-g", "daemon off;"]
+ENV NODE_ENV=production
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+COPY --from=build /app/public ./public
+
+COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+
+EXPOSE 3000
+CMD ["node", "server.js"]

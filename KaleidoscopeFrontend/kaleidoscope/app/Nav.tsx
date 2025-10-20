@@ -1,7 +1,9 @@
+'use client'
 import { useState } from 'react'
 import { Home, Search, User, GalleryVertical, Grid2x2, Bookmark, Tag } from "lucide-react";
-import '../index.css'
+import './globals.css'
 import { cn } from "@/lib/utils"
+import Link from 'next/link';
 
 
 
@@ -15,14 +17,14 @@ import {
   navigationMenuTriggerStyle,
 
 } from "@/components/ui/navigation-menu"
-import { NavLink } from 'react-router';
+
 
 
 interface NavProps{
   onSelectOption: (item: string) => void;
 }
 
-function Layout(props: NavProps) {
+function Layout() {
   //const [count, setCount] = useState(0)
 
   const [activeIndex, setActiveIndex] = useState(0);
@@ -52,14 +54,14 @@ function Layout(props: NavProps) {
               <NavigationMenuLink asChild={true} className=''
                 onClick={() => {
                   //setActiveIndex(index); 
-                  props.onSelectOption(label);
+                 
                 }}
               >
 
-                <NavLink to={goto_link} className={({ isActive }) => cn('h-full w-full items-center justify-center cursor-pointer hover:bg-secondary/20 p-3', isActive ? "bg-accent/50" : "")}>
+                <Link href={goto_link} className='h-full w-full items-center justify-center cursor-pointer hover:bg-secondary/20 p-3'>
                   <Icon  key={label + "-icon"} className="size-auto text-foreground" strokeWidth={activeIndex === index ? 2.5 : 2}/>
                   <span key={label + "-label"} className={cn( activeIndex === index ? "font-bold" : "","text-center", "text-foreground")}>{label}</span>
-                </NavLink>
+                </Link>
                
               </NavigationMenuLink>
 
@@ -74,7 +76,7 @@ function Layout(props: NavProps) {
 }
 
 
-
+//({ isActive }) => cn('h-full w-full items-center justify-center cursor-pointer hover:bg-secondary/20 p-3', isActive ? "bg-accent/50" : "")
 //{({ isActive }) => cn('h-full w-full items-center justify-center cursor-pointer hover:bg-secondary/20 p-3', isActive ? "bg-accent/10" : "")}
 
 // function NavElements(props: NavProps) {

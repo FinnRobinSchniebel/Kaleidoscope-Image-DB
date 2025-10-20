@@ -28,11 +28,12 @@ services:
       - db
   frontend:
     build:
-      context: ./KaleidoscopeFrontend
-      dockerfile: Dockerfile.frontend
+      context: ./KaleidoscopeFrontend/
+      dockerfile: ./Dockerfile.frontend
       target: final
     ports: 
-      - 3001:80
+      - 3001:3000
+    
     depends_on:
       - backend
     #stdin_open:true
