@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/golang-jwt/jwt/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -86,12 +87,18 @@ func StartAPI() {
 	log.Print("Starting API")
 	app := fiber.New(fiber.Config{BodyLimit: 500 * 1024 * 1024})
 
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     "http://localhost:3000",
+		AllowHeaders:     "Origin, Content-Type, Accept",
+		AllowCredentials: true,
+	}))
+
 	//authentication
 
 	//imageSet retrievel
-	app.Get("/api/ImageSets", AuthSessionToken, GetImageSetById)
-	app.Post("/api/ImageSets", AuthSessionToken, PostImageSet)
-	app.Delete("/api/ImageSets", AuthSessionToken, DeleteImageSets)
+	app.Get("/api/imagesets", AuthSessionToken, GetImageSetById)
+	app.Post("/api/imagesets", AuthSessionToken, PostImageSet)
+	app.Delete("/api/imagesets", AuthSessionToken, DeleteImageSets)
 	//TODO: Edit imageset api
 	//TODO: MarkForDepetion api
 
@@ -106,7 +113,7 @@ func StartAPI() {
 	app.Delete("/api/session", AuthSessionToken, InvalidateRefreshToken)
 
 	//ImageRetrieve
-	app.Get("/api/Image", AuthSessionToken, GetImageFromID)
+	app.Get("/api/image", AuthSessionToken, GetImageFromID)
 	app.Get("/api/search", AuthSessionToken, FilterForImages)
 
 	//set to listen on port 3000
@@ -340,10 +347,12 @@ func LoginUser(c *fiber.Ctx) error {
 	userInfo, err := authutil.GetUserByName(username)
 	if err != nil {
 		//return err
+		log.Println("Login Request: Incorrect user! ")
 		return c.Status(400).SendString("user does not exist")
 	}
 
 	if !authutil.ComparePassword(password, userInfo.HashedPassword) {
+		log.Println("Login Request: Incorrect password! ")
 		return c.Status(400).SendString("username and password did not match")
 	}
 
@@ -380,7 +389,7 @@ func LoginUser(c *fiber.Ctx) error {
 	res := fiber.Map{
 		"session_token": sessionToken,
 	}
-
+	log.Println("Login Request: Logged in User")
 	return c.Status(200).JSON(res)
 }
 

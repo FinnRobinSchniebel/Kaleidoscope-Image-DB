@@ -27,12 +27,13 @@ RUN yarn -v
 RUN yarn --frozen-lockfile
 
 
-COPY ./kaleidoscope/app ./app
-COPY ./kaleidoscope/public ./public
-COPY ./kaleidoscope/lib ./lib
-COPY ./kaleidoscope/postcss.config.mjs ./
-COPY ./kaleidoscope/next.config.ts ./
-#COPY ./kaleidoscope/ .
+# COPY ./kaleidoscope/app ./app
+# COPY ./kaleidoscope/public ./public
+# COPY ./kaleidoscope/lib/* ./lib
+# COPY ./kaleidoscope/postcss.config.mjs ./
+# COPY ./kaleidoscope/next.config.ts ./
+# COPY ./kaleidoscope/components.json ./
+COPY ./kaleidoscope/ .
 
 RUN yarn build
 

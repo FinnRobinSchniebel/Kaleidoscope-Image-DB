@@ -31,6 +31,8 @@ services:
       context: ./KaleidoscopeFrontend/
       dockerfile: ./Dockerfile.frontend
       target: final
+    environment:
+      BACKEND_URL: ${BACKEND_URL}
     ports: 
       - 3001:3000
     

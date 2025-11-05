@@ -4,7 +4,7 @@ import { Home, Search, User, GalleryVertical, Grid2x2, Bookmark, Tag } from "luc
 import './globals.css'
 import { cn } from "@/lib/utils"
 import Link from 'next/link';
-import { useSelectedLayoutSegment  } from "next/navigation";
+import { useSelectedLayoutSegment } from "next/navigation";
 
 
 import {
@@ -19,11 +19,6 @@ import {
 } from "@/components/ui/navigation-menu"
 import { log } from 'console';
 
-
-
-interface NavProps{
-  onSelectOption: (item: string) => void;
-}
 
 function Layout() {
   //const [count, setCount] = useState(0)
@@ -41,32 +36,32 @@ function Layout() {
 
   const pathname = useSelectedLayoutSegment() ?? 'home';
 
-  
+
 
   return (
-    
+
     <>
 
-      <div className="absolute bottom-0 min-w-full min-h-[5%] max-h-[12%]  backdrop-blur-[2px] border-t border-white/20 z-50">
-        <NavigationMenu className="w-full h-full flex xl:max-w-6/10 justify-self-center">
-          {navItems.map(({ icon: Icon, label, goto_link, ActiveString}, index) => (
-            
-            <NavigationMenuItem key={label}               
+      <div className="fixed bottom-0 min-w-full min-h-[5%] max-h-[12%]  backdrop-blur-[2px] border-t border-white/20 z-50">
+        <NavigationMenu className="w-full h-full max-w-8/10 justify-self-center">
+          {navItems.map(({ icon: Icon, label, goto_link, ActiveString }, index) => (
+
+            <NavigationMenuItem key={label}
               className={'flex-1 flex flex-col items-center justify-center '}
             >
 
               <NavigationMenuLink asChild={true}
-                
+
               >
                 <Link href={goto_link} className={cn('h-full w-full items-center justify-center cursor-pointer hover:bg-secondary/20 p-3', pathname.startsWith(ActiveString) ? "bg-accent" : "")}>
-                  <Icon  key={label + "-icon"} className="size-auto text-foreground" strokeWidth={pathname === ActiveString ? 3 : 2}/>
-                  <span key={label + "-label"} className={cn( pathname.startsWith(ActiveString) ? "font-bold" : "","text-center", "text-foreground")}>{label}</span>
+                  <Icon key={label + "-icon"} className="size-auto text-primary" strokeWidth={pathname === ActiveString ? 3 : 2} />
+                  <span key={label + "-label"} className={cn(pathname.startsWith(ActiveString) ? "font-bold" : "", "text-center", "text-primary")}>{label}</span>
                 </Link>
-               
+
               </NavigationMenuLink>
 
             </NavigationMenuItem>
-          
+
           ))}
 
         </NavigationMenu >
@@ -76,35 +71,4 @@ function Layout() {
 }
 
 
-//({ isActive }) => cn('h-full w-full items-center justify-center cursor-pointer hover:bg-secondary/20 p-3', isActive ? "bg-accent/50" : "")
-//{({ isActive }) => cn('h-full w-full items-center justify-center cursor-pointer hover:bg-secondary/20 p-3', isActive ? "bg-accent/10" : "")}
-
-// function NavElements(props: NavProps) {
-  
-  
-
-//   return (
-//     <>    
-      
-//     </>
-//   );
-// }
-
-
 export default Layout
-
-/* <div className="max-w-4xl mx-auto flex justify-around p-2">
-          <Button  variant="default" className="py-6  flex-col">
-            <Home size={64} strokeWidth={3.5}/>
-            <span className="text-xs ">Home</span>
-          </Button>
-          <Button variant="outline" className="py-6  flex flex-col items-center text-gray-600 hover:text-blue-600">
-            <Grid2x2 size={30} strokeWidth={1.6}/>
-            <span className="text-xs">Grid View</span>
-          </Button>
-
-          <Button  variant="outline" className="py-6  flex flex-col items-center text-gray-600 hover:text-blue-600">
-            <GalleryVertical size={24} />
-            <span className="text-xs">Gallery</span>
-          </Button>
-        </div> */
