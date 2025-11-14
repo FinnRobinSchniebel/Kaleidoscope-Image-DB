@@ -24,10 +24,10 @@ export default function AppLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-dvh `}
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-dvh flex flex-col`}
       >
         {/* <div className="fixed h-full bg-cover w-full bg-[url('/random%20hexa.png')]" /> */}
-        <div className="justify-items-center bg-fixed bg-cover h-full object-cover bg-[url('/random%20hexa.png')]">
+        <div className="flex-grow justify-items-center bg-fixed bg-cover h-full object-cover bg-[url('/random%20hexa.png')]">
           {children}
           <Nav />
         </div>

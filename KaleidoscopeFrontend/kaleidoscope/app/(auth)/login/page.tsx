@@ -4,18 +4,19 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@radix-ui/react-label";
-// import {getServerIP} from './../../apicaller';
-import Image from "next/image";
-import { use, useState } from "react";
-import {LoginRedirect, LoginUser} from "./authapi"
+import { use, useEffect, useState } from "react";
+import {LoginUser, NewSessionToken, TestLogin} from "@/components/api/authapi"
 import LoginAlert from "./loginalert"
-
 import { redirect, useSearchParams } from "next/navigation";
-import Router from "next/router";
+import { useRouter } from "next/navigation";
+import { ReadToken, ServerRedirect } from "@/components/api/get_variables_server";
+
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export default function Login() {
+
+  const router = useRouter()
 
   const searchParams = useSearchParams()
 
@@ -35,13 +36,24 @@ export default function Login() {
     const pair = await (LoginUser({username, password}))
 
     setAlertBox({code:pair.code, text: pair.text})
-    //await sleep(500)
-    
-    const redirectpath = searchParams.get('from')
-    
-    LoginRedirect(redirectpath)
+    await sleep(500)
 
+    if (pair.code == 200){
+
+      router.push(searchParams.get('from') ?? '/')
+      //ServerRedirect()
+    }
+   
   }
+  
+  useEffect( () => {
+    const t = async ()=>{  
+      const result = await TestLogin()
+      const redirectpath = searchParams.get('from')
+      router.push(redirectpath ?? "/")
+    }
+
+  })
 
   return (
     <Card className="bg-foreground w-100 border-white/30 text-primary font-bold backdrop-blur-sm shadow-xl/30">

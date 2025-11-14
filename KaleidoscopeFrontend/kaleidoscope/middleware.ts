@@ -1,20 +1,31 @@
+import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
+import { use } from 'react';
 
 
 export function middleware(request: NextRequest) {
-  const isAuthenticated = request.cookies.get('refresh_token');
+
+
+  const isAuthenticated = request.cookies.has("session_token") //sessionStorage.getItem("session_token");
   
 
   const urlCopy = request.nextUrl.clone()
 
+  if(isAuthenticated && request.nextUrl.pathname === '/login'){
+    const redirectPeram = request.nextUrl.searchParams.get("from")
+    urlCopy.pathname = redirectPeram ?? '/'
+    
+    return NextResponse.redirect( urlCopy)
+  }
 
   if (!isAuthenticated && !(request.nextUrl.pathname === '/login' || request.url === '/register')) {
     
     urlCopy.pathname = '/login'
     
     urlCopy.searchParams.set('from', request.nextUrl.pathname); // Set the current path as 'from'
-    return NextResponse.redirect(urlCopy);
+    //return NextResponse.redirect(urlCopy);
   }
+
   return NextResponse.next();
 }
 

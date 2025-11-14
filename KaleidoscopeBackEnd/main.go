@@ -89,7 +89,7 @@ func StartAPI() {
 
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     "http://localhost:3000",
-		AllowHeaders:     "Origin, Content-Type, Accept",
+		AllowHeaders:     "Origin, Content-Type, Accept, session_token",
 		AllowCredentials: true,
 	}))
 
@@ -114,7 +114,7 @@ func StartAPI() {
 
 	//ImageRetrieve
 	app.Get("/api/image", AuthSessionToken, GetImageFromID)
-	app.Get("/api/search", AuthSessionToken, FilterForImages)
+	app.Post("/api/search", AuthSessionToken, FilterForImages)
 
 	//set to listen on port 3000
 	err := app.Listen(":" + serverPort)
