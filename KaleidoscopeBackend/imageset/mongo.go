@@ -28,6 +28,7 @@ type SearchParams struct {
 	FromDate   string   `json:"fromDate"`
 	ToDate     string   `json:"toDate"`
 	Title      string   `json:"title"`
+	User       string
 
 	//TODO: type, image count,
 }
@@ -327,6 +328,17 @@ func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
 	searchTitles := bson.D{{Key: "title", Value: bson.D{{"$regex", params.Title}, {"$options", "i"}}}}
 	searchAuthor := bson.D{{"author", bson.D{{"$all", params.Author}}}}
 	multiSearchParam := bson.A{}
+
+	//Make sure the user can only find unowned and their own uploads
+	FilterUser := bson.D{
+		{Key: "$match", Value: bson.M{
+			"kscope_userid": bson.M{
+				"$in": []string{"", params.User},
+			},
+		}},
+	}
+
+	pipeline = append(pipeline, FilterUser)
 
 	//add tag matches
 	if len(params.Tags) > 0 {

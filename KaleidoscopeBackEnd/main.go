@@ -626,10 +626,20 @@ func GetImageFromID(c *fiber.Ctx) error {
 func FilterForImages(c *fiber.Ctx) error {
 	var requestParams imageset.SearchParams
 	err := c.BodyParser(&requestParams)
-
 	if err != nil {
 		return err
 	}
+
+	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
+	if err != nil {
+		return c.Status(500).SendString("could not parse token values for access verification")
+	}
+	var claim authutil.JWTClaims
+	//WARNING Source below
+	_, _, _ = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
+
+	requestParams.User = claim.UserID
+
 	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
 
 	result, err := imageset.SearchDBForImages(requestParams)
