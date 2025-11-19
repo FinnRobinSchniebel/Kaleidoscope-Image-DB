@@ -16,7 +16,7 @@ export default function SearchPage({}: Props) {
       <div className=''>
         <SearchResults/>
       </div>
-     
+      
     </div>
   )
 }

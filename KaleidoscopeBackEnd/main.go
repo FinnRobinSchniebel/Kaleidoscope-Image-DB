@@ -3,6 +3,7 @@ package main
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tags"
 	"context"
 	"errors"
 	"fmt"
@@ -30,6 +31,7 @@ const minSecretKeySize = 32
 const ImageDbName = "ImageSets"
 const UserDbName = "Users"
 const SessionDbName = "Sessions"
+const tagDbName = "Tags"
 const LowResPathAppend = "low/"
 
 func main() {
@@ -70,6 +72,7 @@ func ConnectDB() {
 	imageset.Collection = db.Collection(ImageDbName)
 	authutil.UserCollection = db.Collection(UserDbName)
 	authutil.SessionDb = db.Collection((SessionDbName))
+	tags.TagsDB = db.Collection(tagDbName)
 
 	log.Print("Connected, no issues ---------------------")
 
@@ -115,6 +118,14 @@ func StartAPI() {
 	//ImageRetrieve
 	app.Get("/api/image", AuthSessionToken, GetImageFromID)
 	app.Post("/api/search", AuthSessionToken, FilterForImages)
+	app.Get("/api/getimagedata", AuthSessionToken, ImageInfo)
+
+	//tags
+	app.Get("/api/getAllTags", AuthSessionToken, TagRetrieve)
+	app.Get("/api/testAutoTag", Testautotag)
+	app.Post("/api/addtag", AuthSessionToken, AddTag)
+
+	//get all author names
 
 	//set to listen on port 3000
 	err := app.Listen(":" + serverPort)
@@ -553,7 +564,7 @@ func GetImageFromID(c *fiber.Ctx) error {
 	}
 
 	var claim authutil.JWTClaims
-	//WARNING Source blow
+	//WARNING Source below
 	_, _, _ = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
 
 	iset, err := imageset.GetFromID(requestBody.ImageSetId.Hex())
@@ -614,10 +625,45 @@ func GetImageFromID(c *fiber.Ctx) error {
 
 func FilterForImages(c *fiber.Ctx) error {
 	var requestParams imageset.SearchParams
-	c.BodyParser(&requestParams)
+	err := c.BodyParser(&requestParams)
+
+	if err != nil {
+		return err
+	}
 	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
 
 	result, err := imageset.SearchDBForImages(requestParams)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
+	}
+	res := result
+
+	return c.JSON(res)
+}
+
+func ImageInfo(c *fiber.Ctx) error {
+
+	var requestParams struct {
+		IDs []string `json:"ids" bson:"ids" form:"ids"`
+	}
+	err := c.QueryParser(&requestParams)
+	fmt.Println(requestParams.IDs)
+	if len(requestParams.IDs) == 0 || err != nil {
+		return c.Status(http.StatusBadRequest).SendString("no id given")
+	}
+
+	var objectIDs []bson.ObjectID
+	for _, idStr := range requestParams.IDs {
+		oid, err := bson.ObjectIDFromHex(idStr)
+		if err != nil {
+			return err
+		}
+		objectIDs = append(objectIDs, oid)
+	}
+
+	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
+
+	result, err := imageset.GetImageInfoFromDB(objectIDs)
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
 	}
@@ -625,4 +671,88 @@ func FilterForImages(c *fiber.Ctx) error {
 		"imagesets": result,
 	}
 	return c.JSON(res)
+}
+
+func TagRetrieve(c *fiber.Ctx) error {
+
+	var requestParams struct {
+		IDs []string `json:"ids" bson:"ids" form:"ids"`
+	}
+	err := c.QueryParser(&requestParams)
+	fmt.Println(requestParams.IDs)
+	if len(requestParams.IDs) == 0 || err != nil {
+		return c.Status(http.StatusBadRequest).SendString("no id given")
+	}
+
+	var objectIDs []bson.ObjectID
+	for _, idStr := range requestParams.IDs {
+		oid, err := bson.ObjectIDFromHex(idStr)
+		if err != nil {
+			return err
+		}
+		objectIDs = append(objectIDs, oid)
+	}
+
+	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
+
+	result, err := imageset.GetImageInfoFromDB(objectIDs)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
+	}
+	res := fiber.Map{
+		"imagesets": result,
+	}
+	return c.JSON(res)
+}
+
+func AddTag(c *fiber.Ctx) error {
+
+	var inputs tags.Tag
+
+	c.BodyParser(&inputs)
+
+	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
+	if err != nil {
+		return c.Status(500).SendString("could not parse token values for access verification")
+	}
+
+	var claim authutil.JWTClaims
+	//WARNING Source below
+	_, _, _ = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
+
+	fmt.Println(claim.ID)
+	inputs.User, err = bson.ObjectIDFromHex(claim.UserID)
+	if err != nil {
+		return err
+	}
+
+	err = tags.AddTags(inputs)
+
+	if err != nil {
+		return err
+	}
+	return c.SendStatus(200)
+}
+
+func Testautotag(c *fiber.Ctx) error {
+
+	var items struct {
+		Tags []string `json:"tags" bson:"tags" form:"tags"`
+	}
+
+	err := c.BodyParser(&items)
+	if err != nil {
+		return err
+	}
+	if len(items.Tags) == 0 {
+		return c.Status(http.StatusBadRequest).SendString("no tags given")
+	}
+
+	res, err := tags.FindAutoTag(items.Tags)
+	if err != nil {
+		return err
+	}
+
+	return c.JSON(res)
+
 }

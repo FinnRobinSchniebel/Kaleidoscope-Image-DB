@@ -14,16 +14,20 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 var Collection *mongo.Collection
 
 type SearchParams struct {
-	Tags     []string  `json:"tags" bson:"tags" form:"tags"`
-	Author   []string  `json:"author"`
-	FromDate time.Time `json:"fromDate"`
-	ToDate   time.Time `json:"toDate"`
-	Title    string    `json:"title"`
+	PageCount  int      `json:"page_count" form:"page_count"`   //number of images to return
+	Page       int      `json:"page" form:"page"`               //What page to return
+	RandomSeed string   `json:"random_seed" form:"random_seed"` //if sorting is random, this value is passed for consistent page returns
+	Tags       []string `json:"tags" bson:"tags" form:"tags"`
+	Author     []string `json:"author"`
+	FromDate   string   `json:"fromDate"`
+	ToDate     string   `json:"toDate"`
+	Title      string   `json:"title"`
 
 	//TODO: type, image count,
 }
@@ -143,6 +147,7 @@ func DeleteImageSetInDB(id bson.ObjectID) error {
 	return nil
 }
 
+/*This function adds an image set to the DB and local storage*/
 func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId string) (InternalResponse, map[int][]CollisionResponsePair) {
 
 	//clean file paths to avoid unauthorized access
@@ -275,6 +280,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId 
 	return InternalResponse{201, "Ok, Added to DB"}, nil
 }
 
+/*This function accepts a low res version of an image and stores it to the local storage for future retrieval */
 func AddLowresToSetAndStorage(pathWithLowAppend string, name string, img *image.Image, imageset ImageSetMongo, index int) {
 
 	if index < 0 || index > len(imageset.Image) {
@@ -313,61 +319,64 @@ func AddLowresToSetAndStorage(pathWithLowAppend string, name string, img *image.
 
 }
 
+/*This function builds the pipeline use by the SearchDBForImages function to query the DB*/
 func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
 	pipeline := mongo.Pipeline{}
 
-	// Tags will be index (start with them to reduce complexity)
+	searchTags := bson.D{{Key: "tags", Value: bson.D{{Key: "$all", Value: params.Tags}}}}
+	searchTitles := bson.D{{Key: "title", Value: bson.D{{"$regex", params.Title}, {"$options", "i"}}}}
+	searchAuthor := bson.D{{"author", bson.D{{"$all", params.Author}}}}
+	multiSearchParam := bson.A{}
+
+	//add tag matches
 	if len(params.Tags) > 0 {
-		pipeline = append(pipeline, bson.D{
-			{"$match", bson.D{
-				{"tags", bson.D{{"$all", params.Tags}}},
-			}},
-		})
+		multiSearchParam = append(multiSearchParam, searchTags)
+	}
+	//add title matches
+	if params.Title != "" {
+		multiSearchParam = append(multiSearchParam, searchTitles)
+	}
+	//add tag matches
+	if len(params.Author) > 0 {
+		multiSearchParam = append(multiSearchParam, searchAuthor)
 	}
 
-	// Add author match
-	if len(params.Author) > 0 {
+	if len(params.Tags) > 0 || params.Title != "" || len(params.Author) > 0 {
 		pipeline = append(pipeline, bson.D{
-			{"$match", bson.D{
-				{"author", bson.D{{"$all", params.Author}}},
+			{Key: "$match", Value: bson.D{
+				{
+					Key: "$or", Value: multiSearchParam,
+				},
 			}},
 		})
 	}
 
 	// date will be used later (it will be the date the image was added to db)
 	dateMatch := bson.D{}
-	if !params.FromDate.IsZero() {
+	if params.FromDate != "" {
 		dateMatch = append(dateMatch, bson.E{"$gte", params.FromDate})
 	}
-	if !params.ToDate.IsZero() {
+	if params.ToDate != "" {
 		dateMatch = append(dateMatch, bson.E{"$lte", params.ToDate})
 	}
 	if len(dateMatch) > 0 {
 		pipeline = append(pipeline, bson.D{
-			{"$match", bson.D{
-				{"date_added", dateMatch},
+			{Key: "$match", Value: bson.D{
+				{Key: "date_added", Value: dateMatch},
 			}},
 		})
 	}
 
-	// Add title regex search (case-insensitive contains)
-	if params.Title != "" {
-		pipeline = append(pipeline, bson.D{
-			{"$match", bson.D{
-				{"title", bson.D{{"$regex", params.Title}, {"$options", "i"}}},
-			}},
-		})
-	}
-
-	pipeline = append(pipeline, bson.D{{Key: "$project", Value: bson.D{
-		{Key: "_id", Value: 1},                // return ID
-		{Key: "tags", Value: 1},               // keep tags
-		{Key: "title", Value: 1},              // keep title
-		{Key: "authors", Value: 1},            // keep authors
-		{Key: "description", Value: 1},        // keep description
-		{Key: "date_added", Value: 1},         // keep dateAdded
-		{Key: "sources", Value: 1},            // keep sources
-		{Key: "tag_rule_overrides", Value: 1}, // keep tag_rule_overrides
+	//This section determines what values get returned from the documents
+	project := bson.M{"$project": bson.D{
+		{Key: "_id", Value: 1},  // return ID
+		{Key: "tags", Value: 1}, // Add tags
+		// {Key: "title", Value: 0},              // No title
+		// {Key: "authors", Value: 0},            // No authors
+		// {Key: "description", Value: 0},        // No description
+		// {Key: "date_added", Value: 0},         // No dateAdded
+		// {Key: "sources", Value: 0},            // No sources
+		// {Key: "tag_rule_overrides", Value: 0}, // No tag_rule_overrides
 		// count of images where active = true
 		{Key: "activeImageCount", Value: bson.D{
 			{Key: "$size", Value: bson.D{
@@ -378,15 +387,91 @@ func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
 				}},
 			}},
 		}},
-	}}})
+	}}
+
+	// needs a facet to get item count
+	pipeline = append(pipeline, bson.D{
+		{"$facet", bson.M{
+			"totalCount": []bson.M{
+				{"$count": "count"},
+			},
+			"imagesets": []bson.M{
+				// Limit the number of returned documents and skip as many pages worth of documents as needed
+				{"$skip": params.Page * params.PageCount},
+				{"$limit": params.PageCount},
+				//project to the return results of the itemsset
+				project,
+			},
+		}},
+	})
+
+	pipeline = append(pipeline,
+		bson.D{{"$project", bson.M{
+			"imagesets": 1,
+			"totalCount": bson.M{
+				"$ifNull": bson.A{
+					bson.M{"$arrayElemAt": bson.A{"$totalCount.count", 0}},
+					0,
+				},
+			},
+		}}},
+	)
 
 	return pipeline
 }
 
-func SearchDBForImages(params SearchParams) ([]bson.M, error) {
+/*Provides image ID's and tags for images that match the query*/
+func SearchDBForImages(params SearchParams) (bson.M, error) {
+	fmt.Printf("test %d, %d \n", params.Page, params.PageCount)
+
 	pipeline := FilterSearchPipeline(params)
 
 	cursor, err := Collection.Aggregate(context.Background(), pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(context.Background())
+
+	var results bson.M
+	if !cursor.Next(context.Background()) {
+		return nil, fmt.Errorf("Error: Query resulted in a nil return from the pipeline")
+	}
+	cursor.Decode(&results)
+
+	// if err := cursor.All(context.Background(), &results); err != nil {
+	// 	return nil, err
+	// }
+
+	return results, nil
+}
+
+/*Provides display info for the image you associated with the image ID*/
+func GetImageInfoFromDB(paramIDs []bson.ObjectID) ([]bson.M, error) {
+
+	cursor, err := Collection.Find(context.Background(),
+		bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: paramIDs}}}},
+		options.Find().SetProjection(bson.D{
+			{Key: "_id", Value: 1},                // return ID
+			{Key: "tags", Value: 1},               // keep tags
+			{Key: "title", Value: 1},              // keep title
+			{Key: "authors", Value: 1},            // keep authors
+			{Key: "description", Value: 1},        // keep description
+			{Key: "date_added", Value: 1},         // keep dateAdded
+			{Key: "sources", Value: 1},            // keep sources
+			{Key: "tag_rule_overrides", Value: 1}, // keep tag_rule_overrides
+			// count of images where active = true
+			{Key: "activeImageCount", Value: bson.D{
+				{Key: "$size", Value: bson.D{
+					{Key: "$filter", Value: bson.D{
+						{Key: "input", Value: "$images"},
+						{Key: "as", Value: "img"},
+						{Key: "cond", Value: bson.D{{Key: "$eq", Value: bson.A{"$$img.active", true}}}},
+					}},
+				}},
+			}},
+		}),
+	)
+
 	if err != nil {
 		return nil, err
 	}
