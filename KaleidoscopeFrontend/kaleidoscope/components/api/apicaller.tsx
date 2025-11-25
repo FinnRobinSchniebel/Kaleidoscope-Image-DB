@@ -32,7 +32,7 @@ export interface GORequest {
   endpoint: string
   type: string;
   header: {};
-  body?: JSON | string | undefined | object,
+  body?:string | undefined | object,
   media?: File[] | undefined
 }
 
@@ -55,7 +55,7 @@ export async function apiSendRequest(request : GORequest): Promise<{status: numb
     credentials: 'include',
     body: JSON.stringify(request.body)
   }
-  console.log(getServerAPI(request.endpoint))
+  //console.log(getServerAPI(request.endpoint))
 
   try{
     const response = await fetch(await(getServerAPI(request.endpoint)), options)

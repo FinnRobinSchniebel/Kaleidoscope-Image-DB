@@ -20,7 +20,7 @@ export default function SearchResults() {
   )
 
   return (
-
+    
     <ul className="w-full flex flex-wrap pb-[15%] lg:pb-[6.5%] xl:pb-[4%] justify-center">
       
       {elementsArray}

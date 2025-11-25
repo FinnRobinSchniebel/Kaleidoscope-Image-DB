@@ -18,10 +18,26 @@ import { Label } from '@radix-ui/react-label'
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
+import { searchAPI, SearchRequest } from '@/components/api/jwt_apis/search-api'
+import { protectedAPI } from '@/components/api/jwt_apis/protected-api-client'
 
-type Props = {}
+type Props = {
+  protected: protectedAPI
+}
 
-export default function SearchBar({}: Props) {
+export default function SearchBar(props : Props) {
+
+
+  const SearchCaller = async () =>{
+    const request : SearchRequest = {
+      PageCount: 1000,
+      PageNumber: 0,
+      protectedApiRef: props.protected
+    }
+
+    var result = await searchAPI(request)
+    console.log(result)
+  }
 
 
   return (
@@ -34,7 +50,7 @@ export default function SearchBar({}: Props) {
           </InputGroupAddon>
           <InputGroupAddon align="inline-end">0 results</InputGroupAddon>
           <InputGroupAddon align="inline-end">
-            <InputGroupButton variant="Gradient">Search</InputGroupButton>
+            <InputGroupButton variant="Gradient"  onClick={SearchCaller}>Search</InputGroupButton>
           </InputGroupAddon>          
         </InputGroup>
         <Popover>

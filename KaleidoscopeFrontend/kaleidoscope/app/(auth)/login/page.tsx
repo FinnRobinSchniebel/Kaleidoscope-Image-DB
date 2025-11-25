@@ -36,7 +36,7 @@ export default function Login() {
     const pair = await (LoginUser({username, password}))
 
     setAlertBox({code:pair.code, text: pair.text})
-    await sleep(500)
+    //await sleep(500)
 
     if (pair.code == 200){
 
@@ -52,7 +52,7 @@ export default function Login() {
       const redirectpath = searchParams.get('from')
       router.push(redirectpath ?? "/")
     }
-
+    t()
   })
 
   return (

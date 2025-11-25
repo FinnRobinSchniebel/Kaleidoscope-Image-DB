@@ -4,6 +4,7 @@ import { jwtDecode, JwtPayload } from "jwt-decode";
 import { apiSendRequest, GORequest } from "../apicaller";
 import { NewSessionToken } from "../authapi";
 import { ReadToken } from "../get_variables_server";
+import { useRouter } from "next/router";
 
 export interface JWTLayout extends JwtPayload {
   Id: string
@@ -85,27 +86,33 @@ export class protectedAPI {
   public async CallProtectedAPI(request: GORequest): Promise<{ status: number, errorString?: string, response?: any }> {
 
     // check if updating token
-    var result = await this.CheckIfReady();
-    if (result.status != 200 && result.status != 0) {
-      return result;
+    var ReadyResult = await this.CheckIfReady();
+    if (ReadyResult.status != 200 && ReadyResult.status != 0) {
+      return ReadyResult;
     }
     //pre-check complete: do api call
     request.header = { ...request.header, ...{ "session_token": "Bearer " + protectedAPI.token } };
 
-    var result2 = await apiSendRequest(request)
+    var callResult = await apiSendRequest(request)
 
     //check if result is good and attempt to fix it if auth has expired
-    if (result2.status == 401) {
+    if (callResult.status == 401) {
       console.log("call failed: session expired")
-      result = await this.CheckIfReady();
+      ReadyResult = await this.CheckIfReady();
       //only rerun if the cookie expired (not 0 response) and was successfully refreshed.
-      if (result.status == 0 || result.status != 200) {
-        return result;
+      if (ReadyResult.status == 0 || ReadyResult.status != 200) {
+        return ReadyResult;
       }
-      result2 = await apiSendRequest(request)
+      callResult = await apiSendRequest(request)
+
+      //If the Refresh fails the client is redirected to the login page
+      if (callResult.status == 401){
+        const router = useRouter()
+        router.push('/login')
+      }
     }
     //return result after second attempt 
-    return result2
+    return callResult
   }
 
 

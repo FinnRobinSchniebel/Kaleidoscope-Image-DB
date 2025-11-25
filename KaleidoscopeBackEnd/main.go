@@ -413,7 +413,8 @@ func AuthSessionToken(c *fiber.Ctx) error {
 
 	_, err = authutil.VerifyToken(sessionToken)
 	if err != nil {
-		return err
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+
 	}
 
 	return c.Next()
@@ -617,8 +618,6 @@ func GetImageFromID(c *fiber.Ctx) error {
 		c.Type("gif")
 		return gif.EncodeAll(c.Response().BodyWriter(), retGif)
 	}
-
-	//var imageLinkList []string
 
 	return nil
 }
