@@ -424,17 +424,17 @@ func NewSessionToken(c *fiber.Ctx) error {
 
 	userRefTok := c.Cookies("refresh_token", "")
 	if userRefTok == "" {
-		return c.Status(http.StatusBadRequest).SendString("no refresh token given")
+		return c.Status(http.StatusUnauthorized).SendString("no refresh token given")
 	}
 
 	userRefClaim, err := authutil.VerifyToken(userRefTok)
 	if err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid token")
+		return c.Status(http.StatusUnauthorized).SendString("Invalid token")
 	}
 
 	serverClaim, _, err := authutil.GetRefreshToken(userRefClaim.ID)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("no session on server")
+		return c.Status(http.StatusUnauthorized).SendString("no session on server")
 	}
 
 	if serverClaim.Is_revoked {
@@ -550,17 +550,20 @@ func GetImageFromID(c *fiber.Ctx) error {
 		return c.Status(500).SendString("could not parse token values for access verification")
 	}
 
-	var requestBody struct {
-		ImageSetId bson.ObjectID `json:"image_set_id" form:"image_set_id"`
-		IndexList  int           `json:"index" form:"index"`
-		LowRes     bool          `json:"lowres" form:"lowres"`
+	var requestParams struct {
+		ImageSetId string `json:"image_set_id" form:"image_set_id" query:"image_set_id"`
+		IndexList  int    `json:"index" form:"index" query:"index"`
+		LowRes     bool   `json:"lowres" form:"lowres" query:"lowres"`
 	}
 
-	err = c.BodyParser(&requestBody)
+	err = c.QueryParser(&requestParams)
+
+	log.Println(requestParams)
+
 	if err != nil {
 		return c.Status(http.StatusBadRequest).SendString("could not parse request " + err.Error())
 	}
-	if requestBody.ImageSetId == bson.NilObjectID {
+	if requestParams.ImageSetId == "" {
 		return c.Status(http.StatusBadRequest).SendString("no image set ID provided")
 	}
 
@@ -568,11 +571,11 @@ func GetImageFromID(c *fiber.Ctx) error {
 	//WARNING Source below
 	_, _, _ = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
 
-	iset, err := imageset.GetFromID(requestBody.ImageSetId.Hex())
+	iset, err := imageset.GetFromID(requestParams.ImageSetId)
 	if err != nil || len(iset) == 0 {
 		return c.Status(http.StatusNotFound).SendString("imageSet could not be found" + err.Error())
 	}
-	if requestBody.IndexList > len(iset[0].Image) || requestBody.IndexList < 0 {
+	if requestParams.IndexList > len(iset[0].Image) || requestParams.IndexList < 0 {
 		return c.Status(http.StatusBadRequest).SendString("Index out of bounds")
 	}
 
@@ -585,17 +588,17 @@ func GetImageFromID(c *fiber.Ctx) error {
 	var retImage *image.Image
 	var retGif *gif.GIF
 
-	if requestBody.LowRes {
+	if requestParams.LowRes {
 
-		imageLink = iset[0].Image[requestBody.IndexList].LowResName
+		imageLink = iset[0].Image[requestParams.IndexList].LowResName
 		log.Println("res link: " + imageLink)
 		if imageLink == "" || imageLink == " " {
-			retImage, _, _, err = imageset.GenerateLowResFromHigh(iset[0].Path, iset[0].Image[requestBody.IndexList].Name, 720, 0)
+			retImage, _, _, err = imageset.GenerateLowResFromHigh(iset[0].Path, iset[0].Image[requestParams.IndexList].Name, 720, 0)
 			if err != nil {
 				return c.Status(500).SendString("failed to create low res image: " + err.Error())
 			}
 			//todo save image
-			go imageset.AddLowresToSetAndStorage(iset[0].Path+LowResPathAppend, iset[0].Title+"_low", retImage, iset[0], requestBody.IndexList)
+			go imageset.AddLowresToSetAndStorage(iset[0].Path+LowResPathAppend, iset[0].Title+"_low", retImage, iset[0], requestParams.IndexList)
 
 		} else {
 			retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path+LowResPathAppend, imageLink)
@@ -605,7 +608,7 @@ func GetImageFromID(c *fiber.Ctx) error {
 		}
 
 	} else {
-		retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path, iset[0].Image[requestBody.IndexList].Name)
+		retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path, iset[0].Image[requestParams.IndexList].Name)
 		if err != nil {
 			return fmt.Errorf("could not retrieve image: %s", err)
 		}
@@ -653,7 +656,7 @@ func FilterForImages(c *fiber.Ctx) error {
 func ImageInfo(c *fiber.Ctx) error {
 
 	var requestParams struct {
-		IDs []string `json:"ids" bson:"ids" form:"ids"`
+		IDs []string `json:"ids" bson:"ids" form:"ids" query:"ids"`
 	}
 	err := c.QueryParser(&requestParams)
 	fmt.Println(requestParams.IDs)
@@ -685,7 +688,7 @@ func ImageInfo(c *fiber.Ctx) error {
 func TagRetrieve(c *fiber.Ctx) error {
 
 	var requestParams struct {
-		IDs []string `json:"ids" bson:"ids" form:"ids"`
+		IDs []string `json:"ids" bson:"ids" form:"ids" query:"ids"`
 	}
 	err := c.QueryParser(&requestParams)
 	fmt.Println(requestParams.IDs)

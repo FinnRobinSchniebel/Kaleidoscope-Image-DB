@@ -17,6 +17,8 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 export default function Login() {
 
   const router = useRouter()
+  const params = useSearchParams()
+
 
   const searchParams = useSearchParams()
 
@@ -49,8 +51,11 @@ export default function Login() {
   useEffect( () => {
     const t = async ()=>{  
       const result = await TestLogin()
-      const redirectpath = searchParams.get('from')
-      router.push(redirectpath ?? "/")
+      if(result ){
+        const redirectpath = searchParams.get('from')
+        router.push(redirectpath ?? "/")
+      }
+        
     }
     t()
   })

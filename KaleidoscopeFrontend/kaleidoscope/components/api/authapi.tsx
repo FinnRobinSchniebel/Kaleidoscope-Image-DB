@@ -62,6 +62,8 @@ export async function NewSessionToken() : Promise<number | undefined>{
     
 }
 
+//return true if the session token exists. 
+//if it does not it will attempt to refresh it in case you have a valid refresh token. 
 export async function TestLogin() : Promise<boolean>{
     if(await TestToken()){
         return true

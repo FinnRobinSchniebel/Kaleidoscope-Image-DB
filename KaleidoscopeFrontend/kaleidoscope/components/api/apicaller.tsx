@@ -55,15 +55,19 @@ export async function apiSendRequest(request : GORequest): Promise<{status: numb
     credentials: 'include',
     body: JSON.stringify(request.body)
   }
-  //console.log(getServerAPI(request.endpoint))
 
   try{
     const response = await fetch(await(getServerAPI(request.endpoint)), options)
-    //console.log(response)
     
     if (!response.ok) {
       throw new GoApiError(response.status, await response.text());
     }
+    //check of blob
+    const contentType = response.headers.get("content-type") || "";
+    if(contentType.startsWith("image/")){
+      const responseBody = {status: response.status, response: await response.blob()};
+    }
+
     const responseBody = {status: response.status, response: await response.json()};
  
     return responseBody

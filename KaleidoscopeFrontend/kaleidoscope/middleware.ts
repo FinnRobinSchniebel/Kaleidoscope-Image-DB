@@ -18,13 +18,16 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect( urlCopy)
   }
 
-  if (!isAuthenticated && !(request.nextUrl.pathname === '/login' || request.url === '/register')) {
+  // if ( request.cookies.has("from") && (request.nextUrl.pathname === '/login' || request.nextUrl.pathname  === '/register')) {
+  //   console.log("adding return address " + request.cookies.get("from")?.value)
     
-    urlCopy.pathname = '/login'
+  //   urlCopy.searchParams.set('from', "search/"); // Set the current path as 'from'
+  //   //return NextResponse.redirect(urlCopy);
+
+  //   console.log("url search: " + urlCopy.toString())
     
-    urlCopy.searchParams.set('from', request.nextUrl.pathname); // Set the current path as 'from'
-    //return NextResponse.redirect(urlCopy);
-  }
+  //   return NextResponse.rewrite(urlCopy)
+  // }
 
   return NextResponse.next();
 }

@@ -15,15 +15,9 @@ export default function Home() {
     NewSessionToken()
   })
 
-  const buttonfunc = async () =>{
-    const Protected = new protectedAPI(await ReadToken());
-    const result = await Protected.GetSearch({})
-    console.log(result.status + " || " + JSON.stringify((result).response) + "||" + result.errorString)
-  }
-
   return (
     <div className='place-self-center '>Home
-      <Button onClick={buttonfunc}>Test button</Button>
+      <Button >Test button</Button>
     </div>
     
   );

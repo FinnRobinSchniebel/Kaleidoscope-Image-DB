@@ -37,6 +37,8 @@ export async function ReadToken(){
   return t.get('session_token')?.value ?? ''
 }
 
+//true if token exists
+//does not test if token has expired since the cookie should disappear when it expires
 export async function TestToken(){  
   const t = (await cookies())
   // console.log("TTTTTTTTTTTTTTTTT  " + t.get('session_token'))

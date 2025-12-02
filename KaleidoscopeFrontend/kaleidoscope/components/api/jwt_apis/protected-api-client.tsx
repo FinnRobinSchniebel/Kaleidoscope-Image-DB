@@ -4,7 +4,7 @@ import { jwtDecode, JwtPayload } from "jwt-decode";
 import { apiSendRequest, GORequest } from "../apicaller";
 import { NewSessionToken } from "../authapi";
 import { ReadToken } from "../get_variables_server";
-import { useRouter } from "next/router";
+import { NextRouter, useRouter } from "next/router";
 
 export interface JWTLayout extends JwtPayload {
   Id: string
@@ -29,9 +29,13 @@ export class protectedAPI {
   //true while fetching new token
   private fetchingNewToken = false
 
+  onUnauthorized : () => void
+ 
 
-  constructor(CurrentToken : string){
+
+  constructor(CurrentToken : string, onUnauthorized : ()=> void){
     protectedAPI.token = CurrentToken
+    this.onUnauthorized = onUnauthorized
   }
 
   //This halts the api call if another api has already requested a new token but has not received it yet.
@@ -61,9 +65,12 @@ export class protectedAPI {
     return true;
   }
 
-  //checks if The API call is good to run and refresh token if not
+  //checks if The API call is good to run and refresh token if not, 
+
   private async CheckIfReady(): Promise<{ status: number, response: any }> {
+    
     if (this.fetchingNewToken) {
+      //this will run indefinitely if no token becomes available. This should be fine as long as there is a function running that will finish or send you to login on fail.
       await this.WaitForToken()
     }
     if (protectedAPI.token == "" || this.CheckTokenExpired(protectedAPI.token)) {
@@ -71,6 +78,7 @@ export class protectedAPI {
       this.fetchingNewToken = true
       //Note: function below can only run on client
       const status = await NewSessionToken()
+      
       //if token cant be refreshed error response so the user redirects to login
       if (status == 404 || status == 401) {
         return { status: status, response: "error" }
@@ -85,9 +93,10 @@ export class protectedAPI {
   //Use this function to call API's that require the session token.
   public async CallProtectedAPI(request: GORequest): Promise<{ status: number, errorString?: string, response?: any }> {
 
-    // check if updating token
+    // check if token is updaing and if it needs an update go fetch a new one
     var ReadyResult = await this.CheckIfReady();
     if (ReadyResult.status != 200 && ReadyResult.status != 0) {
+      this.onUnauthorized()
       return ReadyResult;
     }
     //pre-check complete: do api call
@@ -107,8 +116,7 @@ export class protectedAPI {
 
       //If the Refresh fails the client is redirected to the login page
       if (callResult.status == 401){
-        const router = useRouter()
-        router.push('/login')
+        this.onUnauthorized()
       }
     }
     //return result after second attempt 

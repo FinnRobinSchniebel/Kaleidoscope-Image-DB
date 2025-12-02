@@ -20,6 +20,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Checkbox } from '@/components/ui/checkbox'
 import { searchAPI, SearchRequest } from '@/components/api/jwt_apis/search-api'
 import { protectedAPI } from '@/components/api/jwt_apis/protected-api-client'
+import { useRouter } from 'next/navigation'
+
 
 type Props = {
   protected: protectedAPI
@@ -27,6 +29,7 @@ type Props = {
 
 export default function SearchBar(props : Props) {
 
+  const route = useRouter()
 
   const SearchCaller = async () =>{
     const request : SearchRequest = {
@@ -43,14 +46,14 @@ export default function SearchBar(props : Props) {
   return (
     <div>
       <Item variant="outline" className='m-2 xl:m-10 justify-center bg-background/10'>
-        <InputGroup className='xl:max-w-[50%] text-primary/90 bg-background/30'>
+        <InputGroup className='xl:max-w-[50%] text-primary bg-background/30'>
           <InputGroupInput placeholder="Search..." className='text-xl'/>
           <InputGroupAddon>
             <SearchIcon className='text-primary'/>
           </InputGroupAddon>
           <InputGroupAddon align="inline-end">0 results</InputGroupAddon>
           <InputGroupAddon align="inline-end">
-            <InputGroupButton variant="Gradient"  onClick={SearchCaller}>Search</InputGroupButton>
+            <InputGroupButton variant="Gradient" className='text-primary' onClick={SearchCaller}>Search</InputGroupButton>
           </InputGroupAddon>          
         </InputGroup>
         <Popover>
@@ -99,7 +102,7 @@ function PopDownGroup(){
 
 function PopDownItem({id, defaultState, label, Description}: PopDownItemProps) {
     return (
-      <div className='flex flex-col gap-6'>
+      <div key={"item-" + id} className='flex flex-col gap-6'>
         <Label id={"label-" + id} className="hover:bg-accent/50 flex items-start gap-3 rounded-lg border p-3 has-[[aria-checked=true]]:border-blue-600 has-[[aria-checked=true]]:bg-blue-50 dark:has-[[aria-checked=true]]:border-blue-900 dark:has-[[aria-checked=true]]:bg-blue-950">
           <Checkbox
             id={id}
