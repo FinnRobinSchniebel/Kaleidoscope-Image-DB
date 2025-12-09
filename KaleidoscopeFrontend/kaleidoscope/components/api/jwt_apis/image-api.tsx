@@ -22,7 +22,7 @@ export interface imageSetIDResponse {
 
 
 
-export async function searchAPI(request: imageRequest): Promise<{ }> {
+export async function imageAPI(request: imageRequest): Promise<string> {
 
   const Params = {
     //TODO: from date and to Date
@@ -48,8 +48,5 @@ export async function searchAPI(request: imageRequest): Promise<{ }> {
     return ""
   }
 
-
-  return response
-
-
+  return  URL.createObjectURL(response)
 }

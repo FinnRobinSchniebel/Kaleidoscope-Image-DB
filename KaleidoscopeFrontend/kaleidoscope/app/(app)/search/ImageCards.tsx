@@ -1,41 +1,51 @@
 'use client'
 
+import { imageAPI, imageRequest } from "@/components/api/jwt_apis/image-api";
+import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
+import { searchAPI } from "@/components/api/jwt_apis/search-api";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { Suspense } from "react";
+import { Suspense, use, useEffect } from "react";
 
 interface Card {
-  id?: string;
+  id: string;
   Tags?: string[];
-  className? : string | undefined,
+  protAPI: protectedAPI
+
 }
 
 
-export default async function ImageCard(params: Card) {
-  
+export default function ImageCard(cardInfo: Card) {
+
+  var request : imageRequest =  {
+    protectedApiRef: cardInfo.protAPI,
+    ID: cardInfo.id,
+    Index: 0,
+    Lowres: true
+  }
+
+  const data = use(imageAPI(request))
+
   return (
-  <div>
-    <button className="w-25 h-25 bg-[url(/random hexa.png)]">
-      <LoadCard />
-    </button>
-  </div>
+    <div>
+      <button className="size-60 md:size:80 lg:size-80 2xl:size-90 md:m-[1px] 2xl:m-[4px] bg-[url('/random%20hexa.png')]">
+
+      </button>
+    </div>
   )
 }
 
-export function LoadingImageCard({id, Tags, className} : Card){
+export function LoadingImageCard() {
   return (
-    <Skeleton className={cn("size-60 md:size:80 lg:size-80 2xl:size-90 md:m-[1px] 2xl:m-[4px]", className)}></Skeleton>
-  )
-  
-}
-
-async function LoadCard(){
-  await new Promise((resolve) =>setTimeout(resolve, 4000))
-  
-  return (
-    <></>
+    <Skeleton className={cn("size-60 md:size:80 lg:size-80 2xl:size-90 md:m-[1px] 2xl:m-[4px]")}></Skeleton>
   )
 
 }
+
+
 //size-60 md:size:80 2xl:size-90 lg:size-70  2xl:m-5
 //<Suspense fallback={<LoadingImageCard/>}>
+
+function wait(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}

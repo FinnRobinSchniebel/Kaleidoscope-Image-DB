@@ -15,19 +15,19 @@ export interface SearchRequest {
   toDate?: string
 }
 
-export interface setData {
+export interface SetData {
   id: string
   tags: string[]
 }
-export interface imageSetIDResponse {
-  imageSets: setData[]
+export interface ImageIdsCountResponse {
+  imageSets: SetData[]
   count: number
 }
 
 
 
 
-export async function searchAPI(request: SearchRequest): Promise<{ status: number, errorString?: string, imageSets?: imageSetIDResponse, count?: number }> {
+export async function searchAPI(request: SearchRequest): Promise<{ status: number, errorString?: string, imageSets?: SetData[], count?: number }> {
 
   const body = {
     "tags": request.tags || [],

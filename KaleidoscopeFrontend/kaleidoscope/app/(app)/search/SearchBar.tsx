@@ -1,7 +1,7 @@
 'use client'
 
 import { Item } from '@/components/ui/item'
-import React from 'react'
+import React, { SetStateAction, use, useEffect } from 'react'
 
 import {
   InputGroup,
@@ -14,110 +14,134 @@ import {
 import { SearchIcon } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
-import { Label } from '@radix-ui/react-label'
+
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Checkbox } from '@/components/ui/checkbox'
-import { searchAPI, SearchRequest } from '@/components/api/jwt_apis/search-api'
+
+import { searchAPI, SearchRequest, SetData } from '@/components/api/jwt_apis/search-api'
 import { protectedAPI } from '@/components/api/jwt_apis/protected-api-client'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { useForm } from 'react-hook-form'
+import { Form, FormField } from '@/components/ui/form'
+import { PopDownGroup } from './SearchDropdown'
+
+
 
 
 type Props = {
   protected: protectedAPI
+  setImageSets: (results: SetData[] | undefined) => void;
 }
 
-export default function SearchBar(props : Props) {
+export default function SearchBar(props: Props) {
 
-  const route = useRouter()
+  //const url = usePathname()
+  const searchParams = useSearchParams()
+  const router = useRouter()
 
-  const SearchCaller = async () =>{
-    const request : SearchRequest = {
-      PageCount: 1000,
+  const form = useForm({
+    defaultValues: {
+      Search: (searchParams.get("SearchTerm") ?? ""),
+      titleCheck: (searchParams.get("titleCheck")) === 'true',
+      authorCheck: (searchParams.get("authorCheck")) === 'true',
+      tagsCheck: (searchParams.get("tagsCheck") ?? "true") === 'true',
+      sourceCheck: (searchParams.get("sourceCheck")) === 'true'
+    }
+  })
+
+  //change this
+  //we want to make this simply change the search params and return the querry and not call the fetch yet
+  //the fetch will happen in the results section
+  //one page will be 12 items for now
+  //
+
+
+  const SearchCaller = async () => {
+    const SearchValues = form.getValues();
+
+
+    //get form data for equest
+    const request: SearchRequest = {
+      PageCount: 12,
       PageNumber: 0,
       protectedApiRef: props.protected
     }
 
+    //fetch data
     var result = await searchAPI(request)
-    console.log(result)
+
+    //pass search results to parent 
+    props.setImageSets(result.imageSets)
+
+    if (searchParams.toString() != sessionStorage.getItem("SearchTerm")) {
+      // console.log(searchParams.toString())
+      // console.log(sessionStorage.getItem("SearchTerm"))
+
+      const newparams = new URLSearchParams(searchParams.toString())
+
+      Object.entries(SearchValues).forEach(([key, value]) => {
+        // Convert booleans to strings
+        if (typeof value === "boolean") {
+          newparams.set(key, value ? "true" : "false");
+        } else if (value != null) {
+          newparams.set(key, value.toString());
+        }
+      });
+
+      //set session storage to hold results
+      sessionStorage.setItem("SearchTerm", newparams.toString())
+      sessionStorage.setItem("SearchCount", result.count?.toString() ?? '0')
+      sessionStorage.setItem("SearchImageSets", JSON.stringify(result.imageSets))
+
+      //set url to search params
+      
+      router.push(`?${newparams.toString()}`, { scroll: false })
+      
+    }
   }
 
+  useEffect(() => {
+    (async () => {
+      if (searchParams.toString() != sessionStorage.getItem("SearchTerm")) {
+        SearchCaller()
+      }
+    })()
+  }, [form])
 
   return (
-    <div>
-      <Item variant="outline" className='m-2 xl:m-10 justify-center bg-background/10'>
-        <InputGroup className='xl:max-w-[50%] text-primary bg-background/30'>
-          <InputGroupInput placeholder="Search..." className='text-xl'/>
-          <InputGroupAddon>
-            <SearchIcon className='text-primary'/>
-          </InputGroupAddon>
-          <InputGroupAddon align="inline-end">0 results</InputGroupAddon>
-          <InputGroupAddon align="inline-end">
-            <InputGroupButton variant="Gradient" className='text-primary' onClick={SearchCaller}>Search</InputGroupButton>
-          </InputGroupAddon>          
-        </InputGroup>
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="Gradient" className='bg-transparent'>Settings</Button>
-          </PopoverTrigger>
-          <PopoverContent className="p-4 mt-4">
-            <PopDownGroup/>
-          </PopoverContent>
-        </Popover>
-      </Item>
-    </div>
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(SearchCaller)} className="space-y-8">
+        <Item variant="outline" className='m-2 xl:m-10 justify-center bg-background/10'>
+
+          <FormField control={form.control} name="Search" render={({ field }) => (
+            <InputGroup className='xl:max-w-[50%] text-primary bg-background/30'>
+              <InputGroupInput placeholder="Search..." className='text-xl'  {...field} />
+
+              <InputGroupAddon>
+                <SearchIcon className='text-primary' />
+              </InputGroupAddon>
+
+              <InputGroupAddon align="inline-end" className='text-primary/90'>0 results</InputGroupAddon>
+
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton variant="Gradient" className='text-primary' onClick={SearchCaller}>Search</InputGroupButton>
+              </InputGroupAddon>
+
+            </InputGroup>
+          )} />
+
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="Gradient" className='bg-transparent'>Settings</Button>
+            </PopoverTrigger>
+
+            <PopoverContent className="p-4 mt-4">
+              <PopDownGroup form={form} />
+            </PopoverContent>
+          </Popover>
+        </Item>
+      </form>
+    </Form>
   )
 
-}
-
-interface PopDownItemProps {
-  id: string;
-  defaultState: boolean;
-  label: string;
-  Description: string;
-}
-
-
-function PopDownGroup(){
-
-  const OptionItemsGroupOne = [
-    { id: "titleCheck", defaultState: false, label: "Search Title", Description: "Add results for matching titles." },
-    { id: "authorCheck", defaultState: false, label: "Search Author", Description: "Add results for matching author names." },
-    { id: "tagsCheck", defaultState: true, label: "Search Tags", Description: "Add results for matching Tags." },
-    { id: "sourceCheck", defaultState: false, label: "Search Source", Description: "Add results for source names that match search." },
-  ]
-  const OptionItemsGroupTwo = [
-    { id: "PartialCheck", defaultState: true, label: "Partial Matches", Description: "Searching for incomplete and partial matches." },
-    { id: "AndOr", defaultState: false, label: "Match One", Description: "Search for all that match one of Any part of the search" },
-  ]
-  
-
-
-  return (
-    <>
-      {OptionItemsGroupOne.map(PopDownItem)}
-    </>
-  )
-}
-
-function PopDownItem({id, defaultState, label, Description}: PopDownItemProps) {
-    return (
-      <div key={"item-" + id} className='flex flex-col gap-6'>
-        <Label id={"label-" + id} className="hover:bg-accent/50 flex items-start gap-3 rounded-lg border p-3 has-[[aria-checked=true]]:border-blue-600 has-[[aria-checked=true]]:bg-blue-50 dark:has-[[aria-checked=true]]:border-blue-900 dark:has-[[aria-checked=true]]:bg-blue-950">
-          <Checkbox
-            id={id}
-            defaultChecked={defaultState}
-            className="data-[state=checked]:border-blue-600 data-[state=checked]:bg-blue-600 dark:data-[state=checked]:border-blue-700 dark:data-[state=checked]:bg-blue-700"
-          />
-          <div  id={"Text-" + id} className="grid gap-1.5 font-normal">
-            <p id={"labelText-" + id} className="text-sm leading-none font-medium">
-              {label}
-            </p>
-            <p id={"Description-" + id} className="text-muted-foreground text-sm">
-             {Description}
-            </p>
-          </div>
-        </Label>
-      </div>
-    )
 }
