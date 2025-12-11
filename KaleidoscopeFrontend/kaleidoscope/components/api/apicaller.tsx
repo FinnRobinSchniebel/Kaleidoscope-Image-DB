@@ -36,6 +36,10 @@ export interface GORequest {
   media?: File[] | undefined
 }
 
+type FetchResponse =
+  | { status: number; response: Blob }
+  | { status: number; response: any }
+
 
 class GoApiError extends Error {
   status: number;
@@ -57,23 +61,33 @@ export async function apiSendRequest(request : GORequest): Promise<{status: numb
   }
 
   try{
-    const response = await fetch(await(getServerAPI(request.endpoint)), options)
+    console.log("doing fetch")
+
+    const path = await getServerAPI(request.endpoint)
+    console.log("got path")
+    const response = await fetch(path, options)
+    console.log("finished fetch")
     
     if (!response.ok) {
       throw new GoApiError(response.status, await response.text());
     }
     //check of blob
     const contentType = response.headers.get("content-type") || "";
+
+    let responseBody : FetchResponse
+
     if(contentType.startsWith("image/")){
-      const responseBody = {status: response.status, response: await response.blob()};
+      responseBody = {status: response.status, response: await response.blob()};
     }
-
-    const responseBody = {status: response.status, response: await response.json()};
- 
+    else{
+      responseBody = {status: response.status, response: await response.json()};
+    }
+    
+    console.log("fetch complete ... no errors")
     return responseBody
-  
+    
   } catch(error){
-
+    console.log("fetch error")
     if( error instanceof GoApiError){
       return {status: error.status, errorString: error.message }
     }

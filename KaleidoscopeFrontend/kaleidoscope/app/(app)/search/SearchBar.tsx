@@ -26,11 +26,18 @@ import { Form, FormField } from '@/components/ui/form'
 import { PopDownGroup } from './SearchDropdown'
 
 
+export interface SearchInfo {
+  Search: string,
+  titleCheck: boolean,
+  authorCheck: boolean,
+  tagsCheck: boolean,
+  sourceCheck: boolean
+}
 
 
 type Props = {
   protected: protectedAPI
-  setImageSets: (results: SetData[] | undefined) => void;
+  setSearchquery: (query: SearchInfo) => void;
 }
 
 export default function SearchBar(props: Props) {
@@ -39,7 +46,7 @@ export default function SearchBar(props: Props) {
   const searchParams = useSearchParams()
   const router = useRouter()
 
-  const form = useForm({
+  const form = useForm<SearchInfo>({
     defaultValues: {
       Search: (searchParams.get("SearchTerm") ?? ""),
       titleCheck: (searchParams.get("titleCheck")) === 'true',
@@ -68,36 +75,25 @@ export default function SearchBar(props: Props) {
     }
 
     //fetch data
-    var result = await searchAPI(request)
+    //var result = await searchAPI(request)
 
     //pass search results to parent 
-    props.setImageSets(result.imageSets)
+    props.setSearchquery(SearchValues)
 
-    if (searchParams.toString() != sessionStorage.getItem("SearchTerm")) {
-      // console.log(searchParams.toString())
-      // console.log(sessionStorage.getItem("SearchTerm"))
 
-      const newparams = new URLSearchParams(searchParams.toString())
 
-      Object.entries(SearchValues).forEach(([key, value]) => {
-        // Convert booleans to strings
-        if (typeof value === "boolean") {
-          newparams.set(key, value ? "true" : "false");
-        } else if (value != null) {
-          newparams.set(key, value.toString());
-        }
-      });
+    
 
-      //set session storage to hold results
-      sessionStorage.setItem("SearchTerm", newparams.toString())
-      sessionStorage.setItem("SearchCount", result.count?.toString() ?? '0')
-      sessionStorage.setItem("SearchImageSets", JSON.stringify(result.imageSets))
+    
 
-      //set url to search params
-      
-      router.push(`?${newparams.toString()}`, { scroll: false })
-      
-    }
+    //set session storage to hold results
+    
+    //sessionStorage.setItem("SearchCount", result.count?.toString() ?? '0')
+    //sessionStorage.setItem("SearchImageSets", JSON.stringify(result.imageSets))
+
+    //set url to search params
+
+
   }
 
   useEffect(() => {

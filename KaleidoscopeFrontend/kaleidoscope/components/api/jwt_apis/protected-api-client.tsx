@@ -81,6 +81,7 @@ export class protectedAPI {
       
       //if token cant be refreshed error response so the user redirects to login
       if (status == 404 || status == 401) {
+        console.log("Couldt create new session")
         return { status: status, response: "error" }
       }
       protectedAPI.token = await ReadToken()
@@ -96,13 +97,18 @@ export class protectedAPI {
     // check if token is updaing and if it needs an update go fetch a new one
     var ReadyResult = await this.CheckIfReady();
     if (ReadyResult.status != 200 && ReadyResult.status != 0) {
+      console.log("Token expired and could not be refreshed")
       this.onUnauthorized()
       return ReadyResult;
     }
     //pre-check complete: do api call
     request.header = { ...request.header, ...{ "session_token": "Bearer " + protectedAPI.token } };
 
+    console.log("making api request")
+
     var callResult = await apiSendRequest(request)
+
+    console.log(callResult.status)
 
     //check if result is good and attempt to fix it if auth has expired
     if (callResult.status == 401) {

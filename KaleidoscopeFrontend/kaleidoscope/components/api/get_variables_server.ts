@@ -7,7 +7,7 @@ import { cookies } from "next/headers"
 
 
 export async function getServerAPI(endpoint : string) {
-  
+  console.log("fetching server address")
   //console.log(process.env.NEXT_PUBLIC_BACKEND)
   var env = process.env.BACKEND_URL
   if (env != undefined){

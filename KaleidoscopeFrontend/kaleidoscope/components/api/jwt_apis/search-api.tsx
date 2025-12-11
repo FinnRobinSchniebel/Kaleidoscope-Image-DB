@@ -16,8 +16,9 @@ export interface SearchRequest {
 }
 
 export interface SetData {
-  id: string
+  _id: string
   tags: string[]
+  active: number
 }
 export interface ImageIdsCountResponse {
   imageSets: SetData[]
@@ -51,10 +52,10 @@ export async function searchAPI(request: SearchRequest): Promise<{ status: numbe
 
   const {status, errorString, response} = await request.protectedApiRef.CallProtectedAPI(newRequest)
   if (status != 200){
-    console.log(errorString)
+    console.log("error " + errorString)
     return {status, errorString} 
   }
-  console.log(response)
+
 
 
   return {status, imageSets: response.imagesets, count: response.totalCount} 

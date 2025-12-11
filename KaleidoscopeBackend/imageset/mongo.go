@@ -151,6 +151,8 @@ func DeleteImageSetInDB(id bson.ObjectID) error {
 /*This function adds an image set to the DB and local storage*/
 func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId string) (InternalResponse, map[int][]CollisionResponsePair) {
 
+	//TODO: Test if image size is to large
+
 	//clean file paths to avoid unauthorized access
 	imageSet.Image = nil
 	//imageSet.LowImage = nil
@@ -213,6 +215,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []*multipart.FileHeader, userId 
 		//Need to know the file type to save it in the correct format
 		itype, err := getFileTypeFromHeader(media[index])
 		if err != nil {
+
 			return InternalResponse{500, err.Error()}, nil
 		}
 

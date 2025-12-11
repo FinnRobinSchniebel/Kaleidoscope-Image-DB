@@ -1,56 +1,45 @@
 'use client'
 
+import React from 'react';
 import { ScrollArea } from "@/components/ui/scroll-area"
 import ImageCard, { LoadingImageCard } from "./ImageCards"
 import { Fragment, Suspense, useEffect } from "react";
 import { Separator } from "@radix-ui/react-separator";
-import { SetData } from "@/components/api/jwt_apis/search-api";
+import { searchAPI, SearchRequest, SetData } from "@/components/api/jwt_apis/search-api";
 import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
+import { useInView } from 'react-intersection-observer';
+import { Tags } from 'lucide-react';
 
-
-type Props = {
+type SearchProps = {
   protected: protectedAPI
-  imageSets: SetData[] | undefined;
+  page: number
 }
 
-export default function SearchResults(props: Props) {
 
-  let elementsArray = Array.from({ length: 30 }, (_, index) => (<li key={'li-' + index}> <Suspense fallback={<LoadingImageCard />}> <LoadingImageCard key={index} /> </Suspense> </li>));
 
-  if (props.imageSets != undefined) {
-    // elementsArray = props.imageSets?.map((set, index) => {
-    //   return (
-    //     <li key={'li-' + index}>
-    //       <Suspense fallback={<LoadingImageCard />}>
-    //         <ImageCard key={index} id={set.id} protAPI={props.protected} />
-    //       </Suspense>
+export default async function SearchResults(props: SearchProps) {
 
-    //     </li>)
-    // }, [props.protected])
+  const request: SearchRequest = {
+    PageCount: 8,
+    PageNumber: props.page,
+    protectedApiRef: props.protected
   }
 
+  console.log("test")
 
-  useEffect(() => {
-    (async () => {
-      console.log("test results: ")
-      console.log(props.imageSets)
+  var result = await searchAPI(request)
 
-    })()
+  console.log("request made")
+  console.log(result)
 
-  }, [props.imageSets])
-
-  const tags = Array.from({ length: 50 }).map(
-    (_, i, a) => `v1.2.0-beta.${a.length - i}`
-  )
+  if (result.imageSets && result.imageSets.length > 0){
+    return result.imageSets.map((item: SetData, index:number) =>(
+      <ImageCard key={"card-" + item._id} id={item._id} Tags={item.tags} protAPI={props.protected}/>
+    ))
+  }
 
   return (
-
-    <ul className="w-full flex flex-wrap pb-[15%] lg:pb-[6.5%] xl:pb-[4%] justify-center">
-
-      {elementsArray}
-
-    </ul>
+    []
   )
-}
 
-//grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5
+}

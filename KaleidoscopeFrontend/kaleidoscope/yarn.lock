@@ -1388,6 +1388,7 @@ __metadata:
     react: "npm:^19.2.0"
     react-dom: "npm:^19.2.0"
     react-hook-form: "npm:^7.67.0"
+    react-intersection-observer: "npm:^10.0.0"
     tailwind-merge: "npm:^3.3.1"
     tailwindcss: "npm:^4"
     tw-animate-css: "npm:^1.4.0"
@@ -1654,6 +1655,19 @@ __metadata:
   peerDependencies:
     react: ^16.8.0 || ^17 || ^18 || ^19
   checksum: 10c0/d20fec07e2f86a3c7ad60c453ae004e5ca59def04c1ca9a34e7d899e93d1587f8070e4b8b88b0ff1d01ff1651c4bb06f580e32aa3a97120d60fbc483e3f9e312
+  languageName: node
+  linkType: hard
+
+"react-intersection-observer@npm:^10.0.0":
+  version: 10.0.0
+  resolution: "react-intersection-observer@npm:10.0.0"
+  peerDependencies:
+    react: ^17.0.0 || ^18.0.0 || ^19.0.0
+    react-dom: ^17.0.0 || ^18.0.0 || ^19.0.0
+  peerDependenciesMeta:
+    react-dom:
+      optional: true
+  checksum: 10c0/ab2d9316adaab401cfff657ced221c12665434dfa0846d8d22b6871c053916550c541e5835969399ae292ee8b68b5cfc5cc3047bfd69b09efc605dc95aef532f
   languageName: node
   linkType: hard
 

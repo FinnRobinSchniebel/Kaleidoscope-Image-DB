@@ -24,14 +24,15 @@ export default function ImageCard(cardInfo: Card) {
     Lowres: true
   }
 
-  const data = use(imageAPI(request))
+
+  //const data = use(imageAPI(request))
 
   return (
-    <div>
-      <button className="size-60 md:size:80 lg:size-80 2xl:size-90 md:m-[1px] 2xl:m-[4px] bg-[url('/random%20hexa.png')]">
-
+    <li key={"li-card-" + cardInfo.id}>
+      <button key={"card-button-" + cardInfo.id} className="size-60 md:size:80 lg:size-80 2xl:size-90 md:m-[1px] 2xl:m-[4px] bg-[url('/random%20hexa.png')]">
+        <Skeleton key={"card-temp-" + cardInfo.id} className={cn("size-60 md:size:80 lg:size-80 2xl:size-90 md:m-[1px] 2xl:m-[4px]")}></Skeleton>
       </button>
-    </div>
+    </li>
   )
 }
 
