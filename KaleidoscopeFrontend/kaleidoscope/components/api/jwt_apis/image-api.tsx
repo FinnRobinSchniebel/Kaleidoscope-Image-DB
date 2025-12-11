@@ -24,15 +24,9 @@ export interface imageSetIDResponse {
 
 export async function imageAPI(request: imageRequest): Promise<string> {
 
-  const Params = {
-    //TODO: from date and to Date
-    image_set_id: request.ID || "",
-    index: request.Index,
-    Lowres: request.Lowres
-  }
 
   const newRequest: GORequest = {
-    endpoint: `/search?${Params.toString()}`,
+    endpoint: `/search?image_set_id=${request.ID || ""}&index=${request.Index}&lowres=${request.Lowres}`,
     type: "Get",
     header: { 'Content-Type': 'application/json' },
     
@@ -48,5 +42,5 @@ export async function imageAPI(request: imageRequest): Promise<string> {
     return ""
   }
 
-  return  URL.createObjectURL(response)
+  return URL.createObjectURL(response)
 }

@@ -25,7 +25,7 @@ export default function ImageCard(cardInfo: Card) {
   }
 
 
-  //const data = use(imageAPI(request))
+  const data = use(imageAPI(request))
 
   return (
     <li key={"li-card-" + cardInfo.id}>
