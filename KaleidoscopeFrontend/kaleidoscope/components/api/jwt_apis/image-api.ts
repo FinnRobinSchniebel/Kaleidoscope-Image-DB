@@ -26,7 +26,7 @@ export async function imageAPI(request: imageRequest): Promise<string> {
 
 
   const newRequest: GORequest = {
-    endpoint: `/search?image_set_id=${request.ID || ""}&index=${request.Index}&lowres=${request.Lowres}`,
+    endpoint: `/image?image_set_id=${request.ID || ""}&index=${request.Index}&lowres=${request.Lowres}`,
     type: "Get",
     header: { 'Content-Type': 'application/json' },
     

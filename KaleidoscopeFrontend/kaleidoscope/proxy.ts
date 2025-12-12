@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { use } from 'react';
 
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
 
 
   const isAuthenticated = request.cookies.has("session_token") //sessionStorage.getItem("session_token");
