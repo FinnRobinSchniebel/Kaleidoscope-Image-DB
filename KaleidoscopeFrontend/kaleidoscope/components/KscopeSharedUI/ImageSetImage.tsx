@@ -1,4 +1,5 @@
 import Image from "next/image"
+import { useProtected } from "../api/jwt_apis/ProtectedProvider"
 
 
 interface props{
@@ -8,7 +9,7 @@ interface props{
 
 export default function ImageSetImage({Index, SetID} : props){
 
-    
+    const protectedApi = useProtected()
 
 
 

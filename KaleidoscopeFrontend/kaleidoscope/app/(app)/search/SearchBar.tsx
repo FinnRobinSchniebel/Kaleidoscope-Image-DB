@@ -24,6 +24,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { Form, FormField } from '@/components/ui/form'
 import { PopDownGroup } from './SearchDropdown'
+import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider'
 
 
 export interface SearchInfo {
@@ -36,13 +37,13 @@ export interface SearchInfo {
 
 
 type Props = {
-  protected: protectedAPI
   setSearchquery: (query: SearchInfo) => void;
 }
 
 export default function SearchBar(props: Props) {
 
   //const url = usePathname()
+  const protectedAPI = useProtected()
   const searchParams = useSearchParams()
   const router = useRouter()
 
@@ -71,7 +72,7 @@ export default function SearchBar(props: Props) {
     const request: SearchRequest = {
       PageCount: 12,
       PageNumber: 0,
-      protectedApiRef: props.protected
+      protectedApiRef: protectedAPI
     }
 
     //fetch data

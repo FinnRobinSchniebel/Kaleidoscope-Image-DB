@@ -10,6 +10,7 @@ import { usePathname } from "next/navigation";
 import Cookies from 'js-cookie';
 import { SearchRequest, SetData } from "@/components/api/jwt_apis/search-api";
 import LoadSearchResults from "./LoadSearchResults";
+import { ProtectedProvider } from "@/components/api/jwt_apis/ProtectedProvider";
 
 
 interface Props {
@@ -62,25 +63,14 @@ export default function Search(props: Props) {
     };
   }, [router, pathname, params]);
 
-  const Protected: protectedAPI = useMemo(() => {
-    return CreateProtected(props.token, () => redirectRef.current())
-  }, [props.token])
-
 
 
 
   return (
-    <>
-      <SearchBar protected={Protected} setSearchquery={setSearch} />
-      <LoadSearchResults protected={Protected} />
-    </>
+    <ProtectedProvider token={props.token}>
+      <SearchBar setSearchquery={setSearch} />
+      <LoadSearchResults />
+    </ProtectedProvider>
   )
 
 }
-
-function CreateProtected(token: string, onUnauthorized: () => void): protectedAPI {
-  var p = new protectedAPI(token, onUnauthorized);
-  console.log("protected re-init")
-  return p
-}
-

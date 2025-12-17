@@ -10,9 +10,9 @@ import Image from 'next/image';
 import { Dialog} from '@/components/ui/dialog';
 
 import ImageSetDialog from '@/components/KscopeSharedUI/ImageSet/ImageSetDialog';
+import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider';
 
 type Props = {
-  protected: protectedAPI
   //imageSets: SetData[] | undefined;
 }
 
@@ -24,8 +24,10 @@ export type ImageCard = JSX.Element
 
 export default function LoadSearchResults(props: Props) {
 
+  const protectedAPI = useProtected()
 
   const { ref, inView } = useInView()
+  
   const [cards, setCards] = useState<ImageCard[]>([])
   const [isEmpty, setisEmpty] = useState<boolean>(false)
   const pageRef = useRef(0)
@@ -44,7 +46,7 @@ export default function LoadSearchResults(props: Props) {
     const fn = async () => {
       console.log(pageRef.current)
       if (!isEmpty && inView) {
-        const res = await SearchResults({ protected: props.protected, page: pageRef.current, OpenImageSet: openDialog})
+        const res = await SearchResults({ protected: protectedAPI, page: pageRef.current, OpenImageSet: openDialog})
         console.log(res.length)
         if( res.length < 1) {
           setisEmpty(true)

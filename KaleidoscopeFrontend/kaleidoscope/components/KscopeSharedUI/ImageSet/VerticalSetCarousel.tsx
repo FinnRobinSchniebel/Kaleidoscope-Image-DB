@@ -4,11 +4,15 @@ import { DialogContent, DialogDescription, DialogHeader } from "@/components/ui/
 import { DialogTitle } from "@radix-ui/react-dialog";
 
 
+// interface Props{
+//     ImageSets: 
+// }
+
 export default function VerticalImageSetCarousel() {
 
 
     return (
-        <ImageSetViewer />
+        <ImageSetViewer Id="" />
     )
 
     // return (
