@@ -9,14 +9,15 @@ import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.share
 import { usePathname } from "next/navigation";
 import Cookies from 'js-cookie';
 import { SearchRequest, SetData } from "@/components/api/jwt_apis/search-api";
-import LoadMore from "./LoadMore";
-import FirstPage from "./firstPage";
+import LoadSearchResults from "./LoadSearchResults";
+
 
 interface Props {
   token: string
 }
 
 
+export type ProtectedContext = protectedAPI
 
 
 export default function Search(props: Props) {
@@ -71,7 +72,7 @@ export default function Search(props: Props) {
   return (
     <>
       <SearchBar protected={Protected} setSearchquery={setSearch} />
-      <LoadMore protected={Protected} />
+      <LoadSearchResults protected={Protected} />
     </>
   )
 

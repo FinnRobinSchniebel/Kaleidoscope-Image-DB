@@ -42,7 +42,7 @@ function Layout() {
 
     <>
 
-      <div className="fixed bottom-0 min-w-full min-h-[5%] max-h-[12%]  backdrop-blur-[2px] border-t border-white/20 z-50">
+      <div className="fixed bottom-0 min-w-full min-h-[5%] max-h-[12%]  backdrop-blur-[3px] bg-primary-foreground/40 border-t border-white/20 z-50">
         <NavigationMenu className="w-full h-full max-w-8/10 justify-self-center">
           {navItems.map(({ icon: Icon, label, goto_link, ActiveString }, index) => (
 

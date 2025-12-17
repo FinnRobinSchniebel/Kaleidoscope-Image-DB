@@ -13,6 +13,7 @@ import { Tags } from 'lucide-react';
 type SearchProps = {
   protected: protectedAPI
   page: number
+  OpenImageSet: (i: number)=>void
 }
 
 
@@ -32,9 +33,9 @@ export default async function SearchResults(props: SearchProps) {
   console.log("request made")
   console.log(result)
 
-  if (result.imageSets && result.imageSets.length > 0){
+  if (result.imageSets && result.imageSets.length > 0 ){
     return result.imageSets.map((item: SetData, index:number) =>(
-      <ImageCard key={"card-" + item._id} id={item._id} Tags={item.tags} protAPI={props.protected}/>
+      <ImageCard key={"card-" + item._id} id={item._id} Tags={item.tags} protAPI={props.protected} OpenImageSet={props.OpenImageSet}/>
     ))
   }
 
