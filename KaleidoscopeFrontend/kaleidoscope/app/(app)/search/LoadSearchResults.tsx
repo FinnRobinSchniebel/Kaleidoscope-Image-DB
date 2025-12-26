@@ -7,10 +7,12 @@ import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
 import { useInView } from 'react-intersection-observer';
 import SearchResults from './SearchResults';
 import Image from 'next/image';
-import { Dialog} from '@/components/ui/dialog';
+import { Dialog } from '@/components/ui/dialog';
 
 import ImageSetDialog from '@/components/KscopeSharedUI/ImageSet/ImageSetDialog';
 import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider';
+import { SetData } from '@/components/api/jwt_apis/search-api';
+import ImageCard from './ImageCards';
 
 type Props = {
   //imageSets: SetData[] | undefined;
@@ -20,23 +22,28 @@ type Props = {
 
 //let empty = false
 
-export type ImageCard = JSX.Element
+// export type ImageCard = JSX.Element
+
+
 
 export default function LoadSearchResults(props: Props) {
+  
 
   const protectedAPI = useProtected()
 
   const { ref, inView } = useInView()
-  
-  const [cards, setCards] = useState<ImageCard[]>([])
+
+  const [ImageSets, setImageSets] = useState<SetData[]>([])
+  const [count, setcount] = useState<number>(0)
+
   const [isEmpty, setisEmpty] = useState<boolean>(false)
   const pageRef = useRef(0)
-  
+
   //temp
   const [open, setOpen] = useState(false)
-  const [index, setIndex] = useState<number | null>(null)
+  const [index, setIndex] = useState<number>(0)
 
-   function openDialog(i: number) {
+  function openDialog(i: number) {
     setIndex(i)
     setOpen(true)
   }
@@ -46,12 +53,12 @@ export default function LoadSearchResults(props: Props) {
     const fn = async () => {
       console.log(pageRef.current)
       if (!isEmpty && inView) {
-        const res = await SearchResults({ protected: protectedAPI, page: pageRef.current, OpenImageSet: openDialog})
-        console.log(res.length)
-        if( res.length < 1) {
+        const res = await SearchResults({ protected: protectedAPI, page: pageRef.current })
+
+        if (res.imageSets.length < 1) {
           setisEmpty(true)
         }
-        setCards([...cards, ...res])
+        setImageSets([...ImageSets, ...res.imageSets])
         pageRef.current++
       }
     }
@@ -62,19 +69,21 @@ export default function LoadSearchResults(props: Props) {
     <>
       <section>
         <ul className="w-full flex flex-wrap pb-[15%] lg:pb-[6.5%] xl:pb-[4%] justify-center">
-          {cards}
-          
+          {ImageSets.map((item: SetData, index: number) => (
+            <ImageCard key={"card-" + item._id} id={item._id} index={index} Tags={item.tags} OpenImageSet={openDialog} />
+          ))}
+
         </ul>
       </section>
       <section className='justify-items-center'>
         <Image ref={ref} src="./file.svg"
-        alt=""
-        width={50}
-        height={50}
+          alt=""
+          width={50}
+          height={50}
         />
       </section>
-      <Dialog  open={open} onOpenChange={setOpen}>
-         <ImageSetDialog/>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <ImageSetDialog imageSets={ImageSets} index={index}/>
       </Dialog>
     </>
   )

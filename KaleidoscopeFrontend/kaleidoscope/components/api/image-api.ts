@@ -1,5 +1,6 @@
-import { GORequest } from "../apicaller"
-import { protectedAPI } from "./protected-api-client"
+import { GORequest } from "./apicaller"
+import { protectedAPI } from "./jwt_apis/protected-api-client"
+import { SetData } from "./jwt_apis/search-api"
 
 
 
@@ -10,12 +11,8 @@ export interface imageRequest {
   Lowres: boolean
 }
 
-export interface setData {
-  id: string
-  tags: string[]
-}
 export interface imageSetIDResponse {
-  imageSets: setData[]
+  imageSets: SetData[]
   count: number
 }
 

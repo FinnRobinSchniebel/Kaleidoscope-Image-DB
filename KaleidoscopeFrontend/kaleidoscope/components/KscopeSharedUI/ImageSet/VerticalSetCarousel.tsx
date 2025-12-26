@@ -2,17 +2,19 @@ import { Carousel, CarouselContent, CarouselItem } from "@/components/ui/carouse
 import ImageSetViewer from "./ImageSetViewer";
 import { DialogContent, DialogDescription, DialogHeader } from "@/components/ui/dialog";
 import { DialogTitle } from "@radix-ui/react-dialog";
+import { SetData } from "@/components/api/jwt_apis/search-api";
 
 
-// interface Props{
-//     ImageSets: 
-// }
+interface Props{
+    imageSets: SetData[]
+    index : number
+}
 
-export default function VerticalImageSetCarousel() {
+export default function VerticalImageSetCarousel({imageSets, index} : Props) {
 
 
     return (
-        <ImageSetViewer Id="" />
+        <ImageSetViewer set={imageSets[index]} />
     )
 
     // return (

@@ -13,34 +13,25 @@ import { Tags } from 'lucide-react';
 type SearchProps = {
   protected: protectedAPI
   page: number
-  OpenImageSet: (i: number)=>void
 }
 
 
 
-export default async function SearchResults(props: SearchProps) {
+export default async function SearchResults(props: SearchProps): Promise<{ imageSets: SetData[]; count: number }> {
 
   const request: SearchRequest = {
     PageCount: 8,
     PageNumber: props.page,
     protectedApiRef: props.protected
   }
+  //Todo: add form data to request
 
-  console.log("test")
 
   var result = await searchAPI(request)
 
-  console.log("request made")
-  console.log(result)
-
-  if (result.imageSets && result.imageSets.length > 0 ){
-    return result.imageSets.map((item: SetData, index:number) =>(
-      <ImageCard key={"card-" + item._id} id={item._id} Tags={item.tags} protAPI={props.protected} OpenImageSet={props.OpenImageSet}/>
-    ))
+  return {
+    imageSets: result.imageSets ?? [],
+    count: result.count ?? 0,
   }
-
-  return (
-    []
-  )
 
 }

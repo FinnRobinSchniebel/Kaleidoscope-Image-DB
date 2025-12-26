@@ -3,9 +3,15 @@ import ImageSetViewer from "./ImageSetViewer";
 import { DialogContent, DialogDescription, DialogHeader } from "@/components/ui/dialog";
 import { DialogTitle } from "@radix-ui/react-dialog";
 import VerticalImageSetCarousel from "./VerticalSetCarousel";
+import { SetData } from "@/components/api/jwt_apis/search-api";
 
 
-export default function ImageSetDialog(){
+interface Props{
+  imageSets: SetData[]
+  index: number
+}
+
+export default function ImageSetDialog({imageSets, index} : Props){
 
 
     return (
@@ -16,7 +22,9 @@ export default function ImageSetDialog(){
           <DialogDescription hidden>
             Contains the images of image set
           </DialogDescription>
-          <VerticalImageSetCarousel/>
+          
+          <VerticalImageSetCarousel imageSets={imageSets} index={index}/>
+          
         </DialogContent>
         
     )

@@ -79,13 +79,7 @@ export default function SearchBar(props: Props) {
     //var result = await searchAPI(request)
 
     //pass search results to parent 
-    props.setSearchquery(SearchValues)
-
-
-
-    
-
-    
+    props.setSearchquery(SearchValues)    
 
     //set session storage to hold results
     

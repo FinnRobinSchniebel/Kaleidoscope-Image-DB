@@ -1,7 +1,8 @@
 'use client'
 
-import { imageAPI, imageRequest } from "@/components/api/jwt_apis/image-api";
+import { imageAPI, imageRequest } from "@/components/api/image-api";
 import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
+import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider";
 import { searchAPI } from "@/components/api/jwt_apis/search-api";
 import ImageSetViewer from "@/components/KscopeSharedUI/ImageSet/ImageSetViewer";
 import VerticalImageSetCarousel from "@/components/KscopeSharedUI/ImageSet/VerticalSetCarousel";
@@ -14,7 +15,7 @@ import { Suspense, use, useEffect, useMemo, useState } from "react";
 interface Card {
   id: string;
   Tags?: string[];
-  protAPI: protectedAPI
+  index: number
   OpenImageSet : (i: number)=> void 
 }
 
@@ -23,12 +24,14 @@ export default function ImageCard(cardInfo: Card) {
 
   const [image, setImage] = useState<string>("")
 
+  const protectedApi = useProtected()
+
   var request: imageRequest = useMemo(() => ({
-    protectedApiRef: cardInfo.protAPI,
+    protectedApiRef: protectedApi,
     ID: cardInfo.id,
     Index: 0,
     Lowres: true
-  }), [cardInfo.id, cardInfo.protAPI])
+  }), [cardInfo.id, protectedApi])
 
   useEffect(() => {
     const t = async () => {
