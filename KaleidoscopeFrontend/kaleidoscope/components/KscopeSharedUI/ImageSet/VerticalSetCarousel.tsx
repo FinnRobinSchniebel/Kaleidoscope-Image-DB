@@ -1,9 +1,9 @@
-import { Carousel, CarouselContent, CarouselItem } from "@/components/ui/carousel";
+import { Carousel, CarouselApi, CarouselContent, CarouselItem } from "@/components/ui/carousel";
 import ImageSetViewer from "./ImageSetViewer";
 import { DialogContent, DialogDescription, DialogHeader } from "@/components/ui/dialog";
 import { DialogTitle } from "@radix-ui/react-dialog";
 import { SetData } from "@/components/api/jwt_apis/search-api";
-import { useRef, useState } from "react";
+import { JSX, useLayoutEffect, useRef, useState } from "react";
 
 
 interface Props {
@@ -19,6 +19,52 @@ export default function VerticalImageSetCarousel({ imageSets, index }: Props) {
     // return (
     //     <ImageSetViewer set={imageSets[index]} current={true} />
     // )
+
+    //ImageSet Index
+    const [currentIndex, setCurrentIndex] = useState<number>(index)
+
+    //Last carousel index
+    const carouselIndexRef = useRef(0)
+    const logicalIndexRef = useRef(index)
+    //list of carousel items
+    const [verticalSets, setVerticalSets] = useState<JSX.Element[]>([])
+
+    //api to get info from the imagesets carousel
+    const [verticalISetCarouselAPI, setVerticalISetCarouselAPI] = useState<CarouselApi>()
+
+
+
+    useLayoutEffect(() => {
+
+
+    }, [currentIndex])
+
+    useLayoutEffect(() => {
+        if (!verticalISetCarouselAPI) {
+            return
+        }
+        const onSelect = () => {
+            const newCarouselIndex = verticalISetCarouselAPI.selectedScrollSnap()
+            const delta = newCarouselIndex - carouselIndexRef.current
+
+            if (delta !== 0) {
+                logicalIndexRef.current += delta
+                carouselIndexRef.current = newCarouselIndex
+
+                setCurrentIndex(logicalIndexRef.current)
+            }
+            console.log(`Cindex: ${carouselIndexRef.current}`)
+            console.log(logicalIndexRef.current)
+        }
+        verticalISetCarouselAPI.on("select", onSelect)
+        console.log(`Cindex: ${carouselIndexRef.current}`)
+        console.log(logicalIndexRef.current)
+
+        return () => {
+            verticalISetCarouselAPI.off("select", onSelect)
+        }
+    }, [verticalISetCarouselAPI])
+    
 
     return (
         <div
@@ -45,11 +91,20 @@ export default function VerticalImageSetCarousel({ imageSets, index }: Props) {
                 startRef.current = null
                 setLockedAxis(null)
             }}
-            className="h-h-full w-full">
+            className="h-full w-full">
 
-            <Carousel orientation="vertical" opts={{ align: "center",  watchDrag: lockedAxis !== "horizontal"}} className="bg-amber-400 flex justify-center text-primary h-full w-full ">
-                <CarouselContent className="h-full w-full bg-amber-800">
-                    <CarouselItem className="bg-pink-400">
+            <Carousel setApi={setVerticalISetCarouselAPI} orientation="vertical" opts={{ align: "center", watchDrag: lockedAxis !== "horizontal" }} className="h-full ">
+                <CarouselContent className="h-full w-full mt-0">
+                    <CarouselItem className="basis-full" key={`k1`}>
+                        <ImageSetViewer set={imageSets[index]} current={true} DirectionLock={lockedAxis !== "vertical"} />
+                    </CarouselItem>
+                    <CarouselItem className=" basis-full" key={'k2'}>
+                        <ImageSetViewer set={imageSets[index]} current={true} DirectionLock={lockedAxis !== "vertical"} />
+                    </CarouselItem>
+                    <CarouselItem className=" basis-full" key={'k3'}>
+                        <ImageSetViewer set={imageSets[index]} current={true} DirectionLock={lockedAxis !== "vertical"} />
+                    </CarouselItem>
+                    <CarouselItem className=" basis-full" key={'k4'}>
                         <ImageSetViewer set={imageSets[index]} current={true} DirectionLock={lockedAxis !== "vertical"} />
                     </CarouselItem>
                 </CarouselContent>

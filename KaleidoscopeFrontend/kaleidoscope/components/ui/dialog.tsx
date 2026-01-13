@@ -56,7 +56,7 @@ function DialogContent({
   showCloseButton?: boolean
 } & {OverlayClassName ?: string}) {
   return (
-    <DialogPortal data-slot="dialog-portal">
+    <DialogPortal data-slot="dialog-portal ">
       <DialogOverlay className={OverlayClassName}/>
       <DialogPrimitive.Content
         data-slot="dialog-content"

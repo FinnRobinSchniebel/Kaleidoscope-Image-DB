@@ -14,14 +14,14 @@ import Description from "./Description";
 
 interface Props {
   set: SetData
-  current : boolean
-  DirectionLock : boolean
+  current: boolean
+  DirectionLock: boolean
 }
 
 
-export default function ImageSetViewer({ set, current, DirectionLock}: Props) {
+export default function ImageSetViewer({ set, current, DirectionLock }: Props) {
 
-  console.log(set)
+  //console.log(set)
 
   const protectedApi = useProtected()
 
@@ -38,13 +38,13 @@ export default function ImageSetViewer({ set, current, DirectionLock}: Props) {
   //TODO: get index from url
   const [CurrentIndex, setCurrentIndex] = useState(0)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const elements = Array.from({ length: set.activeImageCount }, (_, index) => (
       <ImageSetCarouselImage
         key={`${set._id}-${index}`} // unique key per element
         SetID={set._id}
         Index={index}
-        Load={ current? Math.abs(CurrentIndex - index) <= 5 : CurrentIndex == index}
+        Load={current ? Math.abs(CurrentIndex - index) <= 5 : CurrentIndex == index}
       />
     ))
     SetCarouselImages(elements)
@@ -62,11 +62,11 @@ export default function ImageSetViewer({ set, current, DirectionLock}: Props) {
 
   }, [set])
 
-  useLayoutEffect(()=>{
+  useLayoutEffect(() => {
     if (!api) {
       return
     }
-    setCurrentIndex(api.selectedScrollSnap() +1)
+    setCurrentIndex(api.selectedScrollSnap() + 1)
 
     api.on("select", () => {
       setCurrentIndex(api.selectedScrollSnap() + 1)
@@ -76,10 +76,10 @@ export default function ImageSetViewer({ set, current, DirectionLock}: Props) {
 
 
   return (
-    <div className="flex flex-col h-dvh ">
-      <div className="grow relative">
-        <Carousel setApi={setApi} opts={{ duration: 0,  watchDrag: DirectionLock}}  className="flex justify-center text-primary h-full w-full ">
-          <CarouselContent className=" h-full w-full">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="flex-1 relative min-h-0">
+        <Carousel setApi={setApi} opts={{ align: "center", duration: 0, watchDrag: DirectionLock }} className="flex justify-center text-primary h-full w-full ">
+          <CarouselContent className=" h-full w-full smin-h-0">
             {CarouselImages}
           </CarouselContent>
           <CarouselPrevious />
