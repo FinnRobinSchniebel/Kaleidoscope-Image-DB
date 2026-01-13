@@ -7,9 +7,9 @@ export interface SearchRequest {
   protectedApiRef: protectedAPI
   tags?: string[]
   authors?: string[]
-  Titles?: string
-  PageCount: number
-  PageNumber: number
+  titles?: string
+  pageCount: number
+  pageNumber: number
   randomSeed?: string
   fromDate?: string
   toDate?: string
@@ -18,7 +18,7 @@ export interface SearchRequest {
 export interface SetData {
   _id: string
   tags: string[]
-  active: number
+  activeImageCount: number
 }
 export interface ImageIdsCountResponse {
   imageSets: SetData[]
@@ -26,22 +26,21 @@ export interface ImageIdsCountResponse {
 }
 
 
-
+const verbose = false
 
 export async function searchAPI(request: SearchRequest): Promise<{ status: number, errorString?: string, imageSets?: SetData[], count?: number }> {
 
   const body = {
     "tags": request.tags || [],
     "author": request.authors || [],
-    "title": request.Titles || "",
-    "page": request.PageNumber,
-    "page_count": request.PageCount,
+    "title": request.titles || "",
+    "page": request.pageNumber,
+    "page_count": request.pageCount,
     //TODO: from date and to Date
     "random_seed": request.randomSeed || "",
     "fromDate": request.fromDate || "",
     "toDate": request.toDate || ""
   }
-
 
   const newRequest: GORequest = {
     endpoint: "/search",
@@ -52,7 +51,7 @@ export async function searchAPI(request: SearchRequest): Promise<{ status: numbe
 
   const {status, errorString, response} = await request.protectedApiRef.CallProtectedAPI(newRequest)
   if (status != 200){
-    console.log("error " + errorString)
+    if(verbose) console.log("error " + errorString)
     return {status, errorString} 
   }
 

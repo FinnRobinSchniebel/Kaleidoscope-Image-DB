@@ -70,8 +70,8 @@ export default function SearchBar(props: Props) {
 
     //get form data for equest
     const request: SearchRequest = {
-      PageCount: 12,
-      PageNumber: 0,
+      pageCount: 12,
+      pageNumber: 0,
       protectedApiRef: protectedAPI
     }
 

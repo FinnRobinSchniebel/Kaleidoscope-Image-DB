@@ -7,9 +7,9 @@ import {JWTLayout} from "./jwt_apis/protected-api-client"
 import Cookies from "js-cookie"
 import { TestToken } from "./get_variables_server";
 
+const verbose = false
 
 const TokenKey = "session_token"
-
 
 
 interface Args {
@@ -35,7 +35,7 @@ export async function LoginUser({username, password} : Args): Promise<{code : nu
         const jwtFromMessage = result.response.session_token 
 
         const decoded= jwtDecode<JWTLayout>(jwtFromMessage) 
-        console.log(JSON.stringify(decoded))
+        if(verbose) console.log(JSON.stringify(decoded))
         
         Cookies.set('session_token', result.response.session_token, { expires: new Date((decoded.exp ?? 0) * 1000)})
 

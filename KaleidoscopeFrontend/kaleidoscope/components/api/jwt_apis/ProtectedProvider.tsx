@@ -15,6 +15,9 @@ import {
 } from "next/navigation"
 import { protectedAPI } from "./protected-api-client"
 
+
+const verbose = false
+
 type Props = {
   token: string
   children: ReactNode
@@ -62,6 +65,6 @@ export function useProtected() {
 // Helper: can be removed at this point
 function CreateProtected(token: string, onUnauthorized: () => void): protectedAPI {
   var p = new protectedAPI(token, onUnauthorized);
-  console.log("protected re-init")
+  if (verbose) console.log("protected re-init")
   return p
 }

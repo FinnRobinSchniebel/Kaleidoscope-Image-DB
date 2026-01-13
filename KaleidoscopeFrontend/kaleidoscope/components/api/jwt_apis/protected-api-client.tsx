@@ -6,6 +6,9 @@ import { NewSessionToken } from "../authapi";
 import { ReadToken } from "../get_variables_server";
 import { NextRouter, useRouter } from "next/router";
 
+
+const verbos = false
+
 export interface JWTLayout extends JwtPayload {
   Id: string
   SessionID: string
@@ -57,7 +60,9 @@ export class protectedAPI {
   private CheckTokenExpired(token: string): boolean {
     const decoded = jwtDecode<JWTLayout>(token)
     const currentDate = new Date()
-    console.log(decoded)
+
+    if (verbos) console.log(decoded)
+
     if (decoded.exp != undefined && decoded.exp * 1000 > currentDate.getTime()) {
       console.log("valid token")
       return false;
@@ -74,14 +79,15 @@ export class protectedAPI {
       await this.WaitForToken()
     }
     if (protectedAPI.token == "" || this.CheckTokenExpired(protectedAPI.token)) {
-      console.log("session expired")
+
+      if (verbos) console.log("session expired")
       this.fetchingNewToken = true
       //Note: function below can only run on client
       const status = await NewSessionToken()
       
       //if token cant be refreshed error response so the user redirects to login
       if (status == 404 || status == 401) {
-        console.log("Couldt create new session")
+        if (verbos) console.log("Couldt create new session")
         return { status: status, response: "error" }
       }
       protectedAPI.token = await ReadToken()
@@ -97,22 +103,22 @@ export class protectedAPI {
     // check if token is updaing and if it needs an update go fetch a new one
     var ReadyResult = await this.CheckIfReady();
     if (ReadyResult.status != 200 && ReadyResult.status != 0) {
-      console.log("Token expired and could not be refreshed")
+      if (verbos) console.log("Token expired and could not be refreshed")
       this.onUnauthorized()
       return ReadyResult;
     }
     //pre-check complete: do api call
     request.header = { ...request.header, ...{ "session_token": "Bearer " + protectedAPI.token } };
 
-    console.log("making api request")
+    if (verbos) console.log("making api request")
 
     var callResult = await apiSendRequest(request)
 
-    console.log(callResult.status)
+    if (verbos) console.log(callResult.status)
 
     //check if result is good and attempt to fix it if auth has expired
     if (callResult.status == 401) {
-      console.log("call failed: session expired")
+      if (verbos) console.log("call failed: session expired")
       ReadyResult = await this.CheckIfReady();
       //only rerun if the cookie expired (not 0 response) and was successfully refreshed.
       if (ReadyResult.status == 0 || ReadyResult.status != 200) {

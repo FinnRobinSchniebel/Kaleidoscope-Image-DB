@@ -20,8 +20,8 @@ type SearchProps = {
 export default async function SearchResults(props: SearchProps): Promise<{ imageSets: SetData[]; count: number }> {
 
   const request: SearchRequest = {
-    PageCount: 8,
-    PageNumber: props.page,
+    pageCount: 8,
+    pageNumber: props.page,
     protectedApiRef: props.protected
   }
   //Todo: add form data to request

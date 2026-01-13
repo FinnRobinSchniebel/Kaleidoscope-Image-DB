@@ -27,7 +27,7 @@ type Props = {
 
 
 export default function LoadSearchResults(props: Props) {
-  
+
 
   const protectedAPI = useProtected()
 
@@ -50,20 +50,28 @@ export default function LoadSearchResults(props: Props) {
 
 
   useEffect(() => {
+
+    console.log("test running + " + pageRef.current + " " + inView)
+
+    if (!inView || isEmpty) return
+
     const fn = async () => {
       console.log(pageRef.current)
-      if (!isEmpty && inView) {
-        const res = await SearchResults({ protected: protectedAPI, page: pageRef.current })
 
-        if (res.imageSets.length < 1) {
-          setisEmpty(true)
-        }
-        setImageSets([...ImageSets, ...res.imageSets])
-        pageRef.current++
+      const res = await SearchResults({ protected: protectedAPI, page: pageRef.current })
+
+      if (res.imageSets.length < 1) {
+
+        console.log("is empty")
+        setisEmpty(true)
+        return
       }
+      setImageSets([...ImageSets, ...res.imageSets])
+      console.log(ImageSets)
+      pageRef.current++
     }
     fn()
-  }, [isEmpty, inView])
+  }, [isEmpty, inView, ImageSets.length])
 
   return (
     <>
@@ -72,7 +80,6 @@ export default function LoadSearchResults(props: Props) {
           {ImageSets.map((item: SetData, index: number) => (
             <ImageCard key={"card-" + item._id} id={item._id} index={index} Tags={item.tags} OpenImageSet={openDialog} />
           ))}
-
         </ul>
       </section>
       <section className='justify-items-center'>
@@ -83,7 +90,7 @@ export default function LoadSearchResults(props: Props) {
         />
       </section>
       <Dialog open={open} onOpenChange={setOpen}>
-        <ImageSetDialog imageSets={ImageSets} index={index}/>
+        <ImageSetDialog imageSets={ImageSets} index={index} />
       </Dialog>
     </>
   )

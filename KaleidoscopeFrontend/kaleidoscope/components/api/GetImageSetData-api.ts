@@ -19,6 +19,7 @@ export interface SourceInfo {
     SourceTitle: string
     SourceID: string
     SourceTags: string[]
+    DateCreated: string
 }
 
 //for api only
@@ -28,6 +29,7 @@ interface ApiSourceInfo {
   title: string
   sourceid: string
   tags: string[]
+  date: string
 }
 
 interface ApiImageSet {
@@ -36,9 +38,10 @@ interface ApiImageSet {
   title: string
   authors: string[]
   description: string
-  sources: ApiSourceInfo[]
+  sources: ApiSourceInfo[]  
   tag_rule_overrides: string[]
   activeImageCount: number
+  date_added: string
 }
 
 
@@ -60,10 +63,11 @@ function mapImageSet(api: ApiImageSet): FullImageSetData {
       SourceTitle: s.title,
       SourceID: s.sourceid,
       SourceTags: s.tags,
+      DateCreated: s.date
     })),
     ActiveImageCount: api.activeImageCount,
     TagOverrides: api.tag_rule_overrides,
-    DateAdded: "" // backend doesn't provide this
+    DateAdded: api.date_added
   }
 }
 

@@ -28,6 +28,9 @@ export const API_SEARCH = '/search'
 //   }
 // }
 
+
+const verbose = false
+
 export interface GORequest {
   endpoint: string
   type: string;
@@ -61,12 +64,12 @@ export async function apiSendRequest(request : GORequest): Promise<{status: numb
   }
 
   try{
-    console.log("doing fetch")
+    if(verbose) console.log("doing fetch")
 
     const path = await getServerAPI(request.endpoint)
-    console.log("got path")
+    if(verbose) console.log("got path")
     const response = await fetch(path, options)
-    console.log("finished fetch")
+    if(verbose) console.log("finished fetch")
     
     if (!response.ok) {
       throw new GoApiError(response.status, await response.text());
@@ -83,11 +86,11 @@ export async function apiSendRequest(request : GORequest): Promise<{status: numb
       responseBody = {status: response.status, response: await response.json()};
     }
     
-    console.log("fetch complete ... no errors")
+    if(verbose) console.log("fetch complete ... no errors")
     return responseBody
     
   } catch(error){
-    console.log("fetch error")
+    if(verbose) console.log("fetch error")
     if( error instanceof GoApiError){
       return {status: error.status, errorString: error.message }
     }

@@ -34,11 +34,28 @@ export default function ImageCard(cardInfo: Card) {
   }), [cardInfo.id, protectedApi])
 
   useEffect(() => {
+
+    let cancelled = false
     const t = async () => {
-      setImage(await imageAPI(request))
+
+      const url = await imageAPI(request)
+      if (cancelled) {
+        URL.revokeObjectURL(url)
+        return
+      }
+
+      setImage(prev => {
+        if (prev) URL.revokeObjectURL(prev)
+        return url
+      })
     }
     t()
-  }, [cardInfo.id, cardInfo.Tags])
+
+    return () => {
+      cancelled = true
+    }
+
+  }, [cardInfo.id, cardInfo.Tags, request])
   // const data = use(imageAPI(request))
 
   const f = () =>{
@@ -48,7 +65,7 @@ export default function ImageCard(cardInfo: Card) {
   if (image != "") {
     return (
       <li key={"li-card-" + cardInfo.id}>
-        <button onClick={() => {cardInfo.OpenImageSet(1)}} key={"card-button-" + cardInfo.id} className="relative size-60 md:size-80 lg:size-80 2xl:size-90 md:m-[1px] 2xl:m-[4px]">
+        <button onClick={() => {cardInfo.OpenImageSet(cardInfo.index)}} key={"card-button-" + cardInfo.id} className="relative size-60 md:size-80 lg:size-80 2xl:size-90 md:m-[1px] 2xl:m-[4px]">
           <Image src={image} alt="'/random%20hexa.png'" className="object-cover  pointer-events-none" fill ></Image>
         </button>
 

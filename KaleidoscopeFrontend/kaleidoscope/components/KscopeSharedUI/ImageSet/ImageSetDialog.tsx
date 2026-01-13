@@ -15,12 +15,12 @@ export default function ImageSetDialog({imageSets, index} : Props){
 
 
     return (
-        <DialogContent className='text-primary rounded-none h-dvh' OverlayClassName='bg-black/40 backdrop-blur-[2px]'  onInteractOutside={(e) => e.preventDefault()}>
+        <DialogContent className='bg-background/40 text-primary rounded-2 p-0 gap-0 m-0 h-dvh w-[95%]' OverlayClassName='bg-black/40 backdrop-blur-[2px]'  onInteractOutside={(e) => e.preventDefault()}>
           <DialogHeader hidden={true}>
             <DialogTitle> Imageset viewer Open</DialogTitle>
           </DialogHeader>
           <DialogDescription hidden>
-            Contains the images of image set
+            Contains the images of the image set
           </DialogDescription>
           
           <VerticalImageSetCarousel imageSets={imageSets} index={index}/>
