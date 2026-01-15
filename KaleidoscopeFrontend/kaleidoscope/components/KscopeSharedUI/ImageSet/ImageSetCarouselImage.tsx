@@ -10,28 +10,33 @@ import { useEffect, useMemo, useState } from "react"
 
 interface Props {
   SetID: string
-  Index: number
-  Load: boolean
+  index: number
+  distance: number
+  currentIndex: number
 }
 
 
-export default function ImageSetCarouselImage({ SetID, Index, Load }: Props) {
+export default function ImageSetCarouselImage({ SetID, index: index, distance, currentIndex }: Props) {
 
 
   const [image, setImage] = useState<string | null>(null)
+
+  const load = distance == 0 ? Math.abs(currentIndex - index) <= 5 : distance > 5 ? false : currentIndex == index
 
   const protectedApi = useProtected()
 
   var request: imageRequest = useMemo(() => ({
     protectedApiRef: protectedApi,
     ID: SetID,
-    Index: Index,
+    Index: index,
     Lowres: true
   }), [SetID, protectedApi])
 
   useEffect(() => {
+
+    console.log("imageLoad triggered")
     let cancelled = false
-    if (!Load) {
+    if (!load) {
       setImage(prev => {
         if (prev) URL.revokeObjectURL(prev)
         return null
@@ -58,25 +63,22 @@ export default function ImageSetCarouselImage({ SetID, Index, Load }: Props) {
       cancelled = true
     }
 
-  }, [SetID, Index, Load, request])
+  }, [SetID, index, load, request])
 
-  // return(
-  //   <CarouselItem>
-  //     <Skeleton className={cn("h-[2400px] w-[600px]")}></Skeleton>
-  //   </CarouselItem>
-  // )
   if (image) {
     return (
       <CarouselItem className="h-full w-full flex justify-center">
-        <img src={image} alt="'/random%20hexa.png'" className=" h-full object-contain"/>
+        <img src={image} alt="'/random%20hexa.png'" className=" h-full object-contain" />
       </CarouselItem>
     )
   }
-  else {
-    <CarouselItem>
-      <Skeleton className={cn("h-20 w-40")}></Skeleton>
-    </CarouselItem>
 
-  }
+  return (
+    <CarouselItem className="h-full w-full flex justify-center">
+      <Skeleton className={cn("h-full w-full")}></Skeleton>
+    </CarouselItem>
+  )
+
+
 
 }

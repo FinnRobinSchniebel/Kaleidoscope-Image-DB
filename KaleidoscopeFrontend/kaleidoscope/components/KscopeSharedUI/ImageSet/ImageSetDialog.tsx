@@ -23,7 +23,7 @@ export default function ImageSetDialog({imageSets, index} : Props){
             Contains the images of the image set
           </DialogDescription>
           
-          <VerticalImageSetCarousel imageSets={imageSets} index={index}/>
+          <VerticalImageSetCarousel imageSets={imageSets} setIndex={index}/>
           
         </DialogContent>
         

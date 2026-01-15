@@ -2,7 +2,7 @@ import GetImageSetData, { FullImageSetData } from "@/components/api/GetImageSetD
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider";
 import { SetData } from "@/components/api/jwt_apis/search-api";
 import { Carousel, CarouselApi, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
-import { JSX, useEffect, useLayoutEffect, useState } from "react";
+import { JSX, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import ImageSetCarouselImage from "./ImageSetCarouselImage";
 import { Item } from "@/components/ui/item";
 import { Collapsible } from "@radix-ui/react-collapsible";
@@ -14,12 +14,12 @@ import Description from "./Description";
 
 interface Props {
   set: SetData
-  current: boolean
+  distance: number
   DirectionLock: boolean
 }
 
 
-export default function ImageSetViewer({ set, current, DirectionLock }: Props) {
+export default function ImageSetViewer({ set, distance, DirectionLock }: Props) {
 
   //console.log(set)
 
@@ -38,19 +38,25 @@ export default function ImageSetViewer({ set, current, DirectionLock }: Props) {
   //TODO: get index from url
   const [CurrentIndex, setCurrentIndex] = useState(0)
 
+  console.log(" set.activeImageCount: " + set.activeImageCount)
+  // const images = useMemo(
+
+  //   () => Array.from({ length: set.activeImageCount }, (_, index) => (
+  //     <ImageSetCarouselImage
+  //       key={`${set._id}-${index}`}
+  //       SetID={set._id}
+  //       index={index}
+  //       distance={distance}
+  //       currentIndex={CurrentIndex}
+  //     />
+  //   )),
+  //   [set._id, set.activeImageCount, distance, curr]
+  // )
+
+
+
   useLayoutEffect(() => {
-    const elements = Array.from({ length: set.activeImageCount }, (_, index) => (
-      <ImageSetCarouselImage
-        key={`${set._id}-${index}`} // unique key per element
-        SetID={set._id}
-        Index={index}
-        Load={current ? Math.abs(CurrentIndex - index) <= 5 : CurrentIndex == index}
-      />
-    ))
-    SetCarouselImages(elements)
-
     console.log(`set: (id: ${set._id}, count: ${set.activeImageCount}, tags: ${set.tags}), current index: ${CurrentIndex}, Carousel items: ${CarouselImages.length}`)
-
 
     //get the image data 
     const getData = async () => {
@@ -66,13 +72,17 @@ export default function ImageSetViewer({ set, current, DirectionLock }: Props) {
     if (!api) {
       return
     }
-    setCurrentIndex(api.selectedScrollSnap() + 1)
+    setCurrentIndex(api.selectedScrollSnap())
 
     api.on("select", () => {
-      setCurrentIndex(api.selectedScrollSnap() + 1)
+      setCurrentIndex(api.selectedScrollSnap())
     })
 
   }, [api])
+
+  useEffect(() => {
+    console.log(`ID: ${set._id} distance: ${distance} currentIndex: ${CurrentIndex}`)
+  }, [])
 
 
   return (
@@ -80,7 +90,15 @@ export default function ImageSetViewer({ set, current, DirectionLock }: Props) {
       <div className="flex-1 relative min-h-0">
         <Carousel setApi={setApi} opts={{ align: "center", duration: 0, watchDrag: DirectionLock }} className="flex justify-center text-primary h-full w-full ">
           <CarouselContent className=" h-full w-full smin-h-0">
-            {CarouselImages}
+            {Array.from({ length: set.activeImageCount }, (_, index) => (
+              <ImageSetCarouselImage
+                key={`${set._id}-${index}`}
+                SetID={set._id}
+                index={index}
+                distance={distance}
+                currentIndex={CurrentIndex}
+              />
+            ))}
           </CarouselContent>
           <CarouselPrevious />
           <CarouselNext />
@@ -89,7 +107,7 @@ export default function ImageSetViewer({ set, current, DirectionLock }: Props) {
       </div>
       <div className="flex justify-center items-center mb-3 mt-1">
         <Item className=" bg-background/40 backdrop-blur-sm border-2 border-background/60 min-w-20 max-w-40 justify-center overflow-hidden" variant={"outline"}>
-          {CurrentIndex}/{set.activeImageCount}
+          {CurrentIndex + 1}/{set.activeImageCount}
         </Item>
       </div>
 
