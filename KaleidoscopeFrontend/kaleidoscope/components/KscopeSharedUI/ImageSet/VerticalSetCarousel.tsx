@@ -17,9 +17,19 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
   const [lockedAxis, setLockedAxis] = useState<"horizontal" | "vertical" | null>(null)
   const startRef = useRef<{ x: number; y: number } | null>(null)
 
-  //ImageSet Index
-  const [currentIndex, setCurrentIndex] = useState<number>(setIndex)
+  const hasloaded = useRef(false)
 
+
+  //lowest ISet Index rendered (Logical)
+  const [lowestIndex, setLowestIndex] = useState<number>(Math.max(setIndex - 2, 0))
+  //Highest ISet Index rendered (Logical)
+  const [highestIndex, setHighestIndex] = useState<number>(Math.min(setIndex + 2, imageSets.length))
+  //ImageSet Index logical
+  const LogicalIndex = useRef(setIndex)
+
+
+  //ImageSet Index, Relative to carousel NOT logic
+  const currentIndex = useRef(setIndex - lowestIndex)
 
   //api to get info from the imagesets carousel
   const [verticalISetCarouselAPI, setVerticalISetCarouselAPI] = useState<CarouselApi>()
@@ -30,13 +40,18 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
   const scrollListenerRef = useRef(() => undefined)
   const [hasMoreToLoad, setHasMoreToLoad] = useState(true)
 
+  //ref to determine howmuch movement occured infront of the list
+  const frontMovement = useRef(0)
+
+
   useLayoutEffect(() => {
     if (!verticalISetCarouselAPI) {
       return
     }
     const onSelect = () => {
       const newCarouselIndex = verticalISetCarouselAPI.selectedScrollSnap()
-      setCurrentIndex(newCarouselIndex)
+      currentIndex.current = newCarouselIndex
+      LogicalIndex.current = lowestIndex + newCarouselIndex
       console.log(newCarouselIndex)
     }
     verticalISetCarouselAPI.on("select", onSelect)
@@ -66,10 +81,24 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
         Object.assign(newEngine[engineModule], oldEngine[engineModule])
       })
 
-      newEngine.translate.to(oldEngine.location.get())
-      const { index } = newEngine.scrollTarget.byDistance(0, false)
-      newEngine.index.set(index)
-      newEngine.animation.start()
+
+      const oldIndex = currentIndex.current
+
+      //currentIndex.current = frontMovement.current + oldIndex
+      console.log("engien pos before "  + oldEngine.location.get())
+
+      console.log("NEW LOW: " + lowestIndex + " NEW INDEX AFTER RELOAD " + currentIndex.current + " movement: " + frontMovement.current + " old Index: " + oldIndex)
+
+      verticalISetCarouselAPI.scrollTo((LogicalIndex.current - lowestIndex), false)
+
+      //newEngine.index.set(oldEngine.index.get()+ frontMovement.current)
+      // newEngine.translate.to(frontMovement.current + oldEngine.location.get())
+      //frontMovement.current = 0
+
+      //const { index } = newEngine.scrollTarget.byDistance(0, false)
+      // newEngine.index.set(index)
+      //newEngine.animation.start()
+
 
       setLoadingMore(false)
       listenForScrollRef.current = true
@@ -88,30 +117,58 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
       const boundsActive = engine.limit.reachedMax(engine.target.get())
       engine.scrollBounds.toggleActive(boundsActive)
       verticalISetCarouselAPI.on('pointerUp', reloadAfterPointerUp)
-    } else {
-      reloadEmbla()
     }
+    // else {
+    //   reloadEmbla() 
+    // }
   }
 
   const onScroll = useCallback((verticalISetCarouselAPI: CarouselApi) => {
+
+    console.log("engine pos before "  + verticalISetCarouselAPI?.internalEngine().location.get() + " slide size " + verticalISetCarouselAPI?.internalEngine().slideRects[0].height)
     if (!listenForScrollRef.current) return undefined
 
+
+    //by performing this action in a set-state I can avoid race conditions 
     setLoadingMore((loadingMore) => {
-       if (!verticalISetCarouselAPI) return false
+      if (!verticalISetCarouselAPI) return false
+
+      console.log(`checking if load more + ${loadingMore} +  ${verticalISetCarouselAPI?.slidesInView()} + ${currentIndex.current} + ${lowestIndex != 0}`)
+
       const lastSlide = verticalISetCarouselAPI.slideNodes().length - 1
-      const lastSlideInView = verticalISetCarouselAPI.slidesInView().includes(lastSlide)
-      const loadMore = !loadingMore && lastSlideInView
+      const AtCarouselEnd = verticalISetCarouselAPI.slidesInView().includes(lastSlide)
+      const loadMoreEnd = !loadingMore && AtCarouselEnd && (highestIndex != imageSets.length - 1)
 
-      if (loadMore) {
+      const AtCarouselFront = verticalISetCarouselAPI.slidesInView().includes(0)
+      const LoadMoreFront = !loadingMore && currentIndex.current === 0
+      //console.log(`checking if load more + ${loadingMore} +  ${AtCarouselEnd}`)
+      
+      //Load Logic here
+      if (loadMoreEnd) {
+        console.log("loadMore back")
         listenForScrollRef.current = false
-
-        //Load Logic here
-        //setSlides(() => {})
+        setHighestIndex((highestIndex) => {
+          return Math.min(highestIndex + 2, imageSets.length)
+        })
       }
 
-      return loadingMore || lastSlideInView
+      if (LoadMoreFront) {
+        console.log("loadMore front")
+        listenForScrollRef.current = false
+        const movement = Math.min(2, lowestIndex)
+        frontMovement.current = movement
+
+        console.log("movement: " + frontMovement.current)
+        setLowestIndex((lowestIndex) => {
+          return Math.max(lowestIndex - movement, 0)
+        }
+        )
+      }
+
+      return loadingMore || AtCarouselEnd || AtCarouselFront
     })
   }, [])
+
 
   const addScrollListener = useCallback(
     (verticalISetCarouselAPI: CarouselApi) => {
@@ -125,7 +182,6 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
   useEffect(() => {
     if (!verticalISetCarouselAPI) return
     addScrollListener(verticalISetCarouselAPI)
-
     const onResize = () => verticalISetCarouselAPI.reInit()
     window.addEventListener('resize', onResize)
     verticalISetCarouselAPI.on('destroy', () => window.removeEventListener('resize', onResize))
@@ -134,6 +190,14 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
   useEffect(() => {
     hasMoreToLoadRef.current = hasMoreToLoad
   }, [hasMoreToLoad])
+
+  //set location of opened image
+  useLayoutEffect(() => {
+    if (hasloaded.current) return
+    if (verticalISetCarouselAPI) hasloaded.current = true
+    console.log("NEW OPEN")
+    verticalISetCarouselAPI?.scrollTo(setIndex - lowestIndex, true)
+  }, [setIndex, verticalISetCarouselAPI])
 
 
   return (
@@ -162,12 +226,12 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
         setLockedAxis(null)
       }}
       className="h-full w-full">
-
-      <Carousel setApi={setVerticalISetCarouselAPI} orientation="vertical" opts={{ align: "center", watchDrag: lockedAxis !== "horizontal",  watchSlides: watchslideLogic}} className="h-full ">
+      {/* watchSlides: watchslideLogic  */}
+      <Carousel setApi={setVerticalISetCarouselAPI} orientation="vertical" opts={{ align: "center", watchDrag: lockedAxis !== "horizontal",  }} className="h-full ">
         <CarouselContent className="h-full w-full mt-0">
-          {Array.from({ length: Math.min(currentIndex + 1 + 2, imageSets.length) }, (_, index) => (
-            <CarouselItem className="basis-full" key={`imageSet-${imageSets[index]._id}`}>
-              <ImageSetViewer set={imageSets[index]} distance={Math.abs(currentIndex - index)} DirectionLock={lockedAxis !== "vertical"} />
+          {imageSets.slice(lowestIndex, highestIndex).map((set, index) => (
+            <CarouselItem className="basis-full" key={`imageSet-${set._id}`}>
+              <ImageSetViewer set={set} distance={Math.abs(currentIndex.current - index)} DirectionLock={lockedAxis !== "vertical"} />
             </CarouselItem>
           ))}
         </CarouselContent>

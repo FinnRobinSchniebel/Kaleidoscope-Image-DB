@@ -38,7 +38,7 @@ export default function ImageSetViewer({ set, distance, DirectionLock }: Props) 
   //TODO: get index from url
   const [CurrentIndex, setCurrentIndex] = useState(0)
 
-  console.log(" set.activeImageCount: " + set.activeImageCount)
+  //console.log(" set.activeImageCount: " + set.activeImageCount)
   // const images = useMemo(
 
   //   () => Array.from({ length: set.activeImageCount }, (_, index) => (
@@ -97,6 +97,7 @@ export default function ImageSetViewer({ set, distance, DirectionLock }: Props) 
                 index={index}
                 distance={distance}
                 currentIndex={CurrentIndex}
+                keepLoadedOverride={false}
               />
             ))}
           </CarouselContent>

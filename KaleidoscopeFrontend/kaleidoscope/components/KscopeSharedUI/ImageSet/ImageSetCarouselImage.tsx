@@ -13,6 +13,7 @@ interface Props {
   index: number
   distance: number
   currentIndex: number
+  keepLoadedOverride : boolean
 }
 
 
@@ -21,7 +22,7 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
 
   const [image, setImage] = useState<string | null>(null)
 
-  const load = distance == 0 ? Math.abs(currentIndex - index) <= 5 : distance > 5 ? false : currentIndex == index
+  const load = (distance == 0 ? Math.abs(currentIndex - index) <= 5 : distance > 5 ? false : currentIndex == index) || currentIndex
 
   const protectedApi = useProtected()
 
@@ -34,9 +35,10 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
 
   useEffect(() => {
 
-    console.log("imageLoad triggered")
+    //console.log("imageLoad triggered")
     let cancelled = false
     if (!load) {
+      //console.log("revoked image")
       setImage(prev => {
         if (prev) URL.revokeObjectURL(prev)
         return null
