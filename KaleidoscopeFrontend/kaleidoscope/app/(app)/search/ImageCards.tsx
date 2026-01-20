@@ -58,9 +58,6 @@ export default function ImageCard(cardInfo: Card) {
   }, [cardInfo.id, cardInfo.Tags, request])
   // const data = use(imageAPI(request))
 
-  const f = () =>{
-    console.log("test")
-  }
 
   if (image != "") {
     return (

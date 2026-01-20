@@ -56,7 +56,7 @@ export default function ImageSetViewer({ set, distance, DirectionLock }: Props) 
 
 
   useLayoutEffect(() => {
-    console.log(`set: (id: ${set._id}, count: ${set.activeImageCount}, tags: ${set.tags}), current index: ${CurrentIndex}, Carousel items: ${CarouselImages.length}`)
+    //console.log(`set: (id: ${set._id}, count: ${set.activeImageCount}, tags: ${set.tags}), current index: ${CurrentIndex}, Carousel items: ${CarouselImages.length}`)
 
     //get the image data 
     const getData = async () => {
@@ -81,7 +81,7 @@ export default function ImageSetViewer({ set, distance, DirectionLock }: Props) 
   }, [api])
 
   useEffect(() => {
-    console.log(`ID: ${set._id} distance: ${distance} currentIndex: ${CurrentIndex}`)
+    //console.log(`ID: ${set._id} distance: ${distance} currentIndex: ${CurrentIndex}`)
   }, [])
 
 

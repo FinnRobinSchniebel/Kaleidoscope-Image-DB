@@ -1506,6 +1506,7 @@ __metadata:
     react-dom: "npm:^19.2.1"
     react-hook-form: "npm:^7.67.0"
     react-intersection-observer: "npm:^10.0.0"
+    swiper: "npm:^12.0.3"
     tailwind-merge: "npm:^3.3.1"
     tailwindcss: "npm:^4"
     tw-animate-css: "npm:^1.4.0"
@@ -1966,6 +1967,13 @@ __metadata:
     babel-plugin-macros:
       optional: true
   checksum: 10c0/ace50e7ea5ae5ae6a3b65a50994c51fca6ae7df9c7ecfd0104c36be0b4b3a9c5c1a2374d16e2a11e256d0b20be6d47256d768ecb4f91ab390f60752a075780f5
+  languageName: node
+  linkType: hard
+
+"swiper@npm:^12.0.3":
+  version: 12.0.3
+  resolution: "swiper@npm:12.0.3"
+  checksum: 10c0/a854531791ba45cb0f6086904a99878fd207b42024820df68fbf64e01c20d542438c023ec4765b223f4dbffabf6858d311ec749bdca4ea4b4a7b74150a010162
   languageName: node
   linkType: hard
 

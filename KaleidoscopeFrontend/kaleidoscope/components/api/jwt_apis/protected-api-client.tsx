@@ -64,7 +64,7 @@ export class protectedAPI {
     if (verbos) console.log(decoded)
 
     if (decoded.exp != undefined && decoded.exp * 1000 > currentDate.getTime()) {
-      console.log("valid token")
+      if (verbos) console.log("valid token")
       return false;
     }
     return true;
