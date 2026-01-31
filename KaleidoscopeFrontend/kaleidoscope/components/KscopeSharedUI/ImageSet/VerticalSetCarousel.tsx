@@ -1,12 +1,13 @@
-import { Carousel, CarouselApi, CarouselContent, CarouselItem } from "@/components/ui/carousel";
 import ImageSetViewer from "./ImageSetViewer";
-import { DialogContent, DialogDescription, DialogHeader } from "@/components/ui/dialog";
-import { DialogTitle } from "@radix-ui/react-dialog";
+
 import { SetData } from "@/components/api/jwt_apis/search-api";
-import { JSX, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, PointerEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Swiper, SwiperClass, SwiperSlide } from 'swiper/react'
-import { Images } from "lucide-react";
+
 import { Virtual } from 'swiper/modules';
+import 'swiper/css';
+import 'swiper/css/navigation';
+import HitAreaButton from "./HitAreaButton";
 
 
 interface Props {
@@ -14,147 +15,244 @@ interface Props {
   setIndex: number
 }
 
+type HitTarget = {
+  id: string
+  rect: () => DOMRect | null
+  onHit: () => void
+}
+
+type HitTestContextType = {
+  debug: boolean
+  register: (t: HitTarget) => void
+  unregister: (id: string) => void
+}
+
+export const HitTestContext = createContext<HitTestContextType | null>(null)
+
+
 export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props) {
+
+
+  const [debug, setDebug] = useState(true)
 
 
   const PRELOADFRONT = 2
   const PRELOADBACK = 3
 
-  const [lockedAxis, setLockedAxis] = useState<"horizontal" | "vertical" | null>(null)
-  const startRef = useRef<{ x: number; y: number } | null>(null)
-
-  const hasloaded = useRef(false)
+  const PointerDownLoc = useRef<{ x: number; y: number } | null>(null)
 
 
-  //lowest ISet Index rendered (Logical)
-  const [lowestIndex, setLowestIndex] = useState<number>(Math.max(setIndex - PRELOADFRONT, 0))
-  //Highest ISet Index rendered (Logical)
-  const [highestIndex, setHighestIndex] = useState<number>(Math.min(setIndex + PRELOADBACK, imageSets.length))
-  //ImageSet Index logical
-  const LogicalIndex = useRef(setIndex)
+  const pointerUpLoc = useRef<{ x: number; y: number } | null>(null)
 
+  const [HideOverlayes, setHideOverlayes] = useState(false)
 
-  //ImageSet Index, Relative to carousel NOT logic
-  const currentIndex = useRef(setIndex - lowestIndex)
-  const lastIndex = useRef(setIndex - lowestIndex)
-  const pendingShift = useRef(0)
+  const [currentIndex, setCurrentIndex] = useState(setIndex)
 
   //api to get info from the imagesets carousel
-  const [verticalISetCarouselAPI, setVerticalISetCarouselAPI] = useState<SwiperClass>()
+  const verticalISetCarouselAPI = useRef<SwiperClass>(undefined)
 
-  //ref to determine howmuch movement occured infront of the list
-  const frontMovement = useRef(0)
+  const hitTargets = useRef<HitTarget[]>([])
 
-
+  //Keeps track of the current index of the carousel 
   const onChange = useCallback(() => {
-    if (!verticalISetCarouselAPI) {
+    if (!verticalISetCarouselAPI.current) {
       return
     }
-    const index = currentIndex.current + (verticalISetCarouselAPI.activeIndex - lastIndex.current)
-    lastIndex.current = index
-    currentIndex.current = index
-    console.log(index)
+    const index = verticalISetCarouselAPI.current.activeIndex
 
-    if (index == 0 && lowestIndex != 0) {
+    setCurrentIndex(index)
+    console.log(`index: ${index}`)
 
+  }, [verticalISetCarouselAPI])
 
-
-      setLowestIndex((lowestIndex) => {
-        const change = Math.min(PRELOADFRONT, lowestIndex)
-        console.log(`shift pending: ${change}`)
-        pendingShift.current = change
-        return lowestIndex - change
-      })
-
-
-    }
-    if (index == verticalISetCarouselAPI.slides.length - 1 && highestIndex != Images.length) {
-      setHighestIndex((highestIndex) => { return highestIndex + Math.min(PRELOADBACK, imageSets.length - highestIndex) })
-
-      console.log(`heigh: ${highestIndex}, Max: ${imageSets.length} result: ${highestIndex + Math.min(PRELOADBACK, imageSets.length - highestIndex)}`)
-    }
-  }, [verticalISetCarouselAPI, highestIndex, lowestIndex])
-
+  //add listiners to carousel and remove the event if the carousel is removed
   useLayoutEffect(() => {
-    if (!verticalISetCarouselAPI) {
+    if (!verticalISetCarouselAPI.current) {
       return
     }
-
-    verticalISetCarouselAPI.on('slideChange', onChange)
-
-    const index = verticalISetCarouselAPI.activeIndex
+    verticalISetCarouselAPI.current.on('activeIndexChange', onChange)
 
     return () => {
-      verticalISetCarouselAPI.off("slideChange", onChange)
+      if (!verticalISetCarouselAPI.current) {
+        return
+      }
+      verticalISetCarouselAPI.current.off("activeIndexChange", onChange)
     }
-    //verticalISetCarouselAPI.
+
 
   }, [verticalISetCarouselAPI, onChange])
 
-  useLayoutEffect(() => {
-    if (!verticalISetCarouselAPI) return
-    //if (!pendingShift.current) return
+  //used for managing all button overlays on the carousel. This is the only way I found to make the carousel interactive with buttons on top of it.
+  const register = useCallback((t: HitTarget) => {
+    hitTargets.current.push(t)
+  }, [])
 
-    const shift = pendingShift.current
-    pendingShift.current = 0
-
-    const target = verticalISetCarouselAPI.activeIndex + shift
-
-    verticalISetCarouselAPI.updateSlides()
-    //verticalISetCarouselAPI.slideTo(target, 0, false)
-    //console.log(`Triggered reindex ${verticalISetCarouselAPI.activeIndex + shift}`)
-  }, [lowestIndex])
-
-  //set location of opened image
+  const unregister = useCallback((id: string) => {
+    hitTargets.current = hitTargets.current.filter(t => t.id !== id)
+  }, [])
 
 
+
+  const handleTap = useCallback((e: MouseEvent | TouchEvent | globalThis.PointerEvent) => {
+    // verticalISetCarouselAPI.current?.emit("")
+    //setHideOverlayes((overlay) => {
+    console.log("tap");
+
+    var hitLoc: { x: number; y: number } = ({x:0 , y:0})
+
+    if (e instanceof MouseEvent) {
+      hitLoc = { x: e.clientX, y: e.clientY }
+    }
+    else if (e instanceof TouchEvent) {
+      console.log(e.changedTouches.length)
+      hitLoc = { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY }
+    }
+    else {
+      console.log("unknown pointEvent made")
+    }
+
+    hitTargets.current.forEach(element => {
+      const rect = element.rect()
+      if (!rect) return
+      if (
+        hitLoc.x >= rect.left &&
+        hitLoc.x <= rect.right &&
+        hitLoc.y >= rect.top &&
+        hitLoc.y <= rect.bottom
+      ) {
+        element.onHit()
+      }
+    });
+
+
+  }, []);
+
+  const buttonRef = useRef<HTMLDivElement | null>(null)
+  const ButtonSize = useRef<{ x: number; y: number } | null>(null)
+  const ButtonLocation = useRef<{ x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    const loc = ButtonLocation.current
+    const size = ButtonSize.current
+    if (!loc || !size || !pointerUpLoc.current) return
+
+    if (pointerUpLoc.current.x >= loc.x &&
+      pointerUpLoc.current.x <= loc.x + size.x &&
+      pointerUpLoc.current.y >= loc.y &&
+      pointerUpLoc.current.y <= loc.y + size.y) {
+      console.log('inside')
+    }
+  }, [pointerUpLoc.current])
+
+  useEffect(() => {
+    if (!buttonRef.current) return
+    const rect = buttonRef.current.getBoundingClientRect()
+    ButtonSize.current = {
+      x: rect.width,
+      y: rect.height,
+    }
+
+    ButtonLocation.current = {
+      x: rect.left,
+      y: rect.top,
+    }
+  }, [buttonRef])
+
+  
   return (
-    <div
-      onPointerDown={(e) => {
-        startRef.current = { x: e.clientX, y: e.clientY }
-        setLockedAxis(null)
-      }}
-      onPointerMove={(e) => {
-        if (!startRef.current || lockedAxis) return
+    <HitTestContext.Provider value={{debug, register, unregister }}>
+      <div
+        className="h-full w-full ">
+        <HitAreaButton onHit={()=>{console.log(`in area center`)}} debugClassName="bg-amber-50/50" className={`absolute flex justify-self-center w-3/5 h-4/5 z-2 bg-accent pointer-events-none `} >
+        </HitAreaButton>
 
-        const dx = Math.abs(e.clientX - startRef.current.x)
-        const dy = Math.abs(e.clientY - startRef.current.y)
 
-        const THRESHOLD = 6
-        if (dx < THRESHOLD && dy < THRESHOLD) return
+        <Swiper
+          onSwiper={(swiper) => { verticalISetCarouselAPI.current = swiper }}
+          modules={[Virtual]}
+          direction={'vertical'}
+          slidesPerView={1}
+          initialSlide={setIndex}
+          // centeredSlides={true}
+          watchSlidesProgress
+          longSwipes={false}
+          spaceBetween={1}
+          virtual={{ addSlidesAfter: 4, addSlidesBefore: 2, slides: imageSets }}
+          className="h-full "
+          onTap={(_, e) => handleTap(e)}
+        >
 
-        setLockedAxis(dx > dy ? "horizontal" : "vertical")
-      }}
-      onPointerUp={() => {
-        startRef.current = null
-        setLockedAxis(null)
-      }}
-      onPointerCancel={() => {
-        startRef.current = null
-        setLockedAxis(null)
-      }}
-      className="h-full w-full">
+          {imageSets.map((set, index) => (
+            <SwiperSlide className="h-full" virtualIndex={index} key={`imageSet-${set._id}`}>
+              <ImageSetViewer set={set} distance={Math.abs(currentIndex - index)} />
+            </SwiperSlide>
+          ))}
 
-      <Swiper onSwiper={setVerticalISetCarouselAPI}
-        modules={[Virtual]}
-        direction={'vertical'}
-        slidesPerView={1}
-        initialSlide={setIndex - lowestIndex}
-        centeredSlides={true}
-        virtual
-        className="h-full ">
-        {imageSets.slice(lowestIndex, highestIndex).map((set, index) => (
-          <SwiperSlide className="basis-full" virtualIndex={index} key={`imageSet-${set._id}`}>
-            <ImageSetViewer set={set} distance={Math.abs(currentIndex.current - index)} DirectionLock={lockedAxis !== "vertical"} />
-          </SwiperSlide>
-        ))}
-
-      </Swiper>
-    </div>
+        </Swiper>
+      </div>
+      
+    </HitTestContext.Provider>
   )
 
 
 }
+
+
+// useEffect(() => {
+  //   const loc = ButtonLocation.current
+  //   const size = ButtonSize.current
+  //   if (!loc || !size || !pointerUpLoc.current) return 
+
+
+
+  //   if (pointerUpLoc.current.x >= loc.x &&
+  //     pointerUpLoc.current.x <= loc.x + size.x &&
+  //     pointerUpLoc.current.y >= loc.y &&
+  //     pointerUpLoc.current.y <= loc.y + size.y) {
+  //     console.log('inside')
+  //   }
+
+  //   PointerDownLoc.current = null
+  // }, [pointerUpLoc.current])
+
+  // function that on change of pointerUpLoc = useRef<{ x: number; y: number } | null>(null) change will check if the up and down are both in the area of the element
+
+// if (index == 0 && lowestIndex != 0) {
+
+
+
+//   setLowestIndex((lowestIndex) => {
+//     const change = Math.min(PRELOADFRONT, lowestIndex)
+//     console.log(`shift pending: ${change}`)
+//     pendingShift.current = change
+//     return lowestIndex - change
+//   })
+
+
+// }
+// if (index == verticalISetCarouselAPI.slides.length - 1 && highestIndex != Images.length) {
+//   setHighestIndex((highestIndex) => { return highestIndex + Math.min(PRELOADBACK, imageSets.length - highestIndex) })
+
+//   console.log(`heigh: ${highestIndex}, Max: ${imageSets.length} result: ${highestIndex + Math.min(PRELOADBACK, imageSets.length - highestIndex)}`)
+// }
+
+
+// useLayoutEffect(() => {
+//   if (!verticalISetCarouselAPI) return
+//   //if (!pendingShift.current) return
+
+//   const shift = pendingShift.current
+//   pendingShift.current = 0
+
+//   const target = verticalISetCarouselAPI.activeIndex + shift
+
+//   verticalISetCarouselAPI.updateSlides()
+//   //verticalISetCarouselAPI.slideTo(target, 0, false)
+//   //console.log(`Triggered reindex ${verticalISetCarouselAPI.activeIndex + shift}`)
+// }, [lowestIndex])
+
+
+
 
 //Last carousel index
 // const carouselIndexRef = useRef(0)

@@ -56,15 +56,16 @@ export default function Description({ info }: props) {
 
   return (
     <>
-      <div className={`absolute left-1/2 -translate-x-1/2 w-full bottom-0 h-full pointer-events-none ${isDescriptionOpen && "bg-gradient-to-b from-20% from-primary-foreground/0 to-primary-foreground/70"}`}>
+      <div key={`description-${info?.Id}`} className={`absolute left-1/2 -translate-x-1/2 w-full bottom-0 h-full pointer-events-none z-1 ${isDescriptionOpen && "bg-gradient-to-b from-20% from-primary-foreground/0 to-primary-foreground/70"}`}>
         <Collapsible
           className={`absolute left-1/2 -translate-x-1/2 w-full xl:max-w-[60%] bottom-0 pb-4 px-2 text-primary pointer-events-auto ${!isDescriptionOpen && "bg-gradient-to-b from-20% from-primary-foreground/0 to-primary-foreground/40"}`}
+          key={`Collapsible-${info?.Id}`}
           open={isDescriptionOpen}
           onOpenChange={seIsDescriptionOpen}
           onClick={() => seIsDescriptionOpen(!isDescriptionOpen)}
         >
  
-          <div className="flex overflow-x-hidden overflow-y-hidden">
+          <div key={"NonCollapsibleDescription"} className="flex overflow-x-hidden overflow-y-hidden">
             <span ref={tagContainerRef} className={isDescriptionOpen ? "" : "w-fit h-6 overflow-x-hidden overflow-y-hidden"}>
                {info?.Tags.map((item: string, index: number) => (
                 <TagBadge key={`tag-${item}`} tag={item} />
@@ -89,13 +90,11 @@ export default function Description({ info }: props) {
           <CollapsibleContent>
 
             {/* Authors */}
-            <div>
+            <div key={"CollapsibleDescription"}>
               <span className="">Authors: </span>
               {info?.Authors.map((author: string, index: number) => (
-                <>
-                  <span className="font-bold underline">{author}
+                  <span key={`author-${author}`} className="font-bold underline">{author}
                   {index < info.Authors.length -1 && ","}</span>
-                </>
               )) ?? "Authors: N/A"}
             </div>
             {/* Description */}

@@ -5,7 +5,7 @@ import { CarouselItem } from "@/components/ui/carousel"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import Image from "next/image"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 
 interface Props {
@@ -13,7 +13,7 @@ interface Props {
   index: number
   distance: number
   currentIndex: number
-  keepLoadedOverride : boolean
+  keepLoadedOverride: boolean
 }
 
 
@@ -22,7 +22,9 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
 
   const [image, setImage] = useState<string | null>(null)
 
-  const load = (distance == 0 ? Math.abs(currentIndex - index) <= 5 : distance > 5 ? false : currentIndex == index) || currentIndex
+  
+
+  let load = useRef(false)// (distance == 0 ? Math.abs(currentIndex - index) <= 5 : distance > 5 ? false : currentIndex == index) || currentIndex
 
   const protectedApi = useProtected()
 
@@ -33,10 +35,26 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
     Lowres: true
   }), [SetID, protectedApi])
 
-  useEffect(() => {
+  const shouldLoad = () => {
+
+    if(load && distance < 10){
+      return true
+    }
+    if(distance > 1 && index == currentIndex){
+      return true
+    }
+    if(distance == 1){
+      return true
+    }
+
+    return false
+  }
+
+  useLayoutEffect(() => {
 
     //console.log("imageLoad triggered")
     let cancelled = false
+    load.current = shouldLoad()
     if (!load) {
       //console.log("revoked image")
       setImage(prev => {
@@ -69,16 +87,16 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
 
   if (image) {
     return (
-      <CarouselItem className="h-full w-full flex justify-center">
-        <img src={image} alt="'/random%20hexa.png'" className=" h-full object-contain" />
-      </CarouselItem>
+
+      <img src={image} alt="'/random%20hexa.png'" className="h-full object-contain justify-center items-center" />
+
     )
   }
 
   return (
-    <CarouselItem className="h-full w-full flex justify-center">
+    <div className="h-full w-full bg-foreground/80">
       <Skeleton className={cn("h-full w-full")}></Skeleton>
-    </CarouselItem>
+    </div>
   )
 
 
