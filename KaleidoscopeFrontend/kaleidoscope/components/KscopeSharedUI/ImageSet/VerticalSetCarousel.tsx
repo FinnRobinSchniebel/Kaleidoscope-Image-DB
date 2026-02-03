@@ -28,12 +28,12 @@ type HitTestContextType = {
 }
 
 export const HitTestContext = createContext<HitTestContextType | null>(null)
-
+export const HideUIContext = createContext<boolean | null>(null)
 
 export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props) {
 
 
-  const [debug, setDebug] = useState(true)
+  const [debug, setDebug] = useState(false)
 
 
   const PRELOADFRONT = 2
@@ -161,9 +161,10 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
   
   return (
     <HitTestContext.Provider value={{debug, register, unregister }}>
+    <HideUIContext.Provider value={HideOverlayes}>
       <div
         className="h-full w-full ">
-        <HitAreaButton onHit={()=>{console.log(`in area center`)}} debugClassName="bg-amber-50/50" className={`absolute flex justify-self-center w-3/5 h-4/5 z-2 bg-accent pointer-events-none `} >
+        <HitAreaButton onHit={()=>{console.log(`in area center`); setHideOverlayes((e) => {return !e})}} debugClassName="bg-amber-50/50" className={`absolute flex justify-self-center w-3/5 h-4/5 z-2 pointer-events-none`} >
         </HitAreaButton>
 
 
@@ -190,7 +191,7 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
 
         </Swiper>
       </div>
-      
+    </HideUIContext.Provider>
     </HitTestContext.Provider>
   )
 

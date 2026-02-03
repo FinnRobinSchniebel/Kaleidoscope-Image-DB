@@ -3,9 +3,10 @@ import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useContext, useLayoutEffect, useRef, useState } from "react";
 import Source from "../SourceInfo";
 import TagBadge from "./TagBadge";
+import { HideUIContext } from "./VerticalSetCarousel";
 
 
 interface props {
@@ -18,6 +19,8 @@ export default function Description({ info }: props) {
   const [moreTagCount, setMoreTagCOunt] = useState(0)
 
   const tagContainerRef = useRef<HTMLDivElement>(null)
+
+  const HideUICtx = useContext(HideUIContext)
 
   var tsDate: Date | undefined
   if (info?.DateAdded) {
@@ -56,18 +59,26 @@ export default function Description({ info }: props) {
 
   return (
     <>
-      <div key={`description-${info?.Id}`} className={`absolute left-1/2 -translate-x-1/2 w-full bottom-0 h-full pointer-events-none z-1 ${isDescriptionOpen && "bg-gradient-to-b from-20% from-primary-foreground/0 to-primary-foreground/70"}`}>
+      <div key={`description-${info?.Id}`} className={`absolute left-1/2 -translate-x-1/2 w-full bottom-0 h-full pointer-events-none z-1 
+        ${isDescriptionOpen && "bg-gradient-to-b from-20% from-primary-foreground/0 to-primary-foreground/70"}
+        transition-all duration-300 ease-out
+        ${HideUICtx
+          ? "opacity-0 translate-y-2 pointer-events-none"
+          : "opacity-100 translate-y-0 pointer-events-auto"}
+        `}
+      >
         <Collapsible
-          className={`absolute left-1/2 -translate-x-1/2 w-full xl:max-w-[60%] bottom-0 pb-4 px-2 text-primary pointer-events-auto ${!isDescriptionOpen && "bg-gradient-to-b from-20% from-primary-foreground/0 to-primary-foreground/40"}`}
+          className={`absolute left-1/2 -translate-x-1/2 w-full xl:max-w-[60%] bottom-0 pb-4 px-2 text-primary pointer-events-auto 
+            ${!isDescriptionOpen && "bg-gradient-to-b from-20% from-primary-foreground/0 to-primary-foreground/40"}`}
           key={`Collapsible-${info?.Id}`}
           open={isDescriptionOpen}
           onOpenChange={seIsDescriptionOpen}
           onClick={() => seIsDescriptionOpen(!isDescriptionOpen)}
         >
- 
+
           <div key={"NonCollapsibleDescription"} className="flex overflow-x-hidden overflow-y-hidden">
             <span ref={tagContainerRef} className={isDescriptionOpen ? "" : "w-fit h-6 overflow-x-hidden overflow-y-hidden"}>
-               {info?.Tags.map((item: string, index: number) => (
+              {info?.Tags.map((item: string, index: number) => (
                 <TagBadge key={`tag-${item}`} tag={item} />
               ))}
             </span>
@@ -87,14 +98,14 @@ export default function Description({ info }: props) {
                 more...
               </div>}
           </div>
-          <CollapsibleContent>
-
+          <CollapsibleContent className=" transition-all duration-300 ease-out">
+              
             {/* Authors */}
             <div key={"CollapsibleDescription"}>
               <span className="">Authors: </span>
               {info?.Authors.map((author: string, index: number) => (
-                  <span key={`author-${author}`} className="font-bold underline">{author}
-                  {index < info.Authors.length -1 && ","}</span>
+                <span key={`author-${author}`} className="font-bold underline">{author}
+                  {index < info.Authors.length - 1 && ","}</span>
               )) ?? "Authors: N/A"}
             </div>
             {/* Description */}

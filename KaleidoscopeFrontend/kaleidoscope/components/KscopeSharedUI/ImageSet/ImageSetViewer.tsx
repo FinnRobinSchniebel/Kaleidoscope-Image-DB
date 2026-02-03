@@ -13,6 +13,7 @@ import { Navigation } from 'swiper/modules';
 import "swiper/css";
 import 'swiper/css/navigation';
 import NavigationHorizontal from "./NavigationHorizontal";
+import { HideUIContext } from "./VerticalSetCarousel";
 
 
 
@@ -26,6 +27,8 @@ export default function ImageSetViewer({ set, distance}: Props) {
 
   //console.log(set)
 
+ 
+
   const protectedApi = useProtected()
 
   //contains all image info stored on the server thats relevant
@@ -35,8 +38,6 @@ export default function ImageSetViewer({ set, distance}: Props) {
   const [api, setApi] = useState<SwiperClass>()
 
   const [CurrentIndex, setCurrentIndex] = useState(0)
-
-  const [showUI, setShowUI] = useState(true)
 
   useLayoutEffect(() => {
 
