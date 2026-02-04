@@ -5,21 +5,64 @@ import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
 import { ChevronLeft, CornerDownRight, CornerLeftUp, FolderArchive } from 'lucide-react'
 import Link from 'next/link'
-import React, { useActionState, useEffect, useState } from 'react'
+import React, { useActionState, useCallback, useEffect, useState } from 'react'
+import FolderList from './FolderList'
+import UploadInstructions from './UploadInstructions'
+import DropFile from './DropFile'
+import { SubmitErrorHandler, SubmitHandler, useForm } from 'react-hook-form'
 
-
-
+export type UploadFormValues = {
+  zipFile: File | null
+  structureZip: string
+  folders: string[]
+  files: string
+}
 type Props = {}
 
 export default function AccountLayout({ }: Props) {
 
-  const MaxFileSize = "5 GB"
-  const [instructionsOpen, setInstructionsOpen] = useState(false)
+  const MAX_FILE_SIZE_MB = 5120
 
-  const [data, action, isPending] = useActionState(SendFile, undefined)
 
-  const [Layers, setLayers] = useState(2)
+
+  const [Layers, setLayers] = useState(0)
+
+  const [validFile, setValidFile] = useState(false)
+
+  const { register, control, handleSubmit, setValue, watch , formState:{errors}} = useForm<UploadFormValues>({
+    defaultValues: {
+      zipFile: null,
+      structureZip: "",
+      folders: Array(Layers).fill("fff"),
+      files: "[Order]",
+    },
+  })
+
   useEffect(() => { console.log(Layers) }, [Layers])
+
+  
+  const onSubmit: SubmitHandler<UploadFormValues> = (data: UploadFormValues) => {
+    if (!data.zipFile) {
+      return
+    }
+
+    const formData = new FormData()
+    formData.append("zipFile", data.zipFile)
+    formData.append("structureZip", data.structureZip)
+    formData.append("files", data.files)
+
+    data.folders.forEach((folder, i) => {
+      formData.append(`folders[${i}]`, folder)
+    })
+
+    console.log(formData)
+  }
+
+ const onError = (errors: any, event?: React.BaseSyntheticEvent) => {
+    console.log(errors); // The validation errors
+    alert("What on earth did you do to get this error. This thing is type safe!")
+  };
+
 
   return (
     <>
@@ -35,109 +78,35 @@ export default function AccountLayout({ }: Props) {
           </Link>
         </Button>
 
-        <Collapsible className={`bg-accent xl:w-[60%] place-self-center  rounded-2xl py-2 ${instructionsOpen ? "" : "cursor-pointer"}`}
-          open={instructionsOpen}
-          onOpenChange={setInstructionsOpen}
-          onClick={() => { if (!instructionsOpen) { setInstructionsOpen(true) } }}
-        >
-          <h2 className='text-2xl'>Instructions</h2>
+        <UploadInstructions MaxSize={MAX_FILE_SIZE_MB} />
 
-          {!instructionsOpen && <p className='font-normal'>Click to show instructions</p>}
-          <CollapsibleContent className='font-normal py-2 flex flex-col p-10'>
-            <div className='justify-start text-start '>
-              <ol type='1' className='list-decimal'>
-                <li>
-                  Upload a zip file with all the images you want to add.
-                  <ol className='list-disc list-outside ml-5 mt-2'>
-                    <li className=''> The file contents should be organized into folders and files with meaningful names.</li>
-                    <li className=''> Kaleidoscope will group files by source ID or folder (depending on your choice).</li>
-                    <li className=''> The File cannot be larger than {MaxFileSize}.</li>
-                  </ol>
-                </li>
-                <li>
-                  Using the options below the update describe the file formatting.
-                  Each level indicates the naming convention used by your folders.
-                  Adding levels will increase the depth of your folder structure with
-                  the lowest one always being the naming convention of the image files.
-                  <ol className='list-disc list-outside ml-5 mt-2'>
-                    <li className=''> Names for all Files:</li>
-                      <ol>
-                        <li className="relative pl-4 before:absolute before:left-0 before:content-['-']">
-                          '[Author]' : Authors name
-                        </li>
-                        <li className="relative pl-4 before:absolute before:left-0 before:content-['-']">
-                          '[ID]' : Source ID
-                        </li>
-                        <li className="relative pl-4 before:absolute before:left-0 before:content-['-']">
-                          '[Source]' : Source name (ex: Pixiv, Twitter, Instagram)
-                        </li>
-                        <li className="relative pl-4 before:absolute before:left-0 before:content-['-']">
-                          '[AuthorId]' : author's ID (if the source give the author an ID)
-                        </li>
-                        <li className="relative pl-4 before:absolute before:left-0 before:content-['-']">
-                          '[Title]' : Image Set Title
-                        </li>
-                        <li className="relative pl-4 before:absolute before:left-0 before:content-['-']">
-                          '[Date]' : Date posted (02_02_2026)
-                        </li>
-                      </ol>
-                    <li className=''> For Files only: </li>
-                      <ol>
-                        <li className="relative pl-4 before:absolute before:left-0 before:content-['-']">
-                          '[Order]' : Part of File Name used for determining the order. Will use alphabetical/numerical (a before b and 0 before 1)
-                          '[-Order]' : Part of File Name used for determining the order. Will use reverse alphabetical/numerical (b before a and 1 before 0)
-                        </li>
-                        
-                      </ol>
-                  </ol>
-                </li>
-              </ol>
-
-            </div>
-
-            <Button onClick={() => setInstructionsOpen(false)} className='max-w-40 size-fit cursor-pointer mt-2'>close</Button>
-          </CollapsibleContent>
-        </Collapsible>
-
-        <form action={action} className='grid grid-cols-1 gap-2 auto-rows-auto justify-items-start p-10 m-2 rounded-2xl bg-accent xl:w-[60%] place-self-center'>
+        <form onSubmit={handleSubmit(onSubmit, onError)} className='grid grid-cols-1 gap-2 auto-rows-auto justify-items-start p-10 m-2 rounded-2xl bg-accent w-[90%] xl:w-[60%] place-self-center'>
+          <DropFile FormRegister={register} SetFormValue={setValue} MaxSize={MAX_FILE_SIZE_MB} 
+          ValidFile={(e) => { setValidFile(e || watch("zipFile") != null)}/*There is an assumption that if an error occurs any valid existing file will stay*/} 
+          />
           <ScrollArea aria-orientation='horizontal' className='w-full overflow-x-auto pb-5'>
-            {Array.from({ length: Layers }, (_, index) =>
-            (
-              <div key={index} className={`flex min-w-0 mx-1 items-center  ml-[calc(var(--i)*2rem)]`} style={{ "--i": index } as React.CSSProperties}>
-
-                <label htmlFor={`folder-${index}`} className='text-justify flex'>
-                  {index == 0 && <FolderArchive className='p-2 size-10' />}
-                  {index != 0 && <CornerDownRight className='p-2 size-10' />}
-                  <span className="self-center-safe text-ellipsis overflow-hidden whitespace-nowrap">
-                    {index == 0 ? "Zip File" : (index === Layers - 1 ? "File(s)" : "Folder")}
-                  </span>
-                </label>
-
-                <input id={`folder-${index}`} className='outline-3 field-sizing-content outline-accent rounded-sm px-5 mx-3 h-8 min-w-30 max-w-90 '></input>
-              </div>
-            ))}
+            <FolderList FormRegister={register} Layers={Layers} />
             <ScrollBar orientation='horizontal' className='h-3' />
           </ScrollArea>
+
+          <div className='justify-self-center'>
+            <Button type='button' className='mx-2 w-fit justify-self-center bg-green-600/80 cursor-pointer' onClick={() => { setLayers((e) => { return Math.min(e + 1, 10) }) }}>
+              <CornerDownRight className=' size-[1rem]' />
+              Add Folder Level
+            </Button>
+
+            <Button type='button' className='mx-2 w-fit bg-red-800/80 cursor-pointer' onClick={() => { setLayers((e) => { return Math.max(e - 1, 0) }) }}>
+              <CornerLeftUp className=' size-[1rem]' />
+              Remove Folder Level
+            </Button>
+          </div>
+
+          <div className=' justify-self-center bg-accent w-full rounded-xl p-5 px-10'>
+            <Button type='submit' disabled={!validFile} className=' bg-green-700 cursor-pointer px-10 py-4 rounded-2xl'>Submit</Button>
+          </div>
         </form>
-        <div className=''>
-          <Button className='mx-2 w-fit justify-self-center bg-green-600/80 cursor-pointer' onClick={() => { setLayers((e) => { return Math.min(e + 1, 10) }) }}>
-            <CornerDownRight className=' size-[1rem]' />
-            Add Folder Level
-          </Button>
-
-          <Button className='mx-2 w-fit bg-red-800/80 cursor-pointer' onClick={() => { setLayers((e) => { return Math.max(e - 1, 2) }) }}>
-            <CornerLeftUp className=' size-[1rem]' />
-            Remove Folder Level
-          </Button>
-        </div>
-
-
 
       </div >
     </>
   )
-}
-
-async function SendFile(previousState: unknown, formData: FormData) {
-
 }

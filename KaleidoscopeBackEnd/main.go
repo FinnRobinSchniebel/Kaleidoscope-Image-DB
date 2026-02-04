@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -98,12 +99,15 @@ func StartAPI() {
 
 	//authentication
 
-	//imageSet retrievel
+	//imageSet upload/retrieval
 	app.Get("/api/imagesets", AuthSessionToken, GetImageSetById)
 	app.Post("/api/imagesets", AuthSessionToken, PostImageSet)
 	app.Delete("/api/imagesets", AuthSessionToken, DeleteImageSets)
 	//TODO: Edit imageset api
 	//TODO: MarkForDepetion api
+
+	//zip upload
+	app.Post("/api/uploadZip", AuthSessionToken, UploadZip)
 
 	//authentication
 	app.Post("/api/session/register", RegisterUser)
@@ -307,6 +311,22 @@ func DeleteImageSets(c *fiber.Ctx) error {
 	}
 
 	return c.Status(200).JSON(res)
+}
+
+func UploadZip(c *fiber.Ctx) error {
+
+	fileHeader, err := c.FormFile("zipFile")
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString("No File Sent")
+	}
+	if filepath.Ext(fileHeader.Filename) != ".zip" {
+		return c.Status(fiber.StatusBadRequest).SendString("Invalid file type. Only .zip allowed")
+	}
+	if fileHeader.Size > 5*1024*1024 {
+		return c.Status(fiber.StatusBadRequest).SendString("File too large")
+	}
+
+	return nil
 }
 
 func RegisterUser(c *fiber.Ctx) error {
