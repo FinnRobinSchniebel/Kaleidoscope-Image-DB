@@ -78,7 +78,7 @@ export default async function GetImageSetData({id, protectedApi} : Props) : Prom
 
     const newRequest: GORequest = {
         endpoint: `/getimagedata?ids=${id}`,
-        type: "Get",
+        type: "GET",
         header: { 'Content-Type': 'application/json' },
     }
 

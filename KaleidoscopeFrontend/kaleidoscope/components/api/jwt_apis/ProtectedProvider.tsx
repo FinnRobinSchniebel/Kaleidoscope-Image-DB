@@ -27,6 +27,8 @@ const ProtectedContext = createContext<protectedAPI | null>(null)
 
 export function ProtectedProvider({ token, children }: Props) {
 
+  console.log(token)
+
   const router = useRouter()
   const pathname = usePathname()
   const params = useSearchParams()
@@ -43,6 +45,7 @@ export function ProtectedProvider({ token, children }: Props) {
 
   //avoids recreation of protectedApi when dom reloads
   const protectedApi = useMemo(() => {
+    
     return CreateProtected(token, () => redirectRef.current())
   }, [token])
 

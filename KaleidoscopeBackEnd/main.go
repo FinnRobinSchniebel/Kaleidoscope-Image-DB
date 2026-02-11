@@ -4,6 +4,7 @@ import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tags"
+	zipupload "Kaleidoscopedb/Backend/KaleidoscopeBackend/zip_upload"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +36,7 @@ const UserDbName = "Users"
 const SessionDbName = "Sessions"
 const tagDbName = "Tags"
 const LowResPathAppend = "low/"
+const MaxFileSize = 5 * 1024 * 1024 * 1024
 
 func main() {
 	imageset.BackendVolumeLocation = os.Getenv("BACKEND_VOLUME_LOCATION")
@@ -89,7 +92,7 @@ func StartAPI() {
 	//Todo: get certificate and enable https
 
 	log.Print("Starting API")
-	app := fiber.New(fiber.Config{BodyLimit: 500 * 1024 * 1024})
+	app := fiber.New(fiber.Config{BodyLimit: MaxFileSize})
 
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     "http://localhost:3000",
@@ -315,16 +318,78 @@ func DeleteImageSets(c *fiber.Ctx) error {
 
 func UploadZip(c *fiber.Ctx) error {
 
+	//Get the zip
 	fileHeader, err := c.FormFile("zipFile")
+
+	//create form for array grouping
+	form, err := c.MultipartForm()
+	if err != nil {
+		return fiber.ErrBadRequest
+	}
+
+	//Combine all rules for files and zips for easier use
+	var ruleLayers []string
+
+	if v := form.Value["structureZip"]; len(v) > 0 {
+		ruleLayers = append(ruleLayers, v...)
+	}
+
+	if v := form.Value["folders"]; len(v) > 0 {
+		ruleLayers = append(ruleLayers, v...)
+	}
+
+	for i := range ruleLayers {
+		if ruleLayers[i] == "NAN" {
+			ruleLayers[i] = ""
+		}
+	}
+
+	//keep file rules separate and give a default if no instructions are given.
+	fileLayer := "[order]"
+	if v := form.Value["files"]; len(v) > 0 && v[0] != "" {
+		fileLayer = v[0]
+	}
+
+	//grouping index
+	GroupingIndex, err := strconv.Atoi(c.FormValue("GroupingLevel", "0"))
+	if err != nil {
+		return fmt.Errorf("Invalid grouping index")
+	}
+
+	//check array lengths and Grouping level index in range
+	if len(ruleLayers) > 11 {
+		return fmt.Errorf("Too many folder Layers.")
+	}
+	if GroupingIndex > len(ruleLayers) {
+		return fmt.Errorf("Grouping index is out of bounds. Please select a valid group index")
+	}
+
+	log.Print(ruleLayers)
+
+	if len(ruleLayers) == 0 {
+		return fiber.ErrBadRequest
+	}
+
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString("No File Sent")
 	}
 	if filepath.Ext(fileHeader.Filename) != ".zip" {
 		return c.Status(fiber.StatusBadRequest).SendString("Invalid file type. Only .zip allowed")
 	}
-	if fileHeader.Size > 5*1024*1024 {
-		return c.Status(fiber.StatusBadRequest).SendString("File too large")
+
+	err, pathName := zipupload.DownloadZip(fileHeader)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString("Failed to download Zip. Check server disk space.")
 	}
+
+	cont, err := zipupload.ValidateAndParseZip(pathName, ruleLayers, fileLayer, GroupingIndex)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString("failed to parse files.")
+	}
+
+	log.Print(cont, err)
+
+	err = zipupload.RemoveTempZip(pathName)
 
 	return nil
 }

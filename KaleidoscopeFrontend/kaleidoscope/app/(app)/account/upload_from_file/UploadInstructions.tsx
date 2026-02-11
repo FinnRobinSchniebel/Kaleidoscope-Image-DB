@@ -2,13 +2,13 @@ import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
 import { useState } from "react"
 
-interface Props{
-  MaxSize : number
+interface Props {
+  MaxSize: number
 }
 
-export default function UploadInstructions({MaxSize}: Props) {
+export default function UploadInstructions({ MaxSize }: Props) {
 
-  const sizeInGB = Math.round(MaxSize/1024 *10) /10
+  const sizeInGB = Math.round(MaxSize / 1024 * 10) / 10
   const MaxFileSize = sizeInGB > 1 ? `${sizeInGB} GB` : `${MaxSize} MB`
   const [instructionsOpen, setInstructionsOpen] = useState(false)
 
@@ -72,7 +72,16 @@ export default function UploadInstructions({MaxSize}: Props) {
                 </ol>
               </ol>
             </li>
+            <li>
+              <p>
+                Use the check Box at the end of the input to determine at what folder level images should be bundled together at.
+              </p>
+              <p className="italic ml-2">
+                Ex: Checking files will have each file as there own Image set (one item per set), checking a folder level will bundle all individual folders at that level as separate image sets.
+              </p>
+            </li>
           </ol>
+
 
         </div>
 

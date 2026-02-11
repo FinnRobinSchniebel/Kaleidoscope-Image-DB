@@ -139,7 +139,7 @@ export class protectedAPI {
   public async GetSearch(Terms: SearchItems) {
     const newRequest: GORequest = {
       endpoint: "/search",
-      type: "Post",
+      type: "POST",
       header: { 'Content-Type': 'application/json'},
       body: JSON.stringify(Terms)
     }

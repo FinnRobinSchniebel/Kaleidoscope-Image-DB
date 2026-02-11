@@ -1,7 +1,7 @@
 import { FileArchive } from "lucide-react"
 import { DragEvent, useEffect, useRef, useState } from "react"
 import { SearchInfo } from "../../search/SearchBar"
-import { UseFormRegister, UseFormSetValue } from "react-hook-form"
+import { UseFormRegister, UseFormSetValue, UseFormWatch } from "react-hook-form"
 import { UploadFormValues } from "./page"
 
 interface Props {
@@ -9,10 +9,11 @@ interface Props {
   ValidFile: (e: boolean) => void
   FormRegister: UseFormRegister<UploadFormValues>
   SetFormValue: UseFormSetValue<UploadFormValues>
+  watch: UseFormWatch<UploadFormValues>
 }
 
 
-export default function DropFile({ MaxSize, ValidFile, FormRegister, SetFormValue }: Props) {
+export default function DropFile({ MaxSize, ValidFile, FormRegister, SetFormValue, watch}: Props) {
 
   const zipRegister = FormRegister("zipFile")
 
@@ -23,8 +24,9 @@ export default function DropFile({ MaxSize, ValidFile, FormRegister, SetFormValu
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    const currentVal = watch("zipFile") != null
 
-    ValidFile(error == null)
+    ValidFile( currentVal ? currentVal : false)
   }, [error])
 
   const dropFileInBox = (e: DragEvent<HTMLDivElement>) => {
@@ -46,12 +48,14 @@ export default function DropFile({ MaxSize, ValidFile, FormRegister, SetFormValu
     }
 
     
-    setError(null)
-    ValidFile(true)
+    
     
 
     setFileName(file.name)
     SetFormValue("zipFile", file)
+
+    setError(null)
+    ValidFile(true)
   }
 
   return (
