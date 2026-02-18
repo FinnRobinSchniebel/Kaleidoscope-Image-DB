@@ -14,7 +14,7 @@ export default function UploadInstructions({ MaxSize }: Props) {
 
 
   return (
-    <Collapsible className={`bg-accent w-[90%] xl:w-[60%] place-self-center  rounded-2xl py-2 ${instructionsOpen ? "" : "cursor-pointer"}`}
+    <Collapsible  className={`bg-accent w-[90%] xl:w-[60%] place-self-center  rounded-2xl py-2 transition-transform ${instructionsOpen ? "" : "cursor-pointer"}`}
       open={instructionsOpen}
       onOpenChange={setInstructionsOpen}
       onClick={() => { if (!instructionsOpen) { setInstructionsOpen(true) } }}
@@ -22,8 +22,8 @@ export default function UploadInstructions({ MaxSize }: Props) {
       <h2 className='text-2xl'>Instructions</h2>
 
       {!instructionsOpen && <p className='font-normal bg-accent w-fit justify-self-center m-2 p-2 rounded-2xl'>Click to show instructions...</p>}
-      <CollapsibleContent className='font-normal py-2 flex flex-col p-10'>
-        <div className='justify-start text-start '>
+      <CollapsibleContent className='font-normal py-2 flex flex-col p-10 transition-all duration-150 data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up overflow-hidden'>
+        <div className='justify-start text-start   '>
           <ol type='1' className='list-decimal'>
             <li>
               Upload a zip file with all the images you want to add.

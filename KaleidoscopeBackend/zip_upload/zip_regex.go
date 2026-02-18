@@ -5,6 +5,7 @@ import (
 	"log"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/yeka/zip"
@@ -19,16 +20,19 @@ type LayerPattern struct {
 func buildLayerPattern(template string) (*LayerPattern, error) {
 	fields := []string{}
 
-	regexStr := regexp.QuoteMeta(template)
+	reField := regexp.MustCompile(`\[[^\[\]]+\]`)
 
-	regexStr = regexp.MustCompile(`\\\[([^\]]+)\\\]`).ReplaceAllStringFunc(
-		regexStr,
-		func(m string) string {
-			field := m[2 : len(m)-2] // strip \[ \]
-			fields = append(fields, field)
-			return `([^_/]+)`
-		},
-	)
+	regexStr := reField.ReplaceAllStringFunc(template, func(m string) string {
+		field := m[1 : len(m)-1]
+		fields = append(fields, field)
+		return "___FIELD___"
+	})
+
+	// Now escape everything else
+	regexStr = regexp.QuoteMeta(regexStr)
+
+	// Replace placeholder with real capture group
+	regexStr = strings.ReplaceAll(regexStr, "___FIELD___", "([^/]+)")
 
 	re, err := regexp.Compile("^" + regexStr + "$")
 	if err != nil {
@@ -43,8 +47,10 @@ func buildLayerPattern(template string) (*LayerPattern, error) {
 }
 
 type ParsedFolderInfo struct {
-	Values map[string]string
-	Path   string
+	Values   map[string]string
+	FileType string
+	Path     string
+	File     *zip.File
 }
 
 func ValidateAndParseZip(zipPath string, folderTemplates []string, fileTemplate string, groupingLayer int) (map[string][]ParsedFolderInfo, error) {
@@ -75,25 +81,25 @@ func ValidateAndParseZip(zipPath string, folderTemplates []string, fileTemplate 
 	// seen := map[string]bool{}
 
 	//for each zip (1)
-	for _, filePath := range reader.File {
+	for _, fileFromZip := range reader.File {
 
-		if filePath.IsEncrypted() {
+		if fileFromZip.IsEncrypted() {
 			return nil, fmt.Errorf("zip is password protected")
 		}
 
-		isDir := strings.HasSuffix(filePath.Name, "/")
+		isDir := strings.HasSuffix(fileFromZip.Name, "/")
 		if isDir {
 			continue
 		}
 
 		zipBase := strings.TrimSuffix(filepath.Base(zipPath), ".zip")
 
-		pathParts := strings.Split(strings.TrimSuffix(filePath.Name, "/"), "/")
+		pathParts := strings.Split(strings.TrimSuffix(fileFromZip.Name, "/"), "/")
 
 		// prepend zip name as level 0
 		parts := append([]string{zipBase}, pathParts...)
 
-		log.Print(parts)
+		//log.Print(parts)
 
 		//combine upto path part that everything gets grouped by
 		var matchPath string
@@ -102,6 +108,12 @@ func ValidateAndParseZip(zipPath string, folderTemplates []string, fileTemplate 
 			if i > groupingLayer-1 {
 				matchPath += "/"
 			}
+		}
+
+		if filepath.Ext(fileFromZip.Name) == ".txt" {
+			currentPathContent := ParsedFolderInfo{Path: (fileFromZip.Name), FileType: filepath.Ext(fileFromZip.Name), File: fileFromZip}
+			results[matchPath] = append(results[matchPath], currentPathContent)
+			continue
 		}
 
 		RegexMatches := map[string]string{}
@@ -131,12 +143,50 @@ func ValidateAndParseZip(zipPath string, folderTemplates []string, fileTemplate 
 			}
 		}
 
-		currentPathContent := ParsedFolderInfo{Path: (filePath.Name), Values: RegexMatches}
+		currentPathContent := ParsedFolderInfo{Path: (fileFromZip.Name), Values: RegexMatches, FileType: filepath.Ext(fileFromZip.Name), File: fileFromZip}
 
 		results[matchPath] = append(results[matchPath], currentPathContent)
 	}
+	for key := range results {
+		slices.SortFunc(results[key], sortParsedInfo)
+
+	}
 
 	return results, nil
+}
+
+func sortParsedInfo(a, b ParsedFolderInfo) int {
+
+	orderA := a.Values["Order"]
+	orderB := b.Values["Order"]
+	reverse := false
+
+	if orderA == "" && orderB == "" {
+		orderA = a.Values["-Order"]
+		orderB = b.Values["-Order"]
+		reverse = true
+	}
+	if orderA == "" && orderB == "" {
+		reverse = false
+		orderA = a.Path
+		orderB = b.Path
+	}
+
+	if orderA == orderB {
+		return 0
+	}
+
+	if reverse {
+		if orderA < orderB {
+			return 1
+		}
+		return -1
+	}
+
+	if orderA < orderB {
+		return -1
+	}
+	return 1
 }
 
 func MatchReg(pattern *LayerPattern, PathSeg string, result map[string]string) error {
@@ -144,7 +194,7 @@ func MatchReg(pattern *LayerPattern, PathSeg string, result map[string]string) e
 
 	//if it fails to parse and the regex is not empty create an error
 	if match == nil && pattern.RawTemplate != "" {
-		return fmt.Errorf("no match")
+		return fmt.Errorf("no match: %s Template: %s", PathSeg, pattern.RawTemplate)
 	}
 
 	for i, field := range pattern.Fields {

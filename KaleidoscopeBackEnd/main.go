@@ -14,7 +14,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -320,12 +319,16 @@ func UploadZip(c *fiber.Ctx) error {
 
 	//Get the zip
 	fileHeader, err := c.FormFile("zipFile")
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString("No File Sent")
+	}
 
 	//create form for array grouping
 	form, err := c.MultipartForm()
 	if err != nil {
 		return fiber.ErrBadRequest
 	}
+	defer form.RemoveAll()
 
 	//Combine all rules for files and zips for easier use
 	var ruleLayers []string
@@ -353,45 +356,16 @@ func UploadZip(c *fiber.Ctx) error {
 	//grouping index
 	GroupingIndex, err := strconv.Atoi(c.FormValue("GroupingLevel", "0"))
 	if err != nil {
-		return fmt.Errorf("Invalid grouping index")
+		return c.Status(fiber.StatusBadRequest).SendString("Invalid grouping index")
 	}
 
-	//check array lengths and Grouping level index in range
-	if len(ruleLayers) > 11 {
-		return fmt.Errorf("Too many folder Layers.")
-	}
-	if GroupingIndex > len(ruleLayers) {
-		return fmt.Errorf("Grouping index is out of bounds. Please select a valid group index")
-	}
-
-	log.Print(ruleLayers)
-
-	if len(ruleLayers) == 0 {
-		return fiber.ErrBadRequest
-	}
+	code, hashHits, err := zipupload.ProcessZip(fileHeader, ruleLayers, fileLayer, GroupingIndex)
 
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("No File Sent")
-	}
-	if filepath.Ext(fileHeader.Filename) != ".zip" {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid file type. Only .zip allowed")
+		return c.Status(code).SendString(err.Error())
 	}
 
-	err, pathName := zipupload.DownloadZip(fileHeader)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString("Failed to download Zip. Check server disk space.")
-	}
-
-	cont, err := zipupload.ValidateAndParseZip(pathName, ruleLayers, fileLayer, GroupingIndex)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("failed to parse files.")
-	}
-
-	log.Print(cont, err)
-
-	err = zipupload.RemoveTempZip(pathName)
-
-	return nil
+	return c.Status(code).JSON(fiber.Map{"hash_hits": hashHits})
 }
 
 func RegisterUser(c *fiber.Ctx) error {
