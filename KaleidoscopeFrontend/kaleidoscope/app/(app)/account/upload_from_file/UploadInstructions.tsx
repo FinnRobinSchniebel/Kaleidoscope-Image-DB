@@ -14,16 +14,16 @@ export default function UploadInstructions({ MaxSize }: Props) {
 
 
   return (
-    <Collapsible  className={`bg-accent w-[90%] xl:w-[60%] place-self-center  rounded-2xl py-2 transition-transform ${instructionsOpen ? "" : "cursor-pointer"}`}
+    <Collapsible className={`bg-accent w-[90%] xl:w-[60%] place-self-center  rounded-2xl py-2 transition-transform ${instructionsOpen ? "" : "cursor-pointer"}`}
       open={instructionsOpen}
       onOpenChange={setInstructionsOpen}
       onClick={() => { if (!instructionsOpen) { setInstructionsOpen(true) } }}
     >
       <h2 className='text-2xl'>Instructions</h2>
 
-      {!instructionsOpen && <p className='font-normal bg-accent w-fit justify-self-center m-2 p-2 rounded-2xl'>Click to show instructions...</p>}
+      {!instructionsOpen && <p className='font-normal bg-accent w-fit justify-self-center m-2 p-2 rounded-2xl shadow-primary/10 shadow-md'>Click to show instructions...</p>}
       <CollapsibleContent className='font-normal py-2 flex flex-col p-10 transition-all duration-150 data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up overflow-hidden'>
-        <div className='justify-start text-start   '>
+        <div className='justify-start text-start'>
           <ol type='1' className='list-decimal'>
             <li>
               Upload a zip file with all the images you want to add.
@@ -33,6 +33,7 @@ export default function UploadInstructions({ MaxSize }: Props) {
                 <li className=''> The File cannot be larger than <span className="font-bold text-red-700">{MaxFileSize}</span>.</li>
               </ol>
             </li>
+            <li className="">Text file name information is ignored. all contents inside text files is added as description for the image set.</li>
             <li>
               Using the options below the update describe the file formatting.
               Each level indicates the naming convention used by your folders.
@@ -68,10 +69,12 @@ export default function UploadInstructions({ MaxSize }: Props) {
                   <li className="relative pl-4 before:absolute before:left-0 before:content-['-']">
                     <span className='text-red-600'>'[-Order]'</span> : Part of File Name used for determining the order. Will use reverse alphabetical/numerical (b before a and 1 before 0)
                   </li>
+                  <li className="relative pl-4 before:absolute before:left-0 before:content-['-']">If no [order] is given, it will use the full Path in alphabetical order</li>
 
                 </ol>
               </ol>
             </li>
+            <li className="">Files can Have one layer of structure collapse (If the last folder level is removed and is instead a file it will still work).</li>
             <li>
               <p>
                 Use the check Box at the end of the input to determine at what folder level images should be bundled together at.
@@ -80,12 +83,13 @@ export default function UploadInstructions({ MaxSize }: Props) {
                 Ex: Checking files will have each file as there own Image set (one item per set), checking a folder level will bundle all individual folders at that level as separate image sets.
               </p>
             </li>
+            
           </ol>
 
 
         </div>
 
-        <Button onClick={() => setInstructionsOpen(false)} className='max-w-40 size-fit cursor-pointer mt-2'>close</Button>
+        <Button onClick={() => setInstructionsOpen(false)} className='max-w-40 size-fit cursor-pointer mt-2 shadow-md shadow-primary/10 bg-primary-foreground/60 text-primary  border-1 hover:bg-primary-foreground/30'>close</Button>
       </CollapsibleContent>
     </Collapsible>
   )

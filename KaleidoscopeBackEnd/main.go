@@ -224,7 +224,12 @@ func PostImageSet(c *fiber.Ctx) error {
 
 	media := form.File["media"]
 
-	response, hashHits := imageset.AddImageSet(imageSet, media, claims.UserID)
+	MedSour := make([]imageset.MediaSource, len(media))
+	for i, m := range media {
+		MedSour[i] = imageset.MultipartSource{m}
+	}
+
+	hashHits, _, response := imageset.AddImageSet(imageSet, MedSour, claims.UserID)
 
 	return c.Status(response.ErrorCode).JSON(fiber.Map{"error": response.ErrorString, "hash_hits": hashHits})
 }
@@ -359,13 +364,25 @@ func UploadZip(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).SendString("Invalid grouping index")
 	}
 
-	code, hashHits, err := zipupload.ProcessZip(fileHeader, ruleLayers, fileLayer, GroupingIndex)
+	token, err := authutil.GetSessionTokenFromApiHelper(c)
+
+	var claim authutil.JWTClaims
+
+	_, _, _ = new(jwt.Parser).ParseUnverified(token, &claim)
+
+	code, hashHits, skip, errors, err := zipupload.ProcessZip(fileHeader, ruleLayers, fileLayer, GroupingIndex, claim.UserID)
 
 	if err != nil {
 		return c.Status(code).SendString(err.Error())
 	}
 
-	return c.Status(code).JSON(fiber.Map{"hash_hits": hashHits})
+	return c.Status(code).JSON(
+		fiber.Map{
+			"hash_hits": hashHits,
+			"skipped":   skip,
+			"errors":    errors,
+		},
+	)
 }
 
 func RegisterUser(c *fiber.Ctx) error {
@@ -776,6 +793,10 @@ func TagRetrieve(c *fiber.Ctx) error {
 	return c.JSON(res)
 }
 
+/*
+WARNING: this code assumes that the token has already been validated before running the function
+Returns an array of images in the 'images' field
+*/
 func AddTag(c *fiber.Ctx) error {
 
 	var inputs tags.Tag

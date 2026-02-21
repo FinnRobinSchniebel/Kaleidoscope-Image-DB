@@ -12,7 +12,7 @@
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
-import { ChevronLeft, CornerDownRight, CornerLeftUp, FolderArchive } from 'lucide-react'
+import { ChevronLeft, CornerDownRight, CornerLeftUp, FolderArchive, X } from 'lucide-react'
 import Link from 'next/link'
 import React, { useActionState, useCallback, useEffect, useState } from 'react'
 import FolderList from './FolderList'
@@ -66,7 +66,7 @@ export default function page({ }: Props) {
         shouldTouch: true,
       })
     }
-    
+
 
   }, [Layers])
 
@@ -117,7 +117,7 @@ export default function page({ }: Props) {
 
       <div className='flex flex-col flex-1 w-full'>
 
-        <Button className='m-4 w-fit bg-accent ' variant='outline' asChild>
+        <Button className='m-4 w-fit bg-accent shadow-primary/60 hover:bg-accent/30' variant='outline' asChild>
           <Link href={`/account`}>
             <ChevronLeft></ChevronLeft>
             Back To Account
@@ -141,7 +141,8 @@ export default function page({ }: Props) {
 
           {/* Increase/Decrease buttons for folder levels */}
           <div className='justify-self-center'>
-            <Button type='button' className='mx-2 w-fit justify-self-center bg-green-600/80 cursor-pointer' onClick={() => {
+            
+            <Button type='button' className='mx-2 w-fit justify-self-center bg-green-600/80 cursor-pointer shadow-md shadow-primary/60' onClick={() => {
               const groupingLevel = watch("GroupingLevel")
               const current = Number(groupingLevel ?? 0)
               const FolderCount = watch("folders").length
@@ -163,7 +164,7 @@ export default function page({ }: Props) {
               Add Folder Level
             </Button>
 
-            <Button type='button' className='mx-2 w-fit bg-red-800/80 cursor-pointer'
+            <Button type='button' className='mx-2 w-fit bg-red-800/80 cursor-pointer shadow-md shadow-primary/60'
               onClick={() => {
                 const groupingLevel = watch("GroupingLevel")
                 const current = Number(groupingLevel ?? 0)
@@ -186,32 +187,38 @@ export default function page({ }: Props) {
             </Button>
           </div>
 
-          <div className=' justify-self-center bg-accent w-full rounded-xl p-5 px-10 text-primary-foreground'>
-            <Button type='submit' disabled={!validFile} className=' bg-green-700 cursor-pointer px-10 py-4 rounded-2xl'>Submit</Button>
+          <div className=' justify-self-center bg-accent w-full rounded-xl p-5 px-10 text-primary'>
+            <Button type='submit' disabled={!validFile} className=' bg-radial-[at_-10%_20%] from-green-400/80 to-70% to-green-600/70 cursor-pointer px-10 py-4 rounded-2xl shadow-md shadow-primary/60'>Submit</Button>
 
             <div className={`bg-radial-[at_-10%_20%] from-green-400/80 to-70% to-green-700/70 rounded-lg m-2 w-full lg:w-4/5 justify-self-center 
               transition-[max-height] duration-300 ease-out relative overflow-hidden 
               ${SuccessMessage ? 'max-h-[200px] min-h-20 lg:min-h-0' : 'max-h-0 '}`}>
 
-              <button type='button' onClick={() => { setSuccessMessage(false) }} className='absolute right-5 top-1 lg:top-2 border-2 px-2 min-h-6 rounded-md hover:bg-accent cursor-pointer'>x</button>
-              <div className='p-5'>
-                Successfully added!
+              <div className='bg-primary-foreground/60 m-1 rounded-md'>
+                <button type='button' onClick={() => { setSuccessMessage(false) }}
+                  className='absolute right-5 top-1 lg:top-2 border-2 border-primary px-1 min-h-6 rounded-md hover:bg-accent cursor-pointer'>
+
+                  <X size={16}></X>
+                </button>
+                <div className='p-5'>
+                  Successfully Uploaded!
+                </div>
               </div>
             </div>
-            
+
             <div
               className={`
                 bg-radial-[at_-10%_20%] from-red-400/80 to-70% to-red-800/70 rounded-lg w-full lg:w-4/5 justify-self-center
                 relative overflow-hidden
                 transition-[max-height] duration-300 ease-out
-                ${errorMessage !="" ? 'max-h-[200px] m-2 min-h-20 lg:min-h-0' : 'max-h-0 '}
-              `}
-            >
-              <div className="p-5">
+                ${errorMessage != "" ? 'max-h-[200px] m-2 min-h-20 lg:min-h-0' : 'max-h-0 '}
+              `}>
+
+              <div className="p-5 bg-primary-foreground/60 m-1 rounded-md">
                 <button type="button" onClick={() => setErrorMessage("")}
-                  className="absolute right-5 top-2 border-2 px-2 min-h-6 rounded-md hover:bg-accent"
-                >
-                  x
+                  className="absolute right-5 top-2 border-2 px-1 min-h-6 rounded-md hover:bg-accent border-primary">
+
+                  <X size={16}></X>
                 </button>
 
                 Error: {errorMessage}

@@ -61,7 +61,7 @@ export default function DropFile({ MaxSize, ValidFile, FormRegister, SetFormValu
   return (
     <div
       className={`relative flex flex-col items-center justify-center w-full h-64 border-2 border-dashed rounded-xl cursor-pointer select-none transition-colors 
-        ${dragging ? "border-blue-400 bg-blue-400/10" : "border-muted-foreground hover:border-primary-foreground"}`}
+        ${dragging ? "border-blue-400 bg-blue-400/10" : "border-muted-foreground hover:border-primary-foreground hover:shadow-md shadow-primary/20"}`}
       onClick={() => inputRef.current?.click()}
       onDragOver={(e) => {
         e.preventDefault()

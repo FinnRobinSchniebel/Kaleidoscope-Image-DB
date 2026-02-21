@@ -10,7 +10,6 @@ import (
 	"image/png"
 	_ "image/png"
 	"log"
-	"mime/multipart"
 	"os"
 
 	"github.com/ajdnik/imghash"
@@ -117,7 +116,7 @@ func SaveImage(imageToSave *image.Image, path string, title string, id bson.Obje
 
 	OutputFile, err := os.Create(fullPath)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create file: " + fullPath)
+		return "", "", fmt.Errorf("failed to create file: %s", fullPath)
 	}
 
 	switch fileType {
@@ -192,7 +191,24 @@ func SaveGif(imageToSave *gif.GIF, path string, title string, id bson.ObjectID, 
 	return fileName, ihash.String(), nil
 }
 
-func FileHeaderToImage(fileHeader *multipart.FileHeader) (*image.Image, string, error) {
+func getFileTypeFromHeader(MediaSource MediaSource) (string, error) {
+	file, err := MediaSource.Open()
+	if err != nil {
+		return "", fmt.Errorf("could not open uploaded file: %w", err)
+	}
+	defer file.Close()
+
+	_, ftype, err := image.DecodeConfig(file)
+	//Important decodeConfig eats the first bytes of the file reader and does not reset to the start
+	file.Seek(0, 0)
+
+	if err != nil {
+		return "", fmt.Errorf("failed to read image info")
+	}
+	return ftype, nil
+}
+
+func FileHeaderToImage(fileHeader MediaSource) (*image.Image, string, error) {
 	// Open the uploaded file
 	file, err := fileHeader.Open()
 	if err != nil {
@@ -224,23 +240,7 @@ func FileHeaderToImage(fileHeader *multipart.FileHeader) (*image.Image, string, 
 	return &img, format, nil
 }
 
-func getFileTypeFromHeader(fileHeader *multipart.FileHeader) (string, error) {
-	file, err := fileHeader.Open()
-	if err != nil {
-		return "", fmt.Errorf("could not open uploaded file: %w", err)
-	}
-	defer file.Close()
-
-	_, ftype, err := image.DecodeConfig(file)
-	//Important decodeConfig eats the first bytes of the file reader and does not reset to the start
-	file.Seek(0, 0)
-
-	if err != nil {
-		return "", fmt.Errorf("failed to read image info")
-	}
-	return ftype, nil
-}
-func FileHeaderToGif(fileHeader *multipart.FileHeader) (*gif.GIF, error) {
+func FileHeaderToGif(fileHeader MediaSource) (*gif.GIF, error) {
 	// Open the uploaded file
 	file, err := fileHeader.Open()
 	if err != nil {

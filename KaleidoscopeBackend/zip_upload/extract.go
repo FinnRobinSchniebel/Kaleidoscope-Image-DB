@@ -3,6 +3,7 @@ package zipupload
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,18 +11,24 @@ import (
 	"github.com/yeka/zip"
 )
 
-func Unzip(src, dest string) error {
+func Unzip(src, dest string) (string, error) {
 	r, err := zip.OpenReader(src)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() {
 		if err := r.Close(); err != nil {
-			panic(err)
+			log.Print(err)
 		}
 	}()
 
-	os.MkdirAll(dest, 0755)
+	zipBase := strings.TrimSuffix(filepath.Base(src), filepath.Ext(src))
+	extractRoot := filepath.Join(dest, zipBase)
+
+	err = os.MkdirAll(extractRoot, 0755)
+	if err != nil {
+		return "", err
+	}
 
 	// Closure to address file descriptors issue with all the deferred .Close() methods
 	extractAndWriteFile := func(f *zip.File) error {
@@ -35,10 +42,10 @@ func Unzip(src, dest string) error {
 			}
 		}()
 
-		path := filepath.Join(dest, f.Name)
+		path := filepath.Join(extractRoot, f.Name)
 
 		// Check for ZipSlip (Directory traversal)
-		if !strings.HasPrefix(path, filepath.Clean(dest)+string(os.PathSeparator)) {
+		if !strings.HasPrefix(path, filepath.Clean(extractRoot)+string(os.PathSeparator)) {
 			return fmt.Errorf("illegal file path: %s", path)
 		}
 
@@ -67,14 +74,13 @@ func Unzip(src, dest string) error {
 	for _, f := range r.File {
 		err := extractAndWriteFile(f)
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 
-	return nil
+	return extractRoot, nil
 }
 
-// TODO remove unziped
 func RemoveFolder(loc string) error {
 	if loc == "" {
 		return fmt.Errorf("No File path")

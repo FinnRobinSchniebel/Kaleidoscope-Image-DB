@@ -3,12 +3,11 @@ package zipupload
 import (
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
-
-	"github.com/yeka/zip"
 )
 
 type LayerPattern struct {
@@ -47,19 +46,15 @@ func buildLayerPattern(template string) (*LayerPattern, error) {
 }
 
 type ParsedFolderInfo struct {
-	Values   map[string]string
-	FileType string
-	Path     string
-	File     *zip.File
+	Values   map[string]string //parsed values [Key: Filed, value: extracted]
+	FileType string            //file ending with dot (.png)
+	Path     string            //relative to base extracted folder
 }
 
-func ValidateAndParseZip(zipPath string, folderTemplates []string, fileTemplate string, groupingLayer int) (map[string][]ParsedFolderInfo, error) {
-
-	reader, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return nil, err
-	}
-	defer reader.Close()
+// This function makes sure the parsing template and folder structure are the same, and parses it.
+// Note: ParsedFolderInfo Path is relative to base file (root + Path for full)
+// IMPORTANT: No validation of groupinglayer being smaller then groupingLayer. That should have been done at API Validation
+func ValidateAndParseFolder(rootPath string, folderTemplates []string, fileTemplate string, groupingLayer int) (map[string][]ParsedFolderInfo, error) {
 
 	// Build folder patterns
 	folderPatterns := []*LayerPattern{}
@@ -80,73 +75,101 @@ func ValidateAndParseZip(zipPath string, folderTemplates []string, fileTemplate 
 	results := map[string][]ParsedFolderInfo{}
 	// seen := map[string]bool{}
 
+	//get folder itself as a seperate part to add later
+	rootBase := filepath.Base(rootPath)
+
 	//for each zip (1)
-	for _, fileFromZip := range reader.File {
+	err = filepath.WalkDir(rootPath, func(fullPath string, d os.DirEntry, err error) error {
 
-		if fileFromZip.IsEncrypted() {
-			return nil, fmt.Errorf("zip is password protected")
+		// if fileFromZip.IsEncrypted() {
+		// 	return fmt.Errorf("zip is password protected")
+		// }
+		if err != nil {
+			return err
+		}
+		if fullPath == rootPath {
+			return nil
 		}
 
-		isDir := strings.HasSuffix(fileFromZip.Name, "/")
-		if isDir {
-			continue
+		log.Printf("Full Path: %s\nRoot Path: %s\nRoot base: %s\n", fullPath, rootPath, rootBase)
+
+		if d.IsDir() {
+			return nil
 		}
 
-		zipBase := strings.TrimSuffix(filepath.Base(zipPath), ".zip")
+		//path starting from the base directory (not including base, added back using rootBase)
+		relativePath, err := filepath.Rel(rootPath, fullPath)
+		if err != nil {
+			return err
+		}
+		log.Print(relativePath)
 
-		pathParts := strings.Split(strings.TrimSuffix(fileFromZip.Name, "/"), "/")
+		pathParts := strings.Split(relativePath, string(os.PathSeparator))
+		pathParts = append([]string{rootBase}, pathParts...)
 
-		// prepend zip name as level 0
-		parts := append([]string{zipBase}, pathParts...)
+		log.Print("Parts: ")
+		log.Print(pathParts)
 
-		//log.Print(parts)
-
-		//combine upto path part that everything gets grouped by
+		//combine up-to path part to create grouping key (sicne grouping Layer is an index, it is inclusive)
+		//IMPORTANT: No validation of groupinglayer being smaller then groupingLayer. That should have been done at API input Validation
 		var matchPath string
-		for i := range groupingLayer + 1 {
-			matchPath += parts[i]
-			if i > groupingLayer-1 {
+		for i := 0; i <= groupingLayer; i++ {
+			matchPath += pathParts[i]
+			if i < groupingLayer-1 {
 				matchPath += "/"
 			}
 		}
 
-		if filepath.Ext(fileFromZip.Name) == ".txt" {
-			currentPathContent := ParsedFolderInfo{Path: (fileFromZip.Name), FileType: filepath.Ext(fileFromZip.Name), File: fileFromZip}
+		if filepath.Ext(relativePath) == ".txt" {
+			currentPathContent := ParsedFolderInfo{
+				Path:     relativePath,
+				FileType: filepath.Ext(fullPath),
+			}
 			results[matchPath] = append(results[matchPath], currentPathContent)
-			continue
+			return nil
 		}
 
 		RegexMatches := map[string]string{}
 
-		for depth, PathPart := range parts {
+		for depth, part := range pathParts {
 
-			log.Print(PathPart)
+			log.Print(part)
 
-			isFile := depth == len(parts)-1
+			isFile := depth == len(pathParts)-1
 
 			// Normalize PathPartName (strip extension for files)
-			PathPartName := PathPart
+			PathPartName := part
 			if isFile {
 				PathPartName = strings.TrimSuffix(PathPartName, filepath.Ext(PathPartName))
 			}
 
 			if depth < len(folderPatterns) {
-				log.Print(folderPatterns[depth].RawTemplate)
-				err = MatchReg(folderPatterns[depth], PathPartName, RegexMatches)
-			}
-			if err != nil {
-				return results, err
+				log.Print("Folder part Template: " + folderPatterns[depth].RawTemplate)
+				if err = MatchReg(folderPatterns[depth], PathPartName, RegexMatches); err != nil {
+					return err
+				}
 			}
 
 			if isFile {
-				err = MatchReg(filePattern, PathPartName, RegexMatches)
+				if err = MatchReg(filePattern, PathPartName, RegexMatches); err != nil {
+					return err
+				}
 			}
 		}
 
-		currentPathContent := ParsedFolderInfo{Path: (fileFromZip.Name), Values: RegexMatches, FileType: filepath.Ext(fileFromZip.Name), File: fileFromZip}
+		currentPathContent := ParsedFolderInfo{
+			Path:     relativePath,
+			Values:   RegexMatches,
+			FileType: filepath.Ext(fullPath),
+		}
 
 		results[matchPath] = append(results[matchPath], currentPathContent)
+		return nil
+	})
+	if err != nil {
+		return results, err
 	}
+
 	for key := range results {
 		slices.SortFunc(results[key], sortParsedInfo)
 
