@@ -3,23 +3,23 @@ import { protectedAPI } from "./jwt_apis/protected-api-client"
 
 
 export interface FullImageSetData {
-    Id: string
-    Tags: string[]
-    Title: string
-    Authors: string[]
-    Description: string
-    DateAdded: string
-    Sources: SourceInfo[]
-    ActiveImageCount: number
-    TagOverrides: string[]
+  Id: string
+  Tags: string[]
+  Title: string
+  Authors: string[]
+  Description: string
+  DateAdded: string
+  Sources: SourceInfo[]
+  ActiveImageCount: number
+  TagOverrides: string[]
 }
 export interface SourceInfo {
-    Name: string
-    Id: string
-    SourceTitle: string
-    SourceID: string
-    SourceTags: string[]
-    DateCreated: string
+  Name: string
+  Id: string
+  SourceTitle: string
+  SourceID: string
+  SourceTags: string[]
+  DateCreated: string
 }
 
 //for api only
@@ -34,65 +34,68 @@ interface ApiSourceInfo {
 
 interface ApiImageSet {
   _id: string
-  tags: string[]
+  tags?: string[]
   title: string
-  authors: string[]
+  authors?: string[]
   description: string
-  sources: ApiSourceInfo[]  
-  tag_rule_overrides: string[]
+  sources?: ApiSourceInfo[]
+  tag_rule_overrides?: string[]
   activeImageCount: number
   date_added: string
 }
 
 
-interface Props{
-    id: string
-    protectedApi: protectedAPI
+interface Props {
+  id: string
+  protectedApi: protectedAPI
 }
 
 function mapImageSet(api: ApiImageSet): FullImageSetData {
   return {
     Id: api._id,
-    Tags: api.tags,
+    Tags: api.tags ? api.tags : [],
     Title: api.title,
-    Authors: api.authors,
+    Authors: api.authors ? api.authors : [],
     Description: api.description,
-    Sources: api.sources.map(s => ({
-      Name: s.name,
-      Id: s.id,
-      SourceTitle: s.title,
-      SourceID: s.sourceid,
-      SourceTags: s.tags,
-      DateCreated: s.date
-    })),
+    Sources: Array.isArray(api?.sources) ?
+      api.sources.map(s => ({
+        Name: s.name,
+        Id: s.id,
+        SourceTitle: s.title,
+        SourceID: s.sourceid,
+        SourceTags: s.tags,
+        DateCreated: s.date
+      })) 
+      : 
+      [],
     ActiveImageCount: api.activeImageCount,
-    TagOverrides: api.tag_rule_overrides,
+    TagOverrides: api.tag_rule_overrides?  api.tag_rule_overrides : [],
     DateAdded: api.date_added
-  }
+  } satisfies FullImageSetData
 }
 
 
-export default async function GetImageSetData({id, protectedApi} : Props) : Promise<FullImageSetData | undefined> {
+export default async function GetImageSetData({ id, protectedApi }: Props): Promise<FullImageSetData | undefined> {
 
 
 
-    const newRequest: GORequest = {
-        endpoint: `/getimagedata?ids=${id}`,
-        type: "GET",
-        header: { 'Content-Type': 'application/json' },
-    }
+  const newRequest: GORequest = {
+    endpoint: `/getimagedata?ids=${id}`,
+    type: "GET",
+    header: { 'Content-Type': 'application/json' },
+  }
 
 
-    const { status, errorString, response } = await protectedApi.CallProtectedAPI(newRequest)
-    if (status != 200) {
-        console.log(errorString)
-        return 
-    }
-    const apiInfo = response.imagesets?.[0]
-    if (!apiInfo) return undefined
+  const { status, errorString, response } = await protectedApi.CallProtectedAPI(newRequest)
+  if (status != 200) {
+    console.log(errorString)
+    return
+  }
+  const apiInfo = response.imagesets?.[0]
+  if (!apiInfo) return undefined
 
-    return mapImageSet(apiInfo)
-    
+  return mapImageSet(apiInfo)
+
 
 
 }

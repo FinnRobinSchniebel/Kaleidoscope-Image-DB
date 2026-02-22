@@ -28,8 +28,17 @@ output: image pointer, file type, new Scale, error
 func GenerateLowResFromHigh(path string, imageName string, sizeX int, sizeY int) (*image.Image, string, float64, error) {
 
 	imageLink := fmt.Sprintf("%s%s", path, imageName)
-	//open file and check for sizes
-	openFullresImage, err := os.Open(imageLink)
+
+	source := DiskSource{imageLink}
+
+	err := CheckImageSize(source)
+	//image is larger then a 500mb
+	if err != nil {
+		return nil, "", 0, err
+	}
+
+	//open file
+	openFullresImage, err := source.Open()
 	if err != nil {
 		return nil, "", 0, fmt.Errorf("failed to open image from storage")
 	}
@@ -42,11 +51,6 @@ func GenerateLowResFromHigh(path string, imageName string, sizeX int, sizeY int)
 
 	if err != nil {
 		return nil, "", 0, fmt.Errorf("failed to read image info")
-	}
-
-	//image is larger then a 500mb
-	if imageInfo.Height*imageInfo.Width > 500000000/ColorModelBitPerPixelAsInt(imageInfo.ColorModel) {
-		return nil, "", 0, fmt.Errorf("the Image is too large")
 	}
 
 	//abs of inputs
@@ -226,9 +230,10 @@ func FileHeaderToImage(fileHeader MediaSource) (*image.Image, string, error) {
 
 	fmt.Printf("file:  w: %d, h: %d type: %s \n", imageInfo.Width, imageInfo.Height, itype)
 
+	err = CheckImageSize(fileHeader)
 	//image is larger then a 500mb
-	if imageInfo.Height*imageInfo.Width > 500000000/ColorModelBitPerPixelAsInt(imageInfo.ColorModel) {
-		return nil, "", fmt.Errorf("the Image is too large")
+	if err != nil {
+		return nil, "", err
 	}
 
 	// Decode to image.Image
@@ -241,6 +246,13 @@ func FileHeaderToImage(fileHeader MediaSource) (*image.Image, string, error) {
 }
 
 func FileHeaderToGif(fileHeader MediaSource) (*gif.GIF, error) {
+
+	err := CheckImageSize(fileHeader)
+	//image is larger then a 500mb
+	if err != nil {
+		return nil, err
+	}
+
 	// Open the uploaded file
 	file, err := fileHeader.Open()
 	if err != nil {

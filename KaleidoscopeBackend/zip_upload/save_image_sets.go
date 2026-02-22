@@ -2,18 +2,12 @@ package zipupload
 
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 )
 
-type SetAndImage struct {
-	Iset       imageset.ImageSetMongo
-	ImagePaths []string
-}
-
-func SaveImageSets(basePath string, fileIsetData []ImageSetFileBundle, user string) (map[string]imageset.CollisionMap, int, error) {
+func SaveImageSets(basePath string, fileIsetData []ImageSetFileBundle, user string) {
 
 	//Authority to delete the temparary files is delegated to here
 	defer func() {
@@ -37,10 +31,14 @@ func SaveImageSets(basePath string, fileIsetData []ImageSetFileBundle, user stri
 			MedSour[i] = imageset.DiskSource{Path: fullPath}
 		}
 
+		imageset.PrintISet(fileIsetData[setIndex].Iset)
+		log.Print(fileIsetData[setIndex].FilePath)
+
 		hits, iSetDbId, err := imageset.AddImageSet(&fileIsetData[setIndex].Iset, MedSour, user)
 
 		if err.ErrorCode > 299 {
-			return nil, count, fmt.Errorf("%s", err.ErrorString)
+			log.Print(err.ErrorString)
+			return
 		}
 		result[iSetDbId] = hits
 		count++
@@ -50,5 +48,8 @@ func SaveImageSets(basePath string, fileIsetData []ImageSetFileBundle, user stri
 		}
 	}
 
-	return result, count, nil
+	log.Print(result)
+	log.Print(count)
+
+	return
 }

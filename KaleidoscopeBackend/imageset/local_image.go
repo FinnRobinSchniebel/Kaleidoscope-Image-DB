@@ -15,6 +15,15 @@ import (
 
 var BackendVolumeLocation string
 
+func CheckImageSize(m MediaSource) error {
+	//image is larger then a 500mb
+	if m.Size() > 500000000 {
+		return fmt.Errorf("the Image is too large")
+	}
+	return nil
+
+}
+
 func ImageFileName(imageTitle string, imageId bson.ObjectID, setIndex int, fileEnding string) string {
 
 	var fileName string
@@ -89,7 +98,7 @@ func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 	return errList
 }
 
-func CheckImageSetFileDeletionPermisons(entryToDelete ImageSetMongo) error {
+func CheckImageSetFileDeletionPermissions(entryToDelete ImageSetMongo) error {
 	//check if the file paths in the imageset are valid and deletable
 	for index, entry := range entryToDelete.Image {
 		info, err := os.Stat(entryToDelete.Path + entry.Name)

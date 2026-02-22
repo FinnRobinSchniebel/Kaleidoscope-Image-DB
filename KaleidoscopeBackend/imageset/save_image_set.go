@@ -122,9 +122,21 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	//add to DB
 	insertResult, err := Collection.InsertOne(context.Background(), imageSet)
 
+	CreatedSuccessfully := false
+
 	if err != nil {
 		return nil, "", InternalResponse{500, err.Error()}
 	}
+	//In case the creation fails, remove the entry to avoid empty data
+	defer func() {
+		if CreatedSuccessfully {
+			return
+		}
+		err = DeleteImageSetInDB(insertResult.InsertedID.(bson.ObjectID))
+		if err != nil {
+			log.Printf("------ Warning: %s ------", err.Error())
+		}
+	}()
 
 	imageSet.ID = insertResult.InsertedID.(bson.ObjectID)
 
@@ -199,6 +211,8 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 		return nil, "", InternalResponse{500, "Error while updating db entry after saving files"}
 		//return c.Status(500).SendString()
 	}
+	CreatedSuccessfully = true
+
 	log.Println("---Upload complete---")
 	//hash conflict detected
 	if len(hashHits) != 0 {

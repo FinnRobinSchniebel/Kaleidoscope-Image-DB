@@ -77,10 +77,6 @@ func ProcessZip(fileHeader *multipart.FileHeader, ruleLayers []string, fileLayer
 	//log.Print(cont, err)
 	log.Print("Sets Print: ")
 
-	for i := range ISets {
-		imageset.PrintISet(ISets[i].Iset)
-	}
-
 	delegatedCleanup = true
 
 	go SaveImageSets(folderPathName, ISets, user)
@@ -185,7 +181,7 @@ func createImageSetsFromParsedZipData(BaseFolderPath string, parsedDataMap map[s
 
 			var newSource imageset.SourceInfo
 			newSource.Name = parsedDataMap[groupingKey][dataIndex].Values["Source"]
-			newSource.ID = parsedDataMap[groupingKey][dataIndex].Values["ID"]
+			newSource.SourceID = parsedDataMap[groupingKey][dataIndex].Values["ID"]
 			newSource.AuthorID = parsedDataMap[groupingKey][dataIndex].Values["AuthorId"]
 			newSource.Title = parsedDataMap[groupingKey][dataIndex].Values["Title"]
 			newSource.SourceAuthor = Author
