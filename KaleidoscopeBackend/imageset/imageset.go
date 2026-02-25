@@ -44,6 +44,7 @@ type ImageSetMongo struct {
 	Other            string        `json:"other" bson:"other,omitempty" form:"other"`
 	KscopeUserId     string        `json:"kscope_userid" bson:"kscope_userid" form:"kscope_userid"`
 	DateAdded        time.Time     `json:"date_added" bson:"date_added" form:"date_added"`
+	ThumbNail        string        `json:"thumbnail" bson:"thumbnail" form:"thumbnail"` //rendered 256x256 image path
 	// API will send file as well but it will not be placed in the struct: `json: media`
 
 }

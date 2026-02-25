@@ -20,7 +20,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/golang-jwt/jwt/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -76,6 +75,7 @@ func ConnectDB() {
 	authutil.UserCollection = db.Collection(UserDbName)
 	authutil.SessionDb = db.Collection((SessionDbName))
 	tags.TagsDB = db.Collection(tagDbName)
+	imageset.LowResPathAppend = LowResPathAppend
 
 	log.Print("Connected, no issues ---------------------")
 
@@ -102,34 +102,35 @@ func StartAPI() {
 	//authentication
 
 	//imageSet upload/retrieval
-	app.Get("/api/imagesets", AuthSessionToken, GetImageSetById)
-	app.Post("/api/imagesets", AuthSessionToken, PostImageSet)
-	app.Delete("/api/imagesets", AuthSessionToken, DeleteImageSets)
+	app.Get("/api/imagesets", authutil.AuthSessionToken, GetImageSetById)
+	app.Post("/api/imagesets", authutil.AuthSessionToken, PostImageSet)
+	app.Delete("/api/imagesets", authutil.AuthSessionToken, DeleteImageSets)
 	//TODO: Edit imageset api
 	//TODO: MarkForDepetion api
 
 	//zip upload
-	app.Post("/api/uploadZip", AuthSessionToken, UploadZip)
+	app.Post("/api/uploadZip", authutil.AuthSessionToken, UploadZip)
 
 	//authentication
-	app.Post("/api/session/register", RegisterUser)
-	app.Post("/api/session/login", LoginUser)
-	app.Post("/api/session/logout", AuthSessionToken, LogoutUser)
+	app.Post("/api/session/register", authutil.RegisterUser)
+	app.Post("/api/session/login", authutil.LoginUser)
+	app.Post("/api/session/logout", authutil.AuthSessionToken, authutil.LogoutUser)
 	//TODO: User Delete API
 
 	//jwt
-	app.Get("/api/session", NewSessionToken)
-	app.Delete("/api/session", AuthSessionToken, InvalidateRefreshToken)
+	app.Get("/api/session", authutil.NewSessionToken)
+	app.Delete("/api/session", authutil.AuthSessionToken, authutil.InvalidateRefreshToken)
 
 	//ImageRetrieve
-	app.Get("/api/image", AuthSessionToken, GetImageFromID)
-	app.Post("/api/search", AuthSessionToken, FilterForImages)
-	app.Get("/api/getimagedata", AuthSessionToken, ImageInfo)
+	app.Get("/api/image", authutil.AuthSessionToken, GetImageFromID)
+	app.Post("/api/search", authutil.AuthSessionToken, FilterForImages)
+	app.Get("/api/getimagedata", authutil.AuthSessionToken, ImageInfo)
+	app.Get("/api/thumbnail", authutil.AuthSessionToken, imageset.GetThumbnail)
 
 	//tags
-	app.Get("/api/getAllTags", AuthSessionToken, TagRetrieve)
+	app.Get("/api/getAllTags", authutil.AuthSessionToken, TagRetrieve)
 	app.Get("/api/testAutoTag", Testautotag)
-	app.Post("/api/addtag", AuthSessionToken, AddTag)
+	app.Post("/api/addtag", authutil.AuthSessionToken, AddTag)
 
 	//get all author names
 
@@ -153,30 +154,23 @@ func GetImageSetById(c *fiber.Ctx) error {
 	if paramid == nil {
 		return c.Status(400).SendString("Requires an 'ids' param to be sent with the request (eg: ?ids=12345,49325,...)")
 	}
-	//get token for validation
-	sessionToken, _ := authutil.GetSessionTokenFromApiHelper(c)
-	claims, _ := authutil.VerifyToken(sessionToken)
 
-	//check if user can access the images and remove any images that would not be valid
-	iSets, err := imageset.GetFromID(paramid...)
-	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("could nod get imageset Id from the request")
+	userID := c.Locals("UserID").(string)
+	if userID == "" {
+		return c.Status(500).SendString("No user ID provided")
 	}
 
-	var UnauthorizedImageIDs []bson.ObjectID
-	for index := range iSets {
-		if iSets[index].KscopeUserId != claims.UserID && iSets[index].KscopeUserId != "" {
-			UnauthorizedImageIDs = append(UnauthorizedImageIDs, iSets[index].ID)
-			iSets[index] = imageset.ImageSetMongo{}
-		}
+	//check if user can access the images and remove any images that would not be valid
+	iSets, err := imageset.GetFromID(userID, paramid...)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString("could not get imageset from the request: " + err.Error())
 	}
 
 	//clean response to avoid backend info reaching the front end and create api Json response
 	iSets = imageset.CleanImagSetForFrontEnd(iSets...)
 
 	res := fiber.Map{
-		"image_sets":       iSets,
-		"unauthorized_ids": UnauthorizedImageIDs,
+		"image_sets": iSets,
 	}
 
 	if err != nil {
@@ -192,18 +186,9 @@ func PostImageSet(c *fiber.Ctx) error {
 
 	var imageSet *imageset.ImageSetMongo = new(imageset.ImageSetMongo)
 
-	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
-
-	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("could not find the user id in the sent token")
-	}
-
-	//Note: We assume the token was provided a valid user ID and don't check the database.
-
-	claims, err := authutil.VerifyToken(sessionToken)
-	//Note: error check could be removed
-	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("Failed to find claims in valid Verification token")
+	userID := c.Locals("UserID").(string)
+	if userID == "" {
+		return c.Status(500).SendString("No user ID provided")
 	}
 
 	if err := c.BodyParser(imageSet); err != nil {
@@ -229,7 +214,7 @@ func PostImageSet(c *fiber.Ctx) error {
 		MedSour[i] = imageset.MultipartSource{m}
 	}
 
-	hashHits, _, response := imageset.AddImageSet(imageSet, MedSour, claims.UserID)
+	hashHits, _, response := imageset.AddImageSet(imageSet, MedSour, userID)
 
 	return c.Status(response.ErrorCode).JSON(fiber.Map{"error": response.ErrorString, "hash_hits": hashHits})
 }
@@ -252,16 +237,17 @@ func DeleteImageSets(c *fiber.Ctx) error {
 		return c.Status(400).SendString("Requires an 'ids' param to be sent with the request (eg: ?ids=12345,49325,...)")
 	}
 
-	//get token for validation
-	sessionToken, _ := authutil.GetSessionTokenFromApiHelper(c)
-	claims, _ := authutil.VerifyToken(sessionToken)
+	userID := c.Locals("UserID").(string)
+	if userID == "" {
+		return c.Status(500).SendString("No user ID provided")
+	}
 
 	var UnauthorizedImageIDs []bson.ObjectID
 
 	//If user is not admin check for authority to do deletions to avoid users trying to delete other peoples images
-	if !authutil.IsAdmin(claims.UserID) {
+	if !authutil.IsAdmin(userID) {
 		//check if user can access the images and remove any images that would not be valid
-		iSets, err := imageset.GetFromID(paramid...)
+		iSets, err := imageset.GetFromID(userID, paramid...)
 		if err != nil {
 			return c.Status(http.StatusInternalServerError).SendString("Could not get ID from the Request")
 		}
@@ -270,7 +256,7 @@ func DeleteImageSets(c *fiber.Ctx) error {
 		}
 
 		for index := range iSets {
-			if iSets[index].KscopeUserId != claims.UserID {
+			if iSets[index].KscopeUserId != userID {
 				UnauthorizedImageIDs = append(UnauthorizedImageIDs, iSets[index].ID)
 				//Must remove unauthorized items to avoid deletion during next step
 				paramid = append(paramid[:index], paramid[(index+1):]...)
@@ -363,14 +349,12 @@ func UploadZip(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString("Invalid grouping index")
 	}
+	userID := c.Locals("UserID").(string)
+	if userID == "" {
+		return c.Status(500).SendString("No user ID provided")
+	}
 
-	token, err := authutil.GetSessionTokenFromApiHelper(c)
-
-	var claim authutil.JWTClaims
-
-	_, _, _ = new(jwt.Parser).ParseUnverified(token, &claim)
-
-	code, hashHits, skip, errors, err := zipupload.ProcessZip(fileHeader, ruleLayers, fileLayer, GroupingIndex, claim.UserID)
+	code, hashHits, skip, errors, err := zipupload.ProcessZip(fileHeader, ruleLayers, fileLayer, GroupingIndex, userID)
 
 	if err != nil {
 		return c.Status(code).SendString(err.Error())
@@ -385,245 +369,17 @@ func UploadZip(c *fiber.Ctx) error {
 	)
 }
 
-func RegisterUser(c *fiber.Ctx) error {
-
-	username := c.FormValue("username")
-	password := c.FormValue("password")
-	if len(username) < 3 {
-		return errors.New("user Name Not long enough")
-	}
-	if len(password) < 6 {
-		return errors.New("password is not long enough")
-	}
-	_, err := authutil.GetUserByName(username)
-
-	//if quary succeeds return an error
-	if err == nil {
-		return c.Status(400).SendString("username already in use")
-	}
-
-	hashedPassword, err := authutil.HashPassword(password)
-	if err != nil {
-		return c.Status(400).SendString("bad password")
-	}
-
-	newuser := authutil.User{
-		Username:       username,
-		HashedPassword: hashedPassword,
-	}
-
-	log.Println("User: " + newuser.Username + " pass: " + password)
-
-	_, err = authutil.AddUser(newuser)
-
-	if err != nil {
-		return err
-	}
-
-	return c.SendStatus(200)
-}
-
-func LoginUser(c *fiber.Ctx) error {
-
-	username := c.FormValue("username")
-	password := c.FormValue("password")
-	StayLoggedIn := c.QueryBool("stay_logged_in")
-
-	/**** Check valid login ****/
-	var userInfo authutil.User
-	userInfo, err := authutil.GetUserByName(username)
-	if err != nil {
-		//return err
-		log.Println("Login Request: Incorrect user! ")
-		return c.Status(400).SendString("user does not exist")
-	}
-
-	if !authutil.ComparePassword(password, userInfo.HashedPassword) {
-		log.Println("Login Request: Incorrect password! ")
-		return c.Status(400).SendString("username and password did not match")
-	}
-
-	/**** create tokens ****/
-	sessionToken, _, err := authutil.GenerateToken(userInfo, 15*time.Minute)
-	if err != nil {
-		//return err
-		return err
-	}
-
-	//refresh token
-	RefreshToken, token, err := authutil.GenerateToken(userInfo, 48*time.Hour)
-	if err != nil {
-		//return err
-		return err
-	}
-
-	/**** store refresh token ****/
-	err = authutil.StoreRefresh(token, StayLoggedIn)
-	if err != nil {
-		return err
-	}
-
-	/**** send tokens ****/
-	c.Cookie(&fiber.Cookie{
-		Name:    "refresh_token",
-		Value:   RefreshToken,
-		Expires: time.Now().Add(48 * time.Hour),
-		Path:    "/api/session",
-		//Secure:   true,
-		HTTPOnly: true,
-	})
-
-	res := fiber.Map{
-		"session_token": sessionToken,
-	}
-	log.Println("Login Request: Logged in User")
-	return c.Status(200).JSON(res)
-}
-
-func AuthSessionToken(c *fiber.Ctx) error {
-
-	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
-	if err != nil {
-		return c.Status(http.StatusUnauthorized).SendString(err.Error())
-	}
-
-	_, err = authutil.VerifyToken(sessionToken)
-	if err != nil {
-		return c.Status(http.StatusUnauthorized).SendString(err.Error())
-
-	}
-
-	return c.Next()
-}
-
-func NewSessionToken(c *fiber.Ctx) error {
-
-	userRefTok := c.Cookies("refresh_token", "")
-	if userRefTok == "" {
-		return c.Status(http.StatusUnauthorized).SendString("no refresh token given")
-	}
-
-	userRefClaim, err := authutil.VerifyToken(userRefTok)
-	if err != nil {
-		return c.Status(http.StatusUnauthorized).SendString("Invalid token")
-	}
-
-	serverClaim, _, err := authutil.GetRefreshToken(userRefClaim.ID)
-	if err != nil {
-		return c.Status(http.StatusUnauthorized).SendString("no session on server")
-	}
-
-	if serverClaim.Is_revoked {
-		return c.Status(http.StatusUnauthorized).SendString("access revoked")
-	}
-
-	if serverClaim.UserID != userRefClaim.UserID {
-		return c.Status(http.StatusUnauthorized).SendString("invalid session")
-	}
-
-	//creating User without checking db to improve speed (if something passes all of the checks we already assume the request is trustworthy but still user our claim to avoid injection)
-	bId, err := bson.ObjectIDFromHex(serverClaim.UserID)
-	if err != nil {
-		return err
-	}
-
-	sessionToken, _, err := authutil.GenerateToken(authutil.User{Id: bId, Username: serverClaim.Subject}, 15*time.Minute)
-	if err != nil {
-		return err
-	}
-
-	res := fiber.Map{
-		"session_token": sessionToken,
-	}
-
-	log.Println("New session token created for user: " + userRefClaim.UserID)
-
-	return c.Status(200).JSON(res)
-}
-
-// Accepts a single id of a refresh token (Must be admin to do so).
-// If none is given it will try to invalidate the used token
-func InvalidateRefreshToken(c *fiber.Ctx) error {
-
-	userRefTok := c.Cookies("refresh_token", "")
-	claim, _ := authutil.VerifyToken(userRefTok)
-	tokenId := claim.ID
-
-	param := c.Params("id", "")
-
-	if userRefTok == "" {
-		return c.Status(http.StatusBadRequest).SendString("no refresh token provided in request")
-	}
-
-	if param != "" && tokenId != param {
-		bid, err := bson.ObjectIDFromHex(claim.UserID)
-		if err != nil {
-			return c.Status(http.StatusBadRequest).SendString("Failed to turn user ID into a valid ID")
-		}
-		user, err := authutil.GetUserById(bid)
-
-		if err != nil {
-			return c.Status(http.StatusBadRequest).SendString("Invalid user ID in token")
-		}
-		if !user.IsAdmin {
-			return c.Status(http.StatusUnauthorized).SendString("Must be Admin to Invalidate another users Token")
-		}
-		tokenId = param
-	}
-
-	err := authutil.InvalidateRefreshTokenById(tokenId)
-	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("Could not Invalidate token")
-	}
-
-	log.Println("Session token invalidated for user: " + claim.UserID)
-
-	return c.Status(200).SendString("session invalidated successfully")
-}
-
-// Uses the Refresh_token to invalidate the session and sends a new session token that expires immediately
-// Does not send a new refresh token as any check with the old token will fail anyway.
-func LogoutUser(c *fiber.Ctx) error {
-	userRefTok := c.Cookies("refresh_token", "")
-	claim, _ := authutil.VerifyToken(userRefTok)
-	tokenId := claim.ID
-
-	err := authutil.InvalidateRefreshTokenById(tokenId)
-	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("Could not Invalidate token")
-	}
-
-	bId, err := bson.ObjectIDFromHex(claim.UserID)
-	if err != nil {
-		return err
-	}
-
-	sessionToken, _, err := authutil.GenerateToken(authutil.User{Id: bId, Username: claim.Subject}, 0)
-	if err != nil {
-		//return err
-		return err
-	}
-	res := fiber.Map{
-		"session_token": sessionToken,
-	}
-	//"User Loggedout succesfully"
-	log.Printf("User: %s logged out successfully from session %s", claim.UserID, claim.ID)
-
-	return c.Status(200).JSON(res)
-}
-
 /*
 Will take in ONE imagset ID ('image_set_id') and one Index (index) of the image to provide.
-TODO: passing a value 'lowres' with true will result in a low res version of the image being sent
 
 	WARNING: this code assumes that the token has already been validated before running the function
 	Returns an array of images in the 'images' field
 */
 func GetImageFromID(c *fiber.Ctx) error {
 
-	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
-	if err != nil {
-		return c.Status(500).SendString("could not parse token values for access verification")
+	userID := c.Locals("UserID").(string)
+	if userID == "" {
+		return c.Status(500).SendString("No user ID provided")
 	}
 
 	var requestParams struct {
@@ -632,7 +388,7 @@ func GetImageFromID(c *fiber.Ctx) error {
 		LowRes     bool   `json:"lowres" form:"lowres" query:"lowres"`
 	}
 
-	err = c.QueryParser(&requestParams)
+	err := c.QueryParser(&requestParams)
 
 	log.Println(requestParams)
 
@@ -643,25 +399,22 @@ func GetImageFromID(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).SendString("no image set ID provided")
 	}
 
-	var claim authutil.JWTClaims
-	//WARNING Source below
-	_, _, _ = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
-
-	iset, err := imageset.GetFromID(requestParams.ImageSetId)
+	//user is validated in request
+	iset, err := imageset.GetFromID(userID, requestParams.ImageSetId)
 	if err != nil || len(iset) == 0 {
 		return c.Status(http.StatusNotFound).SendString("imageSet could not be found" + err.Error())
 	}
-	if requestParams.IndexList > len(iset[0].Image) || requestParams.IndexList < 0 {
+
+	if requestParams.IndexList >= len(iset[0].Image) || requestParams.IndexList < 0 {
+		if len(iset[0].Image) == 0 {
+			return c.Status(fiber.StatusNotFound).SendString("The imageSet does not contain images. If this was recently uploaded wait for it to be processed")
+		}
 		return c.Status(http.StatusBadRequest).SendString("Index out of bounds")
 	}
 
 	var imageLink string
 
-	if iset[0].KscopeUserId != "" && claim.UserID != iset[0].KscopeUserId {
-		return c.Status(http.StatusUnauthorized).SendString("user does not have permission to view")
-	}
-
-	var retImage *image.Image
+	var retImage image.Image
 	var retGif *gif.GIF
 
 	if requestParams.LowRes {
@@ -670,21 +423,22 @@ func GetImageFromID(c *fiber.Ctx) error {
 		log.Println("res link: " + imageLink)
 		if imageLink == "" || imageLink == " " {
 			retImage, _, _, err = imageset.GenerateLowResFromHigh(iset[0].Path, iset[0].Image[requestParams.IndexList].Name, 720, 0)
+
 			if err != nil {
 				return c.Status(500).SendString("failed to create low res image: " + err.Error())
 			}
 			//todo save image
-			go imageset.AddLowresToSetAndStorage(iset[0].Path+LowResPathAppend, iset[0].Title+"_low", retImage, iset[0], requestParams.IndexList)
+			go imageset.AddLowresToSetAndStorage(iset[0].Path, iset[0].Title+"_low", retImage, iset[0], requestParams.IndexList)
 
 		} else {
-			retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path+LowResPathAppend, imageLink)
+			retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path, imageLink, true)
 			if err != nil {
 				return fmt.Errorf("could not retrieve low res: %s", err)
 			}
 		}
 
 	} else {
-		retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path, iset[0].Image[requestParams.IndexList].Name)
+		retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path, iset[0].Image[requestParams.IndexList].Name, false)
 		if err != nil {
 			return fmt.Errorf("could not retrieve image: %s", err)
 		}
@@ -692,7 +446,7 @@ func GetImageFromID(c *fiber.Ctx) error {
 
 	if retImage != nil {
 		c.Type("png")
-		return png.Encode(c.Response().BodyWriter(), *retImage)
+		return png.Encode(c.Response().BodyWriter(), retImage)
 	} else if retGif != nil {
 		c.Type("gif")
 		return gif.EncodeAll(c.Response().BodyWriter(), retGif)
@@ -708,15 +462,12 @@ func FilterForImages(c *fiber.Ctx) error {
 		return err
 	}
 
-	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
-	if err != nil {
-		return c.Status(500).SendString("could not parse token values for access verification")
+	userID := c.Locals("UserID").(string)
+	if userID == "" {
+		return c.Status(500).SendString("No user ID provided")
 	}
-	var claim authutil.JWTClaims
-	//WARNING Source below
-	_, _, _ = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
 
-	requestParams.User = claim.UserID
+	requestParams.User = userID
 
 	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
 
@@ -749,9 +500,12 @@ func ImageInfo(c *fiber.Ctx) error {
 		objectIDs = append(objectIDs, oid)
 	}
 
-	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
+	userID := c.Locals("UserID").(string)
+	if userID == "" {
+		return c.Status(500).SendString("No user ID provided")
+	}
 
-	result, err := imageset.GetImageInfoFromDB(objectIDs)
+	result, err := imageset.GetImageInfoFromDB(objectIDs, userID)
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
 	}
@@ -761,6 +515,7 @@ func ImageInfo(c *fiber.Ctx) error {
 	return c.JSON(res)
 }
 
+// TODO
 func TagRetrieve(c *fiber.Ctx) error {
 
 	var requestParams struct {
@@ -783,18 +538,18 @@ func TagRetrieve(c *fiber.Ctx) error {
 
 	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
 
-	result, err := imageset.GetImageInfoFromDB(objectIDs)
-	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
-	}
-	res := fiber.Map{
-		"imagesets": result,
-	}
-	return c.JSON(res)
+	// result, err := imageset.GetImageInfoFromDB(objectIDs)
+	// if err != nil {
+	// 	return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
+	// }
+	// res := fiber.Map{
+	// 	"imagesets": result,
+	// }
+	// return c.JSON(res)
+	return nil
 }
 
 /*
-WARNING: this code assumes that the token has already been validated before running the function
 Returns an array of images in the 'images' field
 */
 func AddTag(c *fiber.Ctx) error {
@@ -803,17 +558,14 @@ func AddTag(c *fiber.Ctx) error {
 
 	c.BodyParser(&inputs)
 
-	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
-	if err != nil {
-		return c.Status(500).SendString("could not parse token values for access verification")
+	userID := c.Locals("UserID").(string)
+	if userID == "" {
+		return c.Status(500).SendString("No user ID provided")
 	}
 
-	var claim authutil.JWTClaims
-	//WARNING Source below
-	_, _, _ = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
+	var err error
 
-	fmt.Println(claim.ID)
-	inputs.User, err = bson.ObjectIDFromHex(claim.UserID)
+	inputs.User, err = bson.ObjectIDFromHex(userID)
 	if err != nil {
 		return err
 	}

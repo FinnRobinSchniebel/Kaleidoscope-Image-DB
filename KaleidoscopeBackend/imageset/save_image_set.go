@@ -80,7 +80,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 
 	//clean file paths to avoid unauthorized access
 	imageSet.Image = nil
-	//imageSet.LowImage = nil
+
 	imageSet.KscopeUserId = ""
 
 	//set the author in case of none given to avoid issues with file path creation
@@ -168,7 +168,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 			fileName, ihash, err = SaveGif(igif, imageSet.Path, fileName, imageSet.ID, index)
 
 		} else {
-			var inImage *image.Image
+			var inImage image.Image
 			inImage, _, err = FileHeaderToImage(media[index])
 			if err != nil {
 				return nil, "", InternalResponse{500, err.Error()}

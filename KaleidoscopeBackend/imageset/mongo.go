@@ -1,12 +1,11 @@
 package imageset
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"context"
 	"errors"
 	"fmt"
-	"image"
 	"log"
-	"os"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -77,7 +76,8 @@ func findOverlappingHashes(hash string, userID string) ([]CollisionResponsePair,
 	return idList, nil
 }
 
-func GetFromID(id ...string) ([]ImageSetMongo, error) {
+// Validates user credentials
+func GetFromID(usr string, id ...string) ([]ImageSetMongo, error) {
 
 	var IdBson []bson.ObjectID
 
@@ -99,8 +99,21 @@ func GetFromID(id ...string) ([]ImageSetMongo, error) {
 			log.Println("Failed to find file!")
 			return nil, err
 		}
+		//check access
+		if entry.KscopeUserId != usr && entry.KscopeUserId != "" {
+			//if denied  and not admin, error
+			if !authutil.IsAdmin(usr) {
+				log.Printf("User access denied: user %s, accessing %s", usr, ObjId.Hex())
+				return nil, fmt.Errorf("User access denied")
+			}
+		}
+
 		iSets = append(iSets, entry)
 	}
+	if len(iSets) == 0 {
+		return nil, fmt.Errorf("Unknown error: Item was found but result was empty")
+	}
+
 	return iSets, nil
 }
 
@@ -150,45 +163,6 @@ func DeleteImageSetInDB(id bson.ObjectID) error {
 	log.Print("---delete complete--- ")
 
 	return nil
-}
-
-/*This function accepts a low res version of an image and stores it to the local storage for future retrieval */
-func AddLowresToSetAndStorage(pathWithLowAppend string, name string, img *image.Image, imageset ImageSetMongo, index int) {
-
-	if index < 0 || index > len(imageset.Image) {
-		log.Println("Add Lowres: index out of bounds")
-		return
-	}
-	err := os.MkdirAll(pathWithLowAppend, 0700)
-	if err != nil {
-		log.Println("Add Lowres failed to make dir: " + err.Error())
-		return
-	}
-
-	filename, _, err := SaveImage(img, pathWithLowAppend, name, imageset.ID, index, "png")
-	if err != nil {
-		log.Println("Add Lowres: could not save image: " + err.Error())
-		return
-	}
-
-	filter := bson.M{"_id": imageset.ID}
-
-	update := bson.M{
-		"$set": bson.M{
-			fmt.Sprintf("images.%d.low_images", index): filename,
-		},
-	}
-	result, err := Collection.UpdateOne(context.Background(), filter, update)
-	if err != nil || result.ModifiedCount == 0 {
-		err = os.Remove(fmt.Sprintf("%s%s", pathWithLowAppend, name))
-		if err != nil {
-			log.Println("Add Lowres: could not make changes to db...\n COULD NOT remove image from disk")
-		} else {
-			log.Println("Add Lowres: could not make changes to db...\n removed image from disk")
-		}
-		return
-	}
-
 }
 
 /*This function builds the pipeline use by the SearchDBForImages function to query the DB*/
@@ -264,7 +238,7 @@ func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
 		{Key: "activeImageCount", Value: bson.D{
 			{Key: "$size", Value: bson.D{
 				{Key: "$filter", Value: bson.D{
-					{Key: "input", Value: "$images"},
+					{Key: "input", Value: bson.D{{Key: "$ifNull", Value: bson.A{"$images", bson.A{}}}}},
 					{Key: "as", Value: "img"},
 					{Key: "cond", Value: bson.D{{Key: "$eq", Value: bson.A{"$$img.active", true}}}},
 				}},
@@ -329,7 +303,7 @@ func SearchDBForImages(params SearchParams) (bson.M, error) {
 }
 
 /*Provides display info for the image you associated with the image ID*/
-func GetImageInfoFromDB(paramIDs []bson.ObjectID) ([]bson.M, error) {
+func GetImageInfoFromDB(paramIDs []bson.ObjectID, userID string) ([]bson.M, error) {
 
 	cursor, err := Collection.Find(context.Background(),
 		bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: paramIDs}}}},
@@ -342,6 +316,7 @@ func GetImageInfoFromDB(paramIDs []bson.ObjectID) ([]bson.M, error) {
 			{Key: "date_added", Value: 1},         // keep dateAdded
 			{Key: "sources", Value: 1},            // keep sources
 			{Key: "tag_rule_overrides", Value: 1}, // keep tag_rule_overrides
+			{Key: "kscope_userid", Value: 1},      //keep user id for validation
 			// count of images where active = true
 			{Key: "activeImageCount", Value: bson.D{
 				{Key: "$size", Value: bson.D{
@@ -361,9 +336,40 @@ func GetImageInfoFromDB(paramIDs []bson.ObjectID) ([]bson.M, error) {
 	defer cursor.Close(context.Background())
 
 	var results []bson.M
+
 	if err := cursor.All(context.Background(), &results); err != nil {
 		return nil, err
 	}
 
-	return results, nil
+	var filtered []bson.M
+	hasCheckedAdmin := false
+	isAdmin := false
+
+	for _, doc := range results {
+
+		// Safely read the field
+		imageUserID, ok := doc["kscope_userid"].(string)
+
+		//skip if access is denied
+		if ok && imageUserID != "" && imageUserID != userID {
+			//only checks db once and only when needed (lazy)
+			if !hasCheckedAdmin {
+				hasCheckedAdmin = true
+				isAdmin = authutil.IsAdmin(userID)
+			}
+			if isAdmin {
+				filtered = results
+				break
+			}
+			continue
+		}
+
+		filtered = append(filtered, doc)
+	}
+
+	for i, _ := range results {
+		delete(results[i], "kscope_userid")
+	}
+
+	return filtered, nil
 }

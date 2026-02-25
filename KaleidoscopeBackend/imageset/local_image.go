@@ -15,6 +15,8 @@ import (
 
 var BackendVolumeLocation string
 
+var LowResPathAppend = "low/"
+
 func CheckImageSize(m MediaSource) error {
 	//image is larger then a 500mb
 	if m.Size() > 500000000 {
@@ -31,9 +33,9 @@ func ImageFileName(imageTitle string, imageId bson.ObjectID, setIndex int, fileE
 	imageIDString := cleanInvalidFileSymbols(imageId.Hex())
 	//test if file name is to long
 	if nameLen := len(imageTitle + "_" + imageIDString); nameLen > 240 {
-		fileName = imageTitle[0:nameLen-(nameLen-240)] + imageIDString
+		fileName = fmt.Sprintf("%s_%s", imageTitle[0:nameLen-(nameLen-240)], imageIDString)
 	} else {
-		fileName = imageTitle + imageIDString
+		fileName = fmt.Sprintf("%s_%s", imageIDString, imageTitle)
 	}
 
 	// db folder/ first_author / "File Name"?_id_"image set index".format
@@ -41,8 +43,16 @@ func ImageFileName(imageTitle string, imageId bson.ObjectID, setIndex int, fileE
 	return fileName
 }
 
-func RetrieveLocalImage(path string, name string) (*image.Image, *gif.GIF, error) {
-	f, err := os.Open(fmt.Sprintf("%s%s", path, name))
+func RetrieveLocalImage(path string, name string, low bool) (image.Image, *gif.GIF, error) {
+
+	var FullPath string
+	if low {
+		FullPath = fmt.Sprintf("%s%s%s", path, LowResPathAppend, name)
+	} else {
+		FullPath = fmt.Sprintf("%s%s", path, name)
+	}
+
+	f, err := os.Open(FullPath)
 	if err != nil {
 		log.Printf("failed to open: %s", fmt.Sprintf("%s%s", path, name))
 		return nil, nil, fmt.Errorf("no file found")
@@ -66,7 +76,7 @@ func RetrieveLocalImage(path string, name string) (*image.Image, *gif.GIF, error
 		}
 		return nil, retgif, nil
 	} else {
-		return &img, nil, nil
+		return img, nil, nil
 	}
 
 }
@@ -89,7 +99,7 @@ func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 			continue
 		}
 
-		err := os.Remove(path + entry.LowResName)
+		err := os.Remove(path + LowResPathAppend + entry.LowResName)
 		if err != nil {
 			fmt.Printf("Failed to Find File: %s\n", entry)
 			errList = errors.Join(errList, err)
