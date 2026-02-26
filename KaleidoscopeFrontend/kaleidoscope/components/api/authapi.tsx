@@ -1,6 +1,6 @@
 "use client"
 
-import { apiSendRequest, AUTH_LOGIN, GORequest } from "@/components/api/apicaller"
+import { apiSendRequest, AUTH_LOGIN, AUTH_REGISTER, GORequest } from "@/components/api/apicaller"
 import { permanentRedirect, redirect } from "next/navigation"
 import { jwtDecode, JwtPayload } from "jwt-decode";
 import {JWTLayout} from "./jwt_apis/protected-api-client"
@@ -17,13 +17,32 @@ interface Args {
     password : string
 }
 
+export async function CreateUser({username, password} : Args): Promise<{code : number, text: string}>{
+    const request : GORequest = {
+        endpoint: `${AUTH_REGISTER}?username=${username}&password=${password}` ,
+        type: 'POST',
+        header: {'Content-Type': 'application/json'},
+        
+    }
+    
+    var result = await apiSendRequest(request)
+     
+    if (result.status >=200 && result.status < 300) {
+        return {code: result.status, text: "all good"}
+    }
+    
+    return {code: result.status, text: result.errorString ?? ''}
+}
+
+
+
 export async function LoginUser({username, password} : Args): Promise<{code : number, text: string}>{
     
     //const params = {username: username, password : password}
 
     const request : GORequest = {
         endpoint: `${AUTH_LOGIN}?username=${username}&password=${password}` ,
-        type: 'Post',
+        type: 'POST',
         header: {'Content-Type': 'application/json'},
         
     }
@@ -49,7 +68,7 @@ export async function LoginUser({username, password} : Args): Promise<{code : nu
 export async function NewSessionToken() : Promise<number | undefined>{
     const request : GORequest = {
         endpoint: `/session` ,
-        type: 'Get',
+        type: 'GET',
         header: {'Content-Type': 'application/json'},
         
     }

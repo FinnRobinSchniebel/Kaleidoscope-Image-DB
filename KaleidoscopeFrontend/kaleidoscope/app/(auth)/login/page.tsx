@@ -3,13 +3,15 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@radix-ui/react-label";
+
 import { use, useEffect, useState } from "react";
-import {LoginUser, NewSessionToken, TestLogin} from "@/components/api/authapi"
+import { LoginUser, NewSessionToken, TestLogin } from "@/components/api/authapi"
 import LoginAlert from "./loginalert"
 import { redirect, useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import { ReadToken, ServerRedirect } from "@/components/api/get_variables_server";
+import { Label } from "@/components/ui/label";
+import Link from "next/link";
 
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -25,37 +27,37 @@ export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
-  const [alertBox, setAlertBox] = useState({code: 0, text: ''});
+  const [alertBox, setAlertBox] = useState({ code: 0, text: '' });
 
   const handleChangeUser = (event: React.ChangeEvent<HTMLInputElement>) => {
     setUsername(event.target.value);
   };
-   const handleChangePass = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChangePass = (event: React.ChangeEvent<HTMLInputElement>) => {
     setPassword(event.target.value);
   };
 
-  const handleSubmit = async () =>{
-    const pair = await (LoginUser({username, password}))
+  const handleSubmit = async () => {
+    const pair = await (LoginUser({ username, password }))
 
-    setAlertBox({code:pair.code, text: pair.text})
+    setAlertBox({ code: pair.code, text: pair.text })
     //await sleep(500)
 
-    if (pair.code == 200){
+    if (pair.code == 200) {
 
       router.push(searchParams.get('from') ?? '/')
       //ServerRedirect()
     }
-   
+
   }
-  
-  useEffect( () => {
-    const t = async ()=>{  
+
+  useEffect(() => {
+    const t = async () => {
       const result = await TestLogin()
-      if(result ){
+      if (result) {
         const redirectpath = searchParams.get('from')
         router.push(redirectpath ?? "/")
       }
-        
+
     }
     t()
   })
@@ -68,7 +70,11 @@ export default function Login() {
           Enter your username below to login to your account
         </CardDescription>
         <CardAction>
-          <Button variant="link" className="text-base text-blue-600 underline hover:decoration-3 ">Sign Up</Button>
+          <Button asChild variant="link" className="text-base text-blue-600 underline hover:decoration-3 "  >
+            <Link href="signup">
+              Create an account
+            </Link>
+          </Button>
         </CardAction>
       </CardHeader>
       <CardContent>
@@ -94,12 +100,12 @@ export default function Login() {
                   Forgot your password?
                 </a>
               </div>
-              <Input 
-                id="password" 
-                type="password" 
-                onChange={handleChangePass} 
+              <Input
+                id="password"
+                type="password"
+                onChange={handleChangePass}
                 placeholder="password"
-                required 
+                required
               />
             </div>
           </div>
@@ -108,7 +114,7 @@ export default function Login() {
       <CardFooter className="flex-col gap-2">
         <Button type="submit" className="w-full" onClick={handleSubmit} >
           Login
-        </Button>     
+        </Button>
         <LoginAlert code={alertBox.code} text={alertBox.text} />
       </CardFooter>
     </Card>

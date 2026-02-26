@@ -38,6 +38,7 @@ export interface GORequest {
   body?: string | undefined | object,
   media?: File[] | undefined
   formData?: FormData
+  
 }
 
 type FetchResponse =
@@ -84,7 +85,7 @@ export async function apiSendRequest(request: GORequest): Promise<{ status: numb
     if (!response.ok) {
       throw new GoApiError(response.status, await response.text());
     }
-    //check of blob
+    //check for blob
     const contentType = response.headers.get("content-type") || "";
 
     let responseBody: FetchResponse

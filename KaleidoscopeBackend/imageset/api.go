@@ -1,12 +1,10 @@
 package imageset
 
 import (
-	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"image/png"
 	"net/http"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 func GetThumbnail(c *fiber.Ctx) error {
@@ -17,21 +15,14 @@ func GetThumbnail(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).SendString("no image set ID provided")
 	}
 
-	sessionToken, err := authutil.GetSessionTokenFromApiHelper(c)
-	if err != nil {
-		return c.Status(500).SendString("could not parse token values for access verification")
+	userID := c.Locals("UserID").(string)
+	if userID == "" {
+		return c.Status(500).SendString("No user ID provided")
 	}
 
-	var claim authutil.JWTClaims
-	//does not validate token (use middleware before this function)
-	_, _, err = new(jwt.Parser).ParseUnverified(sessionToken, &claim)
-	if err != nil {
-		return err
-	}
-
-	iset, err := GetFromID(IsetID)
+	iset, err := GetFromID(userID, IsetID)
 	if err != nil || len(iset) == 0 {
-		return c.Status(http.StatusNotFound).SendString("imageSet could not be found" + err.Error())
+		return c.Status(http.StatusNotFound).SendString("imageSet could not be found: " + err.Error())
 	}
 
 	//

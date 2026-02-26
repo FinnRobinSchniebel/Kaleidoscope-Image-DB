@@ -8,11 +8,12 @@ import { ForwardRefExoticComponent, RefAttributes } from "react";
 
 
 export interface MenuButtonProps {
-  Icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>
-  Label: string
+  icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>
+  label: string
+  loc : string
 }
 
-export default function MenuButton({ Icon, Label }: MenuButtonProps) {
+export default function MenuButton({ icon: Icon, label: Label, loc }: MenuButtonProps) {
 
   const ButtonCss = "lg:grid grid-col justify-items-center bg-accent p-4"
   const pathname = usePathname()
@@ -21,7 +22,7 @@ export default function MenuButton({ Icon, Label }: MenuButtonProps) {
 
   return (
     <Button asChild variant="outline" className={`${ButtonCss}`}>
-      <Link href={`${pathname}/upload_from_file`}>
+      <Link href={`${pathname}${loc}`}>
         <Icon className='xl:size-10 size-8' />
         <div>{Label}</div>
       </Link>

@@ -125,6 +125,7 @@ func StartAPI() {
 	app.Get("/api/image", authutil.AuthSessionToken, GetImageFromID)
 	app.Post("/api/search", authutil.AuthSessionToken, FilterForImages)
 	app.Get("/api/getimagedata", authutil.AuthSessionToken, ImageInfo)
+
 	app.Get("/api/thumbnail", authutil.AuthSessionToken, imageset.GetThumbnail)
 
 	//tags

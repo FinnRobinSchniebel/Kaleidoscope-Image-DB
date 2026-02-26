@@ -36,7 +36,7 @@ export default function LoginAlert({ code, text }: vars) {
     return(
       <Alert variant={"destructive"}>
         <AlertCircleIcon/>
-        <AlertTitle>Username and Password don't Match</AlertTitle>
+        <AlertTitle>{text}</AlertTitle>
         <AlertDescription>Please try again.</AlertDescription>
       </Alert>
     )

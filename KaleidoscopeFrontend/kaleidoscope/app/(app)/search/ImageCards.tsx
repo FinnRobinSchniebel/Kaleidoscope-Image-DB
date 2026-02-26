@@ -1,6 +1,6 @@
 'use client'
 
-import { imageAPI, imageRequest } from "@/components/api/image-api";
+import { imageAPI, imageRequest, thumbNailAPI } from "@/components/api/image-api";
 import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider";
 import { searchAPI } from "@/components/api/jwt_apis/search-api";
@@ -38,7 +38,7 @@ export default function ImageCard(cardInfo: Card) {
     let cancelled = false
     const t = async () => {
 
-      const url = await imageAPI(request)
+      const url = await thumbNailAPI(request)
       if (cancelled) {
         URL.revokeObjectURL(url)
         return

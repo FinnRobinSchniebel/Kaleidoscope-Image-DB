@@ -41,3 +41,27 @@ export async function imageAPI(request: imageRequest): Promise<string> {
 
   return URL.createObjectURL(response)
 }
+
+
+
+
+export async function thumbNailAPI(request: imageRequest): Promise<string> {
+
+
+  const newRequest: GORequest = {
+    endpoint: `/thumbnail?id=${request.ID}`,
+    type: "GET",
+    header: { 'Content-Type': 'application/json' },
+    
+  }
+
+  const {status, errorString, response} = await request.protectedApiRef.CallProtectedAPI(newRequest)
+  if (status != 200){
+    console.warn("Thumbnail fetch failed: ",errorString)
+    return ""
+  }
+
+  const blob = response instanceof Blob ? response : new Blob([response], { type: 'image/png' })
+
+  return URL.createObjectURL(blob)
+}

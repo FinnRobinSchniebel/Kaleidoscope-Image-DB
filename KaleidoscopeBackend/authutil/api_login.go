@@ -37,7 +37,7 @@ func RegisterUser(c *fiber.Ctx) error {
 		HashedPassword: hashedPassword,
 	}
 
-	log.Println("User: " + newuser.Username + " pass: " + password)
+	log.Println("New User: " + newuser.Username)
 
 	_, err = AddUser(newuser)
 
