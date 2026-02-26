@@ -10,21 +10,33 @@ import { ForwardRefExoticComponent, RefAttributes } from "react";
 export interface MenuButtonProps {
   icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>
   label: string
-  loc : string
+  loc: string
+  style?: string
+  func?: () => void
 }
 
-export default function MenuButton({ icon: Icon, label: Label, loc }: MenuButtonProps) {
+export default function MenuButton({ icon: Icon, label, loc, style, func }: MenuButtonProps) {
 
   const ButtonCss = "lg:grid grid-col justify-items-center bg-accent p-4"
   const pathname = usePathname()
 
-  console.log(Label)
+
+  if (loc == "") {
+    return (
+      <Button variant="outline" className={`${ButtonCss} ${style}`} onClick={func}>
+
+        <Icon className='xl:size-10 size-8' />
+        <div>{label}</div>
+
+      </Button>
+    )
+  }
 
   return (
-    <Button asChild variant="outline" className={`${ButtonCss}`}>
+    <Button asChild variant="outline" className={`${ButtonCss} ${style}`}>
       <Link href={`${pathname}${loc}`}>
         <Icon className='xl:size-10 size-8' />
-        <div>{Label}</div>
+        <div>{label}</div>
       </Link>
     </Button>
   )

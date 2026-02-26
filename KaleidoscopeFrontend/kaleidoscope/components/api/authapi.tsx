@@ -1,9 +1,9 @@
 "use client"
 
-import { apiSendRequest, AUTH_LOGIN, AUTH_REGISTER, GORequest } from "@/components/api/apicaller"
+import { apiSendRequest, AUTH_LOGIN, AUTH_LOGOUT, AUTH_REGISTER, GORequest } from "@/components/api/apicaller"
 import { permanentRedirect, redirect } from "next/navigation"
 import { jwtDecode, JwtPayload } from "jwt-decode";
-import {JWTLayout} from "./jwt_apis/protected-api-client"
+import {JWTLayout, protectedAPI} from "./jwt_apis/protected-api-client"
 import Cookies from "js-cookie"
 import { TestToken } from "./get_variables_server";
 
@@ -90,4 +90,32 @@ export async function TestLogin() : Promise<boolean>{
     const result = await NewSessionToken()
 
     return result == 200
+}
+
+
+export async function LogOutUser(protApi: protectedAPI) : Promise<number>{
+    const request : GORequest = {
+        endpoint: `${AUTH_LOGOUT}` ,
+        type: 'POST',
+        header: {'Content-Type': 'application/json'},
+        
+    }
+    
+    var result = await protApi.CallProtectedAPI(request)
+
+    if (result.status != 200){
+        return result.status
+    }
+    Cookies.remove("session_token")
+    Cookies.remove("refresh_token")
+    protectedAPI.token = ""
+     
+    if (result.status >=200 && result.status < 300) {
+        return result.status
+    }
+    console.log("logged out")
+    return result.status
+
+
+
 }
