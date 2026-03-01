@@ -5,7 +5,7 @@ import { useEffect } from "react";
 
 import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
 import { useInView } from 'react-intersection-observer';
-import SearchResults from './SearchResults';
+import SearchResults from '../../../components/api/SearchResults';
 import Image from 'next/image';
 import { Dialog } from '@/components/ui/dialog';
 
@@ -76,9 +76,9 @@ export default function LoadSearchResults(props: Props) {
   return (
     <>
       <section>
-        <ul className="w-full flex flex-wrap pb-[15%] lg:pb-[6.5%] xl:pb-[4%] justify-center">
+        <ul className="w-full grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-1 pb-[15%] lg:pb-[6.5%] xl:pb-[4%] justify-center px-4">
           {ImageSets.map((item: SetData, index: number) => (
-            <ImageCard key={"card-" + item._id} id={item._id} index={index} Tags={item.tags} OpenImageSet={openDialog} />
+            <ImageCard key={"card-" + item._id} id={item._id} index={index} Tags={item.tags} imageCount={item.activeImageCount} OpenImageSet={openDialog} />
           ))}
         </ul>
       </section>

@@ -1,5 +1,6 @@
 import { LoadingImageCard } from "@/app/(app)/search/ImageCards"
-import { imageAPI, imageRequest } from "@/components/api/image-api"
+import { imageAPI, imageRequest, ImageRequestToString } from "@/components/api/image-api"
+import { imageCache } from "@/components/api/ImageCaching"
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider"
 import { CarouselItem } from "@/components/ui/carousel"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -22,7 +23,7 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
 
   const [image, setImage] = useState<string | null>(null)
 
-  
+
 
   let load = useRef(false)// (distance == 0 ? Math.abs(currentIndex - index) <= 5 : distance > 5 ? false : currentIndex == index) || currentIndex
 
@@ -37,13 +38,13 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
 
   const shouldLoad = () => {
 
-    if(load && distance < 10){
+    if (load && distance < 10) {
       return true
     }
-    if(distance > 1 && index == currentIndex){
+    if (distance > 1 && index == currentIndex) {
       return true
     }
-    if(distance == 1){
+    if (distance == 1) {
       return true
     }
 
@@ -66,16 +67,11 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
 
     const t = async () => {
 
-      const url = await imageAPI(request)
-      if (cancelled) {
-        URL.revokeObjectURL(url)
-        return
-      }
+      const requestName = ImageRequestToString(request)
 
-      setImage(prev => {
-        if (prev) URL.revokeObjectURL(prev)
-        return url
-      })
+      const url = await imageCache.get(requestName, async () => {return await imageAPI(request) }, "")
+
+      setImage(url)
     }
     t()
 
@@ -88,7 +84,7 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
   if (image) {
     return (
 
-      <img src={image} alt="'/random%20hexa.png'" className="h-full object-contain justify-center items-center" />
+      <img src={image} alt="/random%20hexa.png" className="h-full object-contain justify-center items-center" />
 
     )
   }

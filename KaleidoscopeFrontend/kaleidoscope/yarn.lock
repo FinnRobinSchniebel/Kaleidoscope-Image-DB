@@ -2191,6 +2191,7 @@ __metadata:
     embla-carousel-react: "npm:^8.6.0"
     js-cookie: "npm:^3.0.5"
     jwt-decode: "npm:^4.0.0"
+    lru-cache: "npm:^11.2.6"
     lucide-react: "npm:^0.545.0"
     next: "npm:^16.0.8"
     radix-ui: "npm:^1.4.3"
@@ -2314,6 +2315,13 @@ __metadata:
     lightningcss-win32-x64-msvc:
       optional: true
   checksum: 10c0/1e1ad908f3c68bf39d964a6735435a8dd5474fb2765076732d64a7b6aa2af1f084da65a9462443a9adfebf7dcfb02fb532fce1d78697f2a9de29c8f40f09aee3
+  languageName: node
+  linkType: hard
+
+"lru-cache@npm:^11.2.6":
+  version: 11.2.6
+  resolution: "lru-cache@npm:11.2.6"
+  checksum: 10c0/73bbffb298760e71b2bfe8ebc16a311c6a60ceddbba919cfedfd8635c2d125fbfb5a39b71818200e67973b11f8d59c5a9e31d6f90722e340e90393663a66e5cd
   languageName: node
   linkType: hard
 

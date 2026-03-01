@@ -98,17 +98,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	var err error
 
 	/**		Test FilePath	 **/
-	_, err = os.Stat(BackendVolumeLocation)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Printf("File or directory does not exist at: %s\n", BackendVolumeLocation)
-		} else {
-			fmt.Printf("Error accessing path %s: %v\n", BackendVolumeLocation, err)
-		}
-	} else {
-		fmt.Printf("File or directory exists at: %s\n", BackendVolumeLocation)
-	}
-
+	err = testFilePath(BackendVolumeLocation)
 	//determine folder path for images and add the path to the imagset before first insert
 
 	imageSet.Path, err = MakeFileDirectoryFromAuthor(imageSet.Authors[0])
@@ -196,6 +186,9 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 
 	}
 
+	//Note: could be go functioned but that may create a race condition if image is viewed before the save finishes
+	CreateThumbnailForNew(imageSet.Path, imageSet.Image[0].Name, imageSet.ID)
+
 	log.Print("Files Uploaded")
 
 	update := bson.M{"$set": imageSet}
@@ -221,4 +214,30 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	}
 
 	return nil, imageSet.ID.Hex(), InternalResponse{201, "Ok, Added to DB"}
+}
+
+func CreateThumbnailForNew(path string, name string, id bson.ObjectID) {
+
+	newimg, _, _, err := GenerateLowResFromHigh(path, name, 256, 265)
+	if err != nil {
+		log.Println(err)
+	}
+	SaveThumbnailLocal(path, name, newimg, id, 0)
+}
+
+func testFilePath(BackendVolumeLocation string) error {
+	_, err := os.Stat(BackendVolumeLocation)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("File or directory does not exist at: %s\n", BackendVolumeLocation)
+			return err
+		} else {
+			fmt.Printf("Error accessing path %s: %v\n", BackendVolumeLocation, err)
+			return err
+		}
+	} else {
+		fmt.Printf("File or directory exists at: %s\n", BackendVolumeLocation)
+	}
+	return nil
+
 }

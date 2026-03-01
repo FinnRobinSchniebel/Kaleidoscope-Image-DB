@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { ScrollArea } from "@/components/ui/scroll-area"
-import ImageCard, { LoadingImageCard } from "./ImageCards"
+import ImageCard, { LoadingImageCard } from "../../app/(app)/search/ImageCards"
 import { Fragment, Suspense, useEffect } from "react";
 import { Separator } from "@radix-ui/react-separator";
 import { searchAPI, SearchRequest, SetData } from "@/components/api/jwt_apis/search-api";

@@ -14,7 +14,7 @@ import (
 )
 
 // thumbnails are considered a lowres Path for purposes of folder navigation
-func SaveThumbNailLocal(path string, name string, img image.Image, ImageSetID bson.ObjectID, generatedFromIndex int) {
+func SaveThumbnailLocal(path string, name string, img image.Image, ImageSetID bson.ObjectID, generatedFromIndex int) {
 
 	lowresFullPath := path + LowResPathAppend
 

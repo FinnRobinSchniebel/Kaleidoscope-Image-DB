@@ -47,7 +47,6 @@ export default function ImageSetViewer({ set, distance}: Props) {
       SetImageSetInfo(imageInfo)
     }
     getData()
-    console.log(`distance: ${distance}`)
 
   }, [set])
 

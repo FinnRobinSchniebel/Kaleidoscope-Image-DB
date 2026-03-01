@@ -41,7 +41,7 @@ func GetThumbnail(c *fiber.Ctx) error {
 		}
 
 		//save async
-		go SaveThumbNailLocal(iset[0].Path, iset[0].Image[0].Name, img, iset[0].ID, 0)
+		go SaveThumbnailLocal(iset[0].Path, iset[0].Image[0].Name, img, iset[0].ID, 0)
 
 		//TODO: Change to webP
 		c.Type("png")

@@ -44,7 +44,7 @@ export async function searchAPI(request: SearchRequest): Promise<{ status: numbe
 
   const newRequest: GORequest = {
     endpoint: "/search",
-    type: "Post",
+    type: "POST",
     header: { 'Content-Type': 'application/json' },
     body: body
   }

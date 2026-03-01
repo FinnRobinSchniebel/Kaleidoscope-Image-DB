@@ -1,14 +1,17 @@
 'use client'
 
-import { imageAPI, imageRequest, thumbNailAPI } from "@/components/api/image-api";
+import { imageAPI, imageRequest, ImageRequestToString, thumbNailAPI } from "@/components/api/image-api";
+import { imageCache } from "@/components/api/ImageCaching";
 import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider";
 import { searchAPI } from "@/components/api/jwt_apis/search-api";
 import ImageSetViewer from "@/components/KscopeSharedUI/ImageSet/ImageSetViewer";
 import VerticalImageSetCarousel from "@/components/KscopeSharedUI/ImageSet/VerticalSetCarousel";
 import { DialogTrigger } from "@/components/ui/dialog";
+import { Item } from "@/components/ui/item";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+
 import Image from "next/image";
 import { Suspense, use, useEffect, useMemo, useState } from "react";
 
@@ -16,6 +19,7 @@ interface Card {
   id: string;
   Tags?: string[];
   index: number
+  imageCount: number
   OpenImageSet : (i: number)=> void 
 }
 
@@ -38,16 +42,13 @@ export default function ImageCard(cardInfo: Card) {
     let cancelled = false
     const t = async () => {
 
-      const url = await thumbNailAPI(request)
-      if (cancelled) {
-        URL.revokeObjectURL(url)
-        return
-      }
+      const requestName = `${request.ID}-thumb`
 
-      setImage(prev => {
-        if (prev) URL.revokeObjectURL(prev)
-        return url
-      })
+      const url = await imageCache.get(requestName, async ()=>{const {blob, err} = await thumbNailAPI(request); return {blob: blob, err: err}} , "")
+
+      
+
+      setImage(url)
     }
     t()
 
@@ -61,9 +62,10 @@ export default function ImageCard(cardInfo: Card) {
 
   if (image != "") {
     return (
-      <li key={"li-card-" + cardInfo.id}>
-        <button onClick={() => {cardInfo.OpenImageSet(cardInfo.index)}} key={"card-button-" + cardInfo.id} className="relative size-60 md:size-80 lg:size-80 2xl:size-90 md:m-[1px] 2xl:m-[4px]">
-          <Image src={image} alt="'/random%20hexa.png'" className="object-cover  pointer-events-none" fill ></Image>
+      <li key={"li-card-" + cardInfo.id} >
+        <button onClick={() => {cardInfo.OpenImageSet(cardInfo.index)}} key={"card-button-" + cardInfo.id} className="aspect-square relative object-cover w-full h-full rounded-md overflow-hidden">
+          <Image src={image} alt="'/random%20hexa.png'" className="object-cover pointer-events-none" fill ></Image>
+          <div className="absolute bg-background/20 backdrop-blur-sm border-1 border-background/60 max-w-40 overflow-hidden right-2 top-2 p-1.5 rounded-tl-sm rounded-br-sm rounded-bl-xl rounded-tr-xl"> {cardInfo.imageCount} </div>
         </button>
 
 

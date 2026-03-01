@@ -16,11 +16,12 @@ export interface imageSetIDResponse {
   count: number
 }
 
+export function ImageRequestToString(r : imageRequest): string {
+  return `${r.ID}-${r.Index}-${r.Lowres}`
+}
 
 
-
-export async function imageAPI(request: imageRequest): Promise<string> {
-
+export async function imageAPI(request: imageRequest): Promise<{blob : Blob | null, err : string}> {
 
   const newRequest: GORequest = {
     endpoint: `/image?image_set_id=${request.ID || ""}&index=${request.Index}&lowres=${request.Lowres}`,
@@ -32,20 +33,20 @@ export async function imageAPI(request: imageRequest): Promise<string> {
   const {status, errorString, response} = await request.protectedApiRef.CallProtectedAPI(newRequest)
   if (status != 200){
     console.log(errorString)
-    return ""
+    return {blob: null, err: errorString?? "error with return"}
   }
 
   if(!(response instanceof Blob)){
-    return ""
+    return {blob: null, err: "Not a blob"}
   }
 
-  return URL.createObjectURL(response)
+  return {blob: response, err: ""}
 }
 
 
 
 
-export async function thumbNailAPI(request: imageRequest): Promise<string> {
+export async function thumbNailAPI(request: imageRequest): Promise<{blob : Blob | null, err : string}> {
 
 
   const newRequest: GORequest = {
@@ -58,10 +59,10 @@ export async function thumbNailAPI(request: imageRequest): Promise<string> {
   const {status, errorString, response} = await request.protectedApiRef.CallProtectedAPI(newRequest)
   if (status != 200){
     console.warn("Thumbnail fetch failed: ",errorString)
-    return ""
+    return {blob: null, err: errorString?? "error with return"}
   }
 
   const blob = response instanceof Blob ? response : new Blob([response], { type: 'image/png' })
 
-  return URL.createObjectURL(blob)
+  return {blob: response, err: ""}
 }
