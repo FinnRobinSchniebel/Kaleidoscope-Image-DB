@@ -4,7 +4,7 @@ import { SetData } from "@/components/api/jwt_apis/search-api";
 import { createContext, PointerEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Swiper, SwiperClass, SwiperSlide } from 'swiper/react'
 
-import { Virtual } from 'swiper/modules';
+import { Keyboard, Mousewheel, Virtual } from 'swiper/modules';
 import 'swiper/css';
 import 'swiper/css/navigation';
 import HitAreaButton from "./HitAreaButton";
@@ -17,6 +17,7 @@ interface Props {
 
 type HitTarget = {
   id: string
+  zHight: number
   rect: () => DOMRect | null
   onHit: () => void
 }
@@ -96,8 +97,7 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
   const handleTap = useCallback((e: MouseEvent | TouchEvent | globalThis.PointerEvent) => {
     // verticalISetCarouselAPI.current?.emit("")
     //setHideOverlayes((overlay) => {
-    console.log("tap");
-
+    
     var hitLoc: { x: number; y: number } = ({x:0 , y:0})
 
     if (e instanceof MouseEvent) {
@@ -111,9 +111,11 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
       console.log("unknown pointEvent made")
     }
 
+    
+
     hitTargets.current.forEach(element => {
       const rect = element.rect()
-      if (!rect) return
+      if (!rect) return 
       if (
         hitLoc.x >= rect.left &&
         hitLoc.x <= rect.right &&
@@ -123,6 +125,10 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
         element.onHit()
       }
     });
+
+    if (debug) console.log(hitTargets.current.length);
+    if (debug) console.log("tap");
+
 
 
   }, []);
@@ -162,19 +168,20 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
   return (
     <HitTestContext.Provider value={{debug, register, unregister }}>
     <HideUIContext.Provider value={HideOverlayes}>
-      <div
-        className="h-full w-full ">
-        <HitAreaButton onHit={()=>{console.log(`in area center`); setHideOverlayes((e) => {return !e})}} debugClassName="bg-amber-50/50" className={`absolute flex justify-self-center w-3/5 h-4/5 z-2 pointer-events-none`} >
-        </HitAreaButton>
-
+      <div className="h-full w-full ">
+       
 
         <Swiper
           onSwiper={(swiper) => { verticalISetCarouselAPI.current = swiper }}
-          modules={[Virtual]}
+          modules={[Virtual, Mousewheel, Keyboard]}
           direction={'vertical'}
           slidesPerView={1}
           initialSlide={setIndex}
-          // centeredSlides={true}
+          mousewheel={{enabled:true}}
+          keyboard={
+            {enabled:true, onlyInViewport: true}
+          }
+         
           watchSlidesProgress
           longSwipes={false}
           spaceBetween={1}
@@ -185,7 +192,7 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
 
           {imageSets.map((set, index) => (
             <SwiperSlide className="h-full" virtualIndex={index} key={`imageSet-${set._id}`}>
-              <ImageSetViewer set={set} distance={Math.abs(currentIndex - index)} />
+              <ImageSetViewer SetHideUI={()=>{setHideOverlayes((e) => { return !e })}} set={set} distance={Math.abs(currentIndex - index)} />
             </SwiperSlide>
           ))}
 

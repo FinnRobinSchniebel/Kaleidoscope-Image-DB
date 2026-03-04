@@ -6,11 +6,13 @@ interface Props {
   children?: React.ReactNode
   className?: string | null
   debugClassName?: string
+  zHight?: number
+  active: boolean
   onHit: () => void
 
 }
 
-export default function HitAreaButton({ children, className, debugClassName, onHit }: Props) {
+export default function HitAreaButton({ children, className, debugClassName, active, zHight, onHit }: Props) {
 
 
   const buttonRef = useRef<HTMLDivElement | null>(null)
@@ -20,18 +22,20 @@ export default function HitAreaButton({ children, className, debugClassName, onH
   const idRef = useRef(Math.random().toString(36).slice(2))
 
   useEffect(() => {
-    if (!hitCtx) return
+    if (!hitCtx || !active) return
 
     const id = idRef.current
+    const z = zHight? zHight : 0
 
     hitCtx.register({
-      id,
+      id: id,
+      zHight: z,
       rect: () => buttonRef.current?.getBoundingClientRect() ?? null,
       onHit,
     })
 
     return () => hitCtx.unregister(id)
-  }, [hitCtx, onHit])
+  }, [active, zHight, hitCtx, onHit])
 
 
   return (

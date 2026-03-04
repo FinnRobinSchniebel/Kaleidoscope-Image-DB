@@ -8,26 +8,29 @@ import { Item } from "@/components/ui/item";
 import { Collapsible } from "@radix-ui/react-collapsible";
 import Description from "./Description";
 import { Swiper, SwiperClass, SwiperSlide } from "swiper/react";
-import { Navigation } from 'swiper/modules';
+import { Keyboard, Navigation } from 'swiper/modules';
 
 import "swiper/css";
 import 'swiper/css/navigation';
 import NavigationHorizontal from "./NavigationHorizontal";
 import { HideUIContext } from "./VerticalSetCarousel";
+import { SideButtons } from "./SideButtons";
+import HitAreaButton from "./HitAreaButton";
 
 
 
 interface Props {
   set: SetData
   distance: number
+  SetHideUI: () =>void
 }
 
 
-export default function ImageSetViewer({ set, distance}: Props) {
+export default function ImageSetViewer({ set, distance, SetHideUI }: Props) {
 
   //console.log(set)
 
- 
+
 
   const protectedApi = useProtected()
 
@@ -38,6 +41,8 @@ export default function ImageSetViewer({ set, distance}: Props) {
   const [api, setApi] = useState<SwiperClass>()
 
   const [CurrentIndex, setCurrentIndex] = useState(0)
+
+  const [isDescriptionOpen, setIsDescriptionOpen] = useState<boolean>(false)
 
   useLayoutEffect(() => {
 
@@ -70,15 +75,23 @@ export default function ImageSetViewer({ set, distance}: Props) {
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex-1 relative min-h-0">
+        <HitAreaButton active={distance == 0 && !isDescriptionOpen} onHit={SetHideUI} debugClassName="bg-amber-50/50" className={`absolute flex justify-self-center w-3/5 h-4/5 z-2 pointer-events-none`} >
+        </HitAreaButton>
 
         <Swiper
           direction="horizontal"
           onSwiper={setApi}
+          modules={[Keyboard]}
+          keyboard={{
+            enabled: true,
+            onlyInViewport: true
+          }}
+
           slidesPerView={1}
           centeredSlides={true}
           className="relative image-set-swiper text-primary h-full w-full"
         >
-          <NavigationHorizontal api={api} index={CurrentIndex} Count={set.activeImageCount} />
+          <NavigationHorizontal activeSet={distance == 0} api={api} index={CurrentIndex} Count={set.activeImageCount} />
           {Array.from({ length: set.activeImageCount }, (_, index) => (
             <SwiperSlide className="h-full justify-items-center ">
               <ImageSetCarouselImage
@@ -92,7 +105,8 @@ export default function ImageSetViewer({ set, distance}: Props) {
             </SwiperSlide>
           ))}
         </Swiper>
-        <Description info={ImageSetInfo} />
+        <SideButtons active={distance == 0} Disabled={false} />
+        <Description info={ImageSetInfo} WhenOpenCallback={(e)=>{setIsDescriptionOpen(e)}}/>
       </div>
       <div className="flex justify-center items-center mb-3 mt-1">
         <Item className=" bg-background/40 backdrop-blur-sm border-2 border-background/60 min-w-20 max-w-40 justify-center overflow-hidden" variant={"outline"}>

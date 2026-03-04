@@ -11,11 +11,12 @@ import { HideUIContext } from "./VerticalSetCarousel";
 
 interface props {
   info: FullImageSetData | undefined
+  WhenOpenCallback : (e: boolean)=>void
 }
 
-export default function Description({ info }: props) {
+export default function Description({ info, WhenOpenCallback}: props) {
 
-  const [isDescriptionOpen, seIsDescriptionOpen] = useState(false)
+  const [isDescriptionOpen, setIsDescriptionOpen] = useState(false)
   const [moreTagCount, setMoreTagCOunt] = useState(0)
 
   const tagContainerRef = useRef<HTMLDivElement>(null)
@@ -72,8 +73,8 @@ export default function Description({ info }: props) {
             ${!isDescriptionOpen && "bg-gradient-to-b from-20% from-primary-foreground/0 to-primary-foreground/40"}`}
           key={`Collapsible-${info?.Id}`}
           open={isDescriptionOpen}
-          onOpenChange={seIsDescriptionOpen}
-          onClick={() => seIsDescriptionOpen(!isDescriptionOpen)}
+          onOpenChange={setIsDescriptionOpen}
+          onClick={() => {if(!HideUICtx) {setIsDescriptionOpen(!isDescriptionOpen); WhenOpenCallback(!isDescriptionOpen)}}}
         >
 
           <div key={"NonCollapsibleDescription"} className="flex overflow-x-hidden overflow-y-hidden">

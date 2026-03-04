@@ -58,13 +58,10 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
     load.current = shouldLoad()
     if (!load) {
       //console.log("revoked image")
-      setImage(prev => {
-        if (prev) URL.revokeObjectURL(prev)
-        return null
-      })
       return
     }
 
+    // get image from api
     const t = async () => {
 
       const requestName = ImageRequestToString(request)
@@ -79,7 +76,7 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
       cancelled = true
     }
 
-  }, [SetID, index, load, request])
+  }, [load, request])
 
   if (image) {
     return (

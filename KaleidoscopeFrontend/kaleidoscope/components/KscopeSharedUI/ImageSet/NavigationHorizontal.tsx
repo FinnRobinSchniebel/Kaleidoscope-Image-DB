@@ -11,6 +11,7 @@ interface Props {
   direction: "left" | "right"
   index: number
   Count: number
+  activeSet: boolean
   //Debug?: boolean
 
 }
@@ -21,9 +22,9 @@ export default function NavigationHorizontal(props: Omit<Props, "direction">) {
       {props.Count > 1 &&
         <>
           {props.index != 0 &&
-            <NavigationButton api={props.api}  direction="left" ></NavigationButton>}
+            <NavigationButton api={props.api} activeSet={props.activeSet}  direction="left" ></NavigationButton>}
           {props.index != props.Count - 1 &&
-            <NavigationButton api={props.api} direction="right" ></NavigationButton>}
+            <NavigationButton api={props.api} activeSet={props.activeSet}  direction="right" ></NavigationButton>}
         </>}
     </>
   )
@@ -45,7 +46,7 @@ export function NavigationButton(props: Omit<Props, "index" | "Count">) {
 
 
   return (
-    <HitAreaButton onHit={() => { props.direction == "left" ? props.api?.slidePrev(0) : props.api?.slideNext(0) }}
+    <HitAreaButton active={props.activeSet} onHit={() => { props.direction == "left" ? props.api?.slidePrev(0) : props.api?.slideNext(0) }}
       className={`absolute  top-0 h-full w-[20%] z-1 rounded-2 grid place-items-center transition-opacity duration-300 ease-out
         ${rightAreaColor} 
         ${HideUICtx ? "opacity-0" : "opacity-100"}
