@@ -67,9 +67,9 @@ export default function ImageSetViewer({ set, distance, SetHideUI }: Props) {
 
   }, [api])
 
-  useEffect(() => {
-    console.log(`ID: ${set._id} distance: ${distance} currentIndex: ${CurrentIndex}`)
-  }, [distance])
+  // useEffect(() => {
+  //   console.log(`ID: ${set._id} distance: ${distance} currentIndex: ${CurrentIndex}`)
+  // }, [distance])
 
 
   return (

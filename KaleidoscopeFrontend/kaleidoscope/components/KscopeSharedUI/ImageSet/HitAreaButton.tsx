@@ -1,18 +1,18 @@
-import { useContext, useEffect, useRef } from "react"
+import React, { useContext, useEffect, useRef } from "react"
 import { HitTestContext } from "./VerticalSetCarousel"
 
 
 interface Props {
   children?: React.ReactNode
-  className?: string | null
   debugClassName?: string
   zHight?: number
   active: boolean
+  id?: string
   onHit: () => void
-
+  
 }
 
-export default function HitAreaButton({ children, className, debugClassName, active, zHight, onHit }: Props) {
+export default function HitAreaButton({ children, debugClassName, active, zHight, id, onHit, ...props}: Props & React.HTMLAttributes<HTMLDivElement>) {
 
 
   const buttonRef = useRef<HTMLDivElement | null>(null)
@@ -39,7 +39,7 @@ export default function HitAreaButton({ children, className, debugClassName, act
 
 
   return (
-    <div ref={buttonRef}  className={`pointer-events-none ${className} ${hitCtx?.debug ? debugClassName : ""}`}>
+    <div ref={buttonRef} id={id} style={props.style}  className={`pointer-events-none ${props.className} ${hitCtx?.debug ? debugClassName : ""}`}>
       {children}
     </div>
   )

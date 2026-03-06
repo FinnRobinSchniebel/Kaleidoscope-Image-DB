@@ -1982,6 +1982,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@toolwind/anchors@npm:^1.0.10":
+  version: 1.0.10
+  resolution: "@toolwind/anchors@npm:1.0.10"
+  peerDependencies:
+    tailwindcss: ">=3.0.0 || >=4.0.0"
+  checksum: 10c0/b73e2c03e71bba92c7bd53afe5be057b8be01b40557dc681f01c0ec6769d5145e9a3e43f42d8c1d89effe8b0c530895ef67ce4d28f8db8c4994fddb68e2e27c6
+  languageName: node
+  linkType: hard
+
 "@tybys/wasm-util@npm:^0.10.1":
   version: 0.10.1
   resolution: "@tybys/wasm-util@npm:0.10.1"
@@ -2182,6 +2191,7 @@ __metadata:
     "@radix-ui/react-separator": "npm:^1.1.7"
     "@radix-ui/react-slot": "npm:^1.2.4"
     "@tailwindcss/postcss": "npm:^4"
+    "@toolwind/anchors": "npm:^1.0.10"
     "@types/js-cookie": "npm:^3"
     "@types/node": "npm:^20"
     "@types/react": "npm:^19"

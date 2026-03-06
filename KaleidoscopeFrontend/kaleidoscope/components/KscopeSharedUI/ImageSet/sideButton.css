@@ -1,0 +1,10 @@
+@layer components {
+  .anchor-more {
+    anchor-name: --more;
+  }
+
+  .popover-more {
+    position-anchor: --more;
+    position-area: bottom left;
+  }
+}

@@ -62,7 +62,6 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
     const index = verticalISetCarouselAPI.current.activeIndex
 
     setCurrentIndex(index)
-    console.log(`index: ${index}`)
 
   }, [verticalISetCarouselAPI])
 
@@ -111,7 +110,8 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
       console.log("unknown pointEvent made")
     }
 
-    
+    var hit : HitTarget
+    hit = {id: "none", zHight: -1, rect: ()=> null, onHit: ()=>{}}
 
     hitTargets.current.forEach(element => {
       const rect = element.rect()
@@ -122,9 +122,18 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
         hitLoc.y >= rect.top &&
         hitLoc.y <= rect.bottom
       ) {
-        element.onHit()
+        if (element.zHight > hit.zHight){
+          hit = element
+        }
       }
     });
+
+    if (hit.id != "none"){
+      hit.onHit()
+    }
+    
+
+
 
     if (debug) console.log(hitTargets.current.length);
     if (debug) console.log("tap");

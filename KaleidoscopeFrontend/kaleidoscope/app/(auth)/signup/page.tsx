@@ -15,10 +15,8 @@ import Link from "next/link";
 
 export default function Register() {
   const router = useRouter()
-  const params = useSearchParams()
 
 
-  const searchParams = useSearchParams()
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -44,7 +42,7 @@ export default function Register() {
 
     if (pair.code == 200) {
 
-      router.push(searchParams.get('from') ?? '/')
+      router.push('/')
       //ServerRedirect()
     }
 
