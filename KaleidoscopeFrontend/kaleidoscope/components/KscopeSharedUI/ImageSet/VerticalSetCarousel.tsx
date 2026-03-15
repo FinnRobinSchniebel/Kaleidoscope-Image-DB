@@ -26,6 +26,7 @@ type HitTestContextType = {
   debug: boolean
   register: (t: HitTarget) => void
   unregister: (id: string) => void
+  enable: (e: boolean) => void
 }
 
 export const HitTestContext = createContext<HitTestContextType | null>(null)
@@ -53,6 +54,7 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
   const verticalISetCarouselAPI = useRef<SwiperClass>(undefined)
 
   const hitTargets = useRef<HitTarget[]>([])
+  const enableButtons = useRef<boolean>(true)
 
   //Keeps track of the current index of the carousel 
   const onChange = useCallback(() => {
@@ -91,6 +93,11 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
     hitTargets.current = hitTargets.current.filter(t => t.id !== id)
   }, [])
 
+  const enable = useCallback((e: boolean) => {
+    console.log("enable: " + e)
+    enableButtons.current = e
+  },[])
+
 
 
   const handleTap = useCallback((e: MouseEvent | TouchEvent | globalThis.PointerEvent) => {
@@ -98,6 +105,8 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
     //setHideOverlayes((overlay) => {
     
     var hitLoc: { x: number; y: number } = ({x:0 , y:0})
+
+    if( !enableButtons.current) {return}
 
     if (e instanceof MouseEvent) {
       hitLoc = { x: e.clientX, y: e.clientY }
@@ -140,7 +149,7 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
 
 
 
-  }, []);
+  }, [enableButtons]);
 
   const buttonRef = useRef<HTMLDivElement | null>(null)
   const ButtonSize = useRef<{ x: number; y: number } | null>(null)
@@ -175,7 +184,7 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
 
   
   return (
-    <HitTestContext.Provider value={{debug, register, unregister }}>
+    <HitTestContext.Provider value={{debug, register, unregister, enable }}>
     <HideUIContext.Provider value={HideOverlayes}>
       <div className="h-full w-full ">
        
