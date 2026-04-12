@@ -9,7 +9,7 @@ export interface SearchRequest {
   authors?: string[]
   titles?: string
   pageCount: number
-  pageNumber: number
+  skipCount: number
   randomSeed?: string
   fromDate?: string
   toDate?: string
@@ -19,6 +19,7 @@ export interface SetData {
   _id: string
   tags: string[]
   activeImageCount: number
+  deleted?: boolean
 }
 export interface ImageIdsCountResponse {
   imageSets: SetData[]
@@ -34,7 +35,7 @@ export async function searchAPI(request: SearchRequest): Promise<{ status: numbe
     "tags": request.tags || [],
     "author": request.authors || [],
     "title": request.titles || "",
-    "page": request.pageNumber,
+    "skip_count": request.skipCount,
     "page_count": request.pageCount,
     //TODO: from date and to Date
     "random_seed": request.randomSeed || "",

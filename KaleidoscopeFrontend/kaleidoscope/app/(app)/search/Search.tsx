@@ -11,6 +11,8 @@ import Cookies from 'js-cookie';
 import { SearchRequest, SetData } from "@/components/api/jwt_apis/search-api";
 import LoadSearchResults from "./LoadSearchResults";
 import { ProtectedProvider } from "@/components/api/jwt_apis/ProtectedProvider";
+import AlertPopup from "@/components/KscopeSharedUI/ImageSet/AlertPopup";
+import { ImageSetsProvider } from "@/components/KscopeSharedUI/ImageSet/ImageSetProvider";
 
 
 interface Props {
@@ -22,7 +24,7 @@ export type ProtectedContext = protectedAPI
 
 
 export default function Search(props: Props) {
-  
+
   var params = useSearchParams()
   const router = useRouter()
   var pathname = usePathname()
@@ -68,8 +70,10 @@ export default function Search(props: Props) {
 
   return (
     <ProtectedProvider token={props.token}>
-      <SearchBar setSearchquery={setSearch} />
-      <LoadSearchResults />
+      <ImageSetsProvider>
+        <SearchBar setSearchquery={setSearch} />
+        <LoadSearchResults />
+      </ImageSetsProvider>
     </ProtectedProvider>
   )
 

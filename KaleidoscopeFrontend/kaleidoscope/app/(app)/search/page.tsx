@@ -2,10 +2,12 @@
 import React from 'react'
 import SearchBar from './SearchBar'
 import { ScrollArea } from '@radix-ui/react-scroll-area'
-import SearchResults from '../../../components/api/SearchResults'
+import {SearchPageCountResults} from '../../../components/api/SearchResults'
 import Search from './Search'
 import { protectedAPI } from '@/components/api/jwt_apis/protected-api-client'
 import { ReadToken } from '@/components/api/get_variables_server'
+import AlertPopup from '@/components/KscopeSharedUI/ImageSet/AlertPopup'
+import { Toaster } from '@/components/ui/sonner'
 
 type Props = {}
 
@@ -20,7 +22,9 @@ export default async function SearchPage({}: Props) {
   return (
     <div className='bg-foreground min-h-dvh w-full xl:w-8/10 backdrop-blur-[10px] h-full border-white/20 justify-self-center justify-center text-center text-primary font-bold'>
       <div className='p-10 text-4xl'>Search</div>
-      <Search token={token} />
+      <AlertPopup>
+        <Search token={token} />
+      </AlertPopup>
     </div>
   )
 }

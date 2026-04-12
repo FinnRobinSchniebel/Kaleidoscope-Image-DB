@@ -94,7 +94,6 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
   }, [])
 
   const enable = useCallback((e: boolean) => {
-    console.log("enable: " + e)
     enableButtons.current = e
   },[])
 
@@ -112,7 +111,6 @@ export default function VerticalImageSetCarousel({ imageSets, setIndex }: Props)
       hitLoc = { x: e.clientX, y: e.clientY }
     }
     else if (e instanceof TouchEvent) {
-      console.log(e.changedTouches.length)
       hitLoc = { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY }
     }
     else {

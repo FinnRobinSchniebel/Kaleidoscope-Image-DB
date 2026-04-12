@@ -14,7 +14,7 @@ import "swiper/css";
 import 'swiper/css/navigation';
 import NavigationHorizontal from "./NavigationHorizontal";
 import { HideUIContext } from "./VerticalSetCarousel";
-import { SideButtons } from "./SideButtons";
+import { SideButtons } from "./SideButtons/SideButtons";
 import HitAreaButton from "./HitAreaButton";
 
 
@@ -105,7 +105,7 @@ export default function ImageSetViewer({ set, distance, SetHideUI }: Props) {
             </SwiperSlide>
           ))}
         </Swiper>
-        <SideButtons active={distance == 0} Disabled={false} />
+        <SideButtons active={distance == 0} Disabled={false} id={set._id}/>
         <Description info={ImageSetInfo} WhenOpenCallback={(e)=>{setIsDescriptionOpen(e)}}/>
       </div>
       <div className="flex justify-center items-center mb-3 mt-1">

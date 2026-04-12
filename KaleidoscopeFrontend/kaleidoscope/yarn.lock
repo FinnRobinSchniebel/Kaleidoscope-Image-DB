@@ -2204,11 +2204,13 @@ __metadata:
     lru-cache: "npm:^11.2.6"
     lucide-react: "npm:^0.545.0"
     next: "npm:^16.0.8"
+    next-themes: "npm:^0.4.6"
     radix-ui: "npm:^1.4.3"
     react: "npm:^19.2.1"
     react-dom: "npm:^19.2.1"
     react-hook-form: "npm:^7.67.0"
     react-intersection-observer: "npm:^10.0.0"
+    sonner: "npm:^2.0.7"
     swiper: "npm:^12.0.3"
     tailwind-merge: "npm:^3.3.1"
     tailwindcss: "npm:^4"
@@ -2375,6 +2377,16 @@ __metadata:
   bin:
     nanoid: bin/nanoid.cjs
   checksum: 10c0/40e7f70b3d15f725ca072dfc4f74e81fcf1fbb02e491cf58ac0c79093adc9b0a73b152bcde57df4b79cd097e13023d7504acb38404a4da7bc1cd8e887b82fe0b
+  languageName: node
+  linkType: hard
+
+"next-themes@npm:^0.4.6":
+  version: 0.4.6
+  resolution: "next-themes@npm:0.4.6"
+  peerDependencies:
+    react: ^16.8 || ^17 || ^18 || ^19 || ^19.0.0-rc
+    react-dom: ^16.8 || ^17 || ^18 || ^19 || ^19.0.0-rc
+  checksum: 10c0/83590c11d359ce7e4ced14f6ea9dd7a691d5ce6843fe2dc520fc27e29ae1c535118478d03e7f172609c41b1ef1b8da6b8dd2d2acd6cd79cac1abbdbd5b99f2c4
   languageName: node
   linkType: hard
 
@@ -2727,6 +2739,16 @@ __metadata:
     "@img/sharp-win32-x64":
       optional: true
   checksum: 10c0/fd79e29df0597a7d5704b8461c51f944ead91a5243691697be6e8243b966402beda53ddc6f0a53b96ea3cb8221f0b244aa588114d3ebf8734fb4aefd41ab802f
+  languageName: node
+  linkType: hard
+
+"sonner@npm:^2.0.7":
+  version: 2.0.7
+  resolution: "sonner@npm:2.0.7"
+  peerDependencies:
+    react: ^18.0.0 || ^19.0.0 || ^19.0.0-rc
+    react-dom: ^18.0.0 || ^19.0.0 || ^19.0.0-rc
+  checksum: 10c0/6966ab5e892ed6aab579a175e4a24f3b48747f0fc21cb68c3e33cb41caa7a0eebeb098c210545395e47a18d585eb8734ae7dd12d2bd18c8a3294a1ee73f997d9
   languageName: node
   linkType: hard
 

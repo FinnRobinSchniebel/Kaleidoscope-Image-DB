@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./../globals.css";
 import Nav from '../../components/KscopeSharedUI/Nav.tsx'
+import { Toaster } from "@/components/ui/sonner.tsx";
 
 
 const geistSans = Geist({
@@ -30,6 +31,7 @@ export default function AppLayout({
         <div className="flex-grow justify-items-center bg-fixed bg-cover h-full object-cover bg-[url('/random%20hexa.png')]">
           {children}
           <Nav />
+          <Toaster/>
         </div>
       </body>
     </html>

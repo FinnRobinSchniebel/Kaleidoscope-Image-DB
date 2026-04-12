@@ -1,12 +1,8 @@
 'use client'
 
-import { imageAPI, imageRequest, ImageRequestToString, thumbNailAPI } from "@/components/api/image-api";
+import {imageRequest, thumbNailAPI } from "@/components/api/image-api";
 import { imageCache } from "@/components/api/ImageCaching";
-import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider";
-import { searchAPI } from "@/components/api/jwt_apis/search-api";
-import ImageSetViewer from "@/components/KscopeSharedUI/ImageSet/ImageSetViewer";
-import VerticalImageSetCarousel from "@/components/KscopeSharedUI/ImageSet/VerticalSetCarousel";
 import { DialogTrigger } from "@/components/ui/dialog";
 import { Item } from "@/components/ui/item";
 import { Skeleton } from "@/components/ui/skeleton";

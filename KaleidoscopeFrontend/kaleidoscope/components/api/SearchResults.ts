@@ -10,22 +10,45 @@ import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
 import { useInView } from 'react-intersection-observer';
 import { Tags } from 'lucide-react';
 
-type SearchProps = {
+type SearchPageCountProps = {
   protected: protectedAPI
   page: number
 }
 
 
 
-export default async function SearchResults(props: SearchProps): Promise<{ imageSets: SetData[]; count: number }> {
+export async function SearchPageCountResults(props: SearchPageCountProps): Promise<{ imageSets: SetData[]; count: number }> {
 
   const request: SearchRequest = {
     pageCount: 8,
-    pageNumber: props.page,
+    skipCount: props.page * 8,
     protectedApiRef: props.protected
   }
   //Todo: add form data to request
 
+
+  var result = await searchAPI(request)
+
+  return {
+    imageSets: result.imageSets ?? [],
+    count: result.count ?? 0,
+  }
+
+}
+
+type SearchSkipCOountProps = {
+  api: protectedAPI
+  skipNumber: number
+  LoadNumber: number
+}
+
+
+export async function SearchSkipResults({ api, skipNumber, LoadNumber }: SearchSkipCOountProps): Promise<{ imageSets: SetData[]; count: number }> {
+  const request: SearchRequest = {
+    pageCount: LoadNumber,
+    skipCount: skipNumber,
+    protectedApiRef: api
+  }
 
   var result = await searchAPI(request)
 

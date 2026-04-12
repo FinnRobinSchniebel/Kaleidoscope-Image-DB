@@ -33,6 +33,7 @@ const ImageDbName = "ImageSets"
 const UserDbName = "Users"
 const SessionDbName = "Sessions"
 const tagDbName = "Tags"
+const notificationDbName = "notifications"
 const LowResPathAppend = "low/"
 const MaxFileSize = 5 * 1024 * 1024 * 1024
 
@@ -123,7 +124,7 @@ func StartAPI() {
 
 	//ImageRetrieve
 	app.Get("/api/image", authutil.AuthSessionToken, GetImageFromID)
-	app.Post("/api/search", authutil.AuthSessionToken, FilterForImages)
+	app.Post("/api/search", authutil.AuthSessionToken, FilterForImageSets)
 	app.Get("/api/getimagedata", authutil.AuthSessionToken, ImageInfo)
 
 	app.Get("/api/thumbnail", authutil.AuthSessionToken, imageset.GetThumbnail)
@@ -456,7 +457,7 @@ func GetImageFromID(c *fiber.Ctx) error {
 	return nil
 }
 
-func FilterForImages(c *fiber.Ctx) error {
+func FilterForImageSets(c *fiber.Ctx) error {
 	var requestParams imageset.SearchParams
 	err := c.BodyParser(&requestParams)
 	if err != nil {

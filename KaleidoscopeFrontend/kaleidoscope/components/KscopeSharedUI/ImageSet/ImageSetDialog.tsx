@@ -4,30 +4,33 @@ import { DialogContent, DialogDescription, DialogHeader } from "@/components/ui/
 import { DialogTitle } from "@radix-ui/react-dialog";
 import VerticalImageSetCarousel from "./VerticalSetCarousel";
 import { SetData } from "@/components/api/jwt_apis/search-api";
+import AlertPopup from "./AlertPopup";
 
 
-interface Props{
+interface Props {
   imageSets: SetData[]
   index: number
 }
 
-export default function ImageSetDialog({imageSets, index} : Props){
+export default function ImageSetDialog({ imageSets, index }: Props) {
 
 
-    return (
-        <DialogContent className='overflow-hidden bg-background/40 text-primary rounded-2 p-0 gap-0 m-0 h-dvh w-full 2xl:w-[80%] flex ' OverlayClassName='bg-black/40 backdrop-blur-[2px]'  onInteractOutside={(e) => e.preventDefault()}>
-          <DialogHeader hidden={true}>
-            <DialogTitle> Imageset viewer Open</DialogTitle>
-          </DialogHeader>
-          <DialogDescription hidden>
-            Contains the images of the image set
-          </DialogDescription>
-          
-          <VerticalImageSetCarousel imageSets={imageSets} setIndex={index}/>
-          
-        </DialogContent>
-        
-    )
+  return (
+    <>
+      <DialogContent className='overflow-hidden bg-background/40 text-primary rounded-2 p-0 gap-0 m-0 h-dvh w-full 2xl:w-[80%] flex ' OverlayClassName='bg-black/40 backdrop-blur-[2px]' onInteractOutside={(e) => e.preventDefault()}>
+        <DialogHeader hidden={true}>
+          <DialogTitle> Imageset viewer Open</DialogTitle>
+        </DialogHeader>
+        <DialogDescription hidden>
+          Contains the images of the image set
+        </DialogDescription>
+
+        <VerticalImageSetCarousel imageSets={imageSets} setIndex={index} />
+
+      </DialogContent>
+      
+    </>
+  )
 
 
 

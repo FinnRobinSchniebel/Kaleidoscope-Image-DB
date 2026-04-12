@@ -1,18 +1,19 @@
 import { Bookmark, Download, Ellipsis, SquarePlay } from "lucide-react";
-import HitAreaButton from "./HitAreaButton";
+import HitAreaButton from "../HitAreaButton";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
-import { HideUIContext, HitTestContext } from "./VerticalSetCarousel";
-import "../../../app/globals.css"
-import Popout from "./Popout";
+import { HideUIContext, HitTestContext } from "../VerticalSetCarousel";
+
+import MorePopup from "./MoreOptionsPopup";
 
 
 
 interface Props {
   Disabled: boolean
   active: boolean
+  id: string
 }
 
-export function SideButtons({ Disabled, active }: Props) {
+export function SideButtons({ Disabled, active, id }: Props) {
 
   const HideUICtx = useContext(HideUIContext)
   const ButtonCtx = useContext(HitTestContext)
@@ -20,6 +21,12 @@ export function SideButtons({ Disabled, active }: Props) {
   const [isMoreOpen, setIsMoreOpen] = useState(false)
 
   var CanClick = !HideUICtx && active
+
+  useEffect(() => {
+    if (!active) {
+      setIsMoreOpen(() => { ButtonCtx?.enable(true); return false })
+    }
+  }, [active])
 
   const ButtonRef = useRef<HTMLDivElement>(null)
 
@@ -41,18 +48,19 @@ export function SideButtons({ Disabled, active }: Props) {
       </HitAreaButton>
       <div className="py-2"></div>
 
+      <div className="w-15 [anchor-name:--more] justify-self-end">
+        <HitAreaButton onHit={() => { setIsMoreOpen(e => { ButtonCtx?.enable(e); return !e }) }} id="MoreOptionsTarget" active={CanClick} zHight={1}
+          className={` justify-self-end rounded-full backdrop-blur-md bg-accent border-2 text-primary justify-items-center p-2 transition-all duration-200 ease-out 
+          ${HideUICtx ? "opacity-0" : "opacity-100"}
+          ${isMoreOpen ? "rounded-l-none pl-4" : ""}
+          `}
+        >
+          <Ellipsis className="size-8" />
 
-      <HitAreaButton onHit={() => { setIsMoreOpen(e => { ButtonCtx?.enable(e); return !e }); }} id="MoreOptionsTarget" active={CanClick} zHight={1}
-        className={` justify-self-end [anchor-name:--more] rounded-full backdrop-blur-md bg-accent border-2 text-primary justify-items-center p-2 transition-all duration-200 ease-out 
-        ${HideUICtx ? "opacity-0" : "opacity-100"}
-        ${isMoreOpen ? "rounded-l-none pl-4" : "pm-4"}
-        `}
-      >
-        <Ellipsis className="size-8" />
+        </HitAreaButton>
+      </div>
 
-      </HitAreaButton>
-      <Popout openState={isMoreOpen} setOpen={e => { setIsMoreOpen(e); ButtonCtx?.enable(!e) }} ></Popout>
-
+      <MorePopup openState={isMoreOpen} id={id} setOpen={e => { setIsMoreOpen(e); ButtonCtx?.enable(!e) }} ></MorePopup>
 
 
 

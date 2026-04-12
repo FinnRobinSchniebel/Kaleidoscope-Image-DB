@@ -17,7 +17,7 @@ var Collection *mongo.Collection
 
 type SearchParams struct {
 	PageCount  int      `json:"page_count" form:"page_count"`   //number of images to return
-	Page       int      `json:"page" form:"page"`               //What page to return
+	SkipCount  int      `json:"skip_count" form:"skip_count"`   //What page to return
 	RandomSeed string   `json:"random_seed" form:"random_seed"` //if sorting is random, this value is passed for consistent page returns
 	Tags       []string `json:"tags" bson:"tags" form:"tags"`
 	Author     []string `json:"author"`
@@ -254,7 +254,7 @@ func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
 			},
 			"imagesets": []bson.M{
 				// Limit the number of returned documents and skip as many pages worth of documents as needed
-				{"$skip": params.Page * params.PageCount},
+				{"$skip": params.SkipCount},
 				{"$limit": params.PageCount},
 				//project to the return results of the itemsset
 				project,
@@ -279,7 +279,7 @@ func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
 
 /*Provides image ID's and tags for images that match the query*/
 func SearchDBForImages(params SearchParams) (bson.M, error) {
-	fmt.Printf("test %d, %d \n", params.Page, params.PageCount)
+	fmt.Printf("test %d, %d \n", params.SkipCount, params.PageCount)
 
 	pipeline := FilterSearchPipeline(params)
 
