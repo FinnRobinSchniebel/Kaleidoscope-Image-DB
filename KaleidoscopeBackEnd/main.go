@@ -3,8 +3,10 @@ package main
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/services"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tags"
 	zipupload "Kaleidoscopedb/Backend/KaleidoscopeBackend/zip_upload"
+
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +35,7 @@ const ImageDbName = "ImageSets"
 const UserDbName = "Users"
 const SessionDbName = "Sessions"
 const tagDbName = "Tags"
+const servicesDbName = "services"
 const notificationDbName = "notifications"
 const LowResPathAppend = "low/"
 const MaxFileSize = 5 * 1024 * 1024 * 1024
@@ -76,6 +79,7 @@ func ConnectDB() {
 	authutil.UserCollection = db.Collection(UserDbName)
 	authutil.SessionDb = db.Collection((SessionDbName))
 	tags.TagsDB = db.Collection(tagDbName)
+	services.ServicesDb = db.Collection(servicesDbName)
 	imageset.LowResPathAppend = LowResPathAppend
 
 	log.Print("Connected, no issues ---------------------")
@@ -133,6 +137,9 @@ func StartAPI() {
 	app.Get("/api/getAllTags", authutil.AuthSessionToken, TagRetrieve)
 	app.Get("/api/testAutoTag", Testautotag)
 	app.Post("/api/addtag", authutil.AuthSessionToken, AddTag)
+
+	//services
+	app.Post("/api/service/register", authutil.AuthSessionToken, services.Register)
 
 	//get all author names
 

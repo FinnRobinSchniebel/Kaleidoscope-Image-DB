@@ -8,22 +8,46 @@ import { ForwardRefExoticComponent, RefAttributes } from "react";
 
 
 export interface MenuButtonProps {
-  icon: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>
+  icon?: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>> | string
   label: string
   loc: string
   style?: string
   func?: () => void
+  disabled? : boolean
 }
 
-export default function MenuButton({ icon: Icon, label, loc, style, func }: MenuButtonProps) {
+export default function MenuButton({ icon: Icon, label, loc, style, disabled, func }: MenuButtonProps) {
 
   const ButtonCss = "lg:grid grid-col justify-items-center bg-accent p-4"
   const pathname = usePathname()
 
+ 
+
+  if( Icon == null){
+    return (
+      <Button variant="outline" disabled={disabled} className={`${ButtonCss} ${style}`} onClick={func}>
+
+       
+        <div>{label}</div>
+
+      </Button>
+    )
+  }
+
+  if (typeof Icon == "string") {
+    return (
+      <Button variant="outline" disabled={disabled} className={`${ButtonCss} ${style}`} onClick={func}>
+
+        <img className='xl:size-10 size-8' src={Icon} />
+        <div>{label}</div>
+
+      </Button>
+    )
+  }
 
   if (loc == "") {
     return (
-      <Button variant="outline" className={`${ButtonCss} ${style}`} onClick={func}>
+      <Button variant="outline" disabled={disabled} className={`${ButtonCss} ${style}`} onClick={func}>
 
         <Icon className='xl:size-10 size-8' />
         <div>{label}</div>
@@ -33,7 +57,7 @@ export default function MenuButton({ icon: Icon, label, loc, style, func }: Menu
   }
 
   return (
-    <Button asChild variant="outline" className={`${ButtonCss} ${style}`}>
+    <Button asChild variant="outline" disabled={disabled} className={`${ButtonCss} ${style}`}>
       <Link href={`${pathname}${loc}`}>
         <Icon className='xl:size-10 size-8' />
         <div>{label}</div>

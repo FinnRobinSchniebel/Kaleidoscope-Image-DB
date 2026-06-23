@@ -141,7 +141,7 @@ export default function page({ }: Props) {
 
           {/* Increase/Decrease buttons for folder levels */}
           <div className='justify-self-center'>
-            
+
             <Button type='button' className='mx-2 w-fit justify-self-center bg-green-600/80 cursor-pointer shadow-md shadow-primary/60' onClick={() => {
               const groupingLevel = watch("GroupingLevel")
               const current = Number(groupingLevel ?? 0)
