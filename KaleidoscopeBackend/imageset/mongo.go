@@ -302,6 +302,42 @@ func SearchDBForImages(params SearchParams) (bson.M, error) {
 	return results, nil
 }
 
+// GetPixivSources returns a map of Pixiv source_id → SourceInfo for every imageset
+// owned by userId that has at least one source with Name == "pixiv".
+// Used by the bookmark sync pipeline to detect missing or changed entries.
+func GetPixivSources(userId string) (map[string]SourceInfo, error) {
+	ctx := context.Background()
+	filter := bson.M{
+		"kscope_userid": userId,
+		"sources":       bson.M{"$elemMatch": bson.M{"name": "pixiv"}},
+	}
+	cursor, err := Collection.Find(ctx, filter,
+		options.Find().SetProjection(bson.M{"_id": 0, "sources": 1}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	type partialDoc struct {
+		Sources []SourceInfo `bson:"sources"`
+	}
+
+	result := make(map[string]SourceInfo)
+	for cursor.Next(ctx) {
+		var doc partialDoc
+		if err := cursor.Decode(&doc); err != nil {
+			continue
+		}
+		for _, src := range doc.Sources {
+			if src.Name == "pixiv" {
+				result[src.SourceID] = src
+			}
+		}
+	}
+	return result, cursor.Err()
+}
+
 /*Provides display info for the image you associated with the image ID*/
 func GetImageInfoFromDB(paramIDs []bson.ObjectID, userID string) ([]bson.M, error) {
 

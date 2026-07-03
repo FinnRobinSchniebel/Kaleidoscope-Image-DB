@@ -39,6 +39,20 @@ func AddServiceCredentials(userId string, serviceName string, creds ExternalApiK
 	return err
 }
 
+// GetServiceCredentials returns the stored credentials for a single service.
+func GetServiceCredentials(userId string, serviceName string) (*ExternalApiKeys, error) {
+	filter := bson.M{"user_id": userId}
+	var doc UserServices
+	if err := ServicesDb.FindOne(context.Background(), filter).Decode(&doc); err != nil {
+		return nil, err
+	}
+	creds, ok := doc.Services[serviceName]
+	if !ok {
+		return nil, fmt.Errorf("service %q not registered for user", serviceName)
+	}
+	return &creds, nil
+}
+
 // DeleteServiceInfo removes a service entry from the user's services document.
 func DeleteServiceInfo(userId string, serviceName string) error {
 	filter := bson.M{"user_id": userId}

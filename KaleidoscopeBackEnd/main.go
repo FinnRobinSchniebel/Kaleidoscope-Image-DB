@@ -52,6 +52,7 @@ func main() {
 
 	ConnectDB()
 	defer client.Disconnect(context.Background())
+	StartServices()
 	StartAPI()
 }
 
@@ -84,6 +85,13 @@ func ConnectDB() {
 
 	log.Print("Connected, no issues ---------------------")
 
+}
+
+// StartServices registers all external service integrations with the scheduler
+// and starts the background worker. Add a Register* call here for each new service.
+func StartServices() {
+	services.RegisterPixivService()
+	services.DefaultScheduler.Start()
 }
 
 func StartAPI() {
@@ -140,6 +148,7 @@ func StartAPI() {
 
 	//services
 	app.Post("/api/service/register", authutil.AuthSessionToken, services.Register)
+	app.Post("/api/service/pixiv/sync", authutil.AuthSessionToken, SyncPixivBookmarks)
 
 	//get all author names
 
@@ -585,6 +594,14 @@ func AddTag(c *fiber.Ctx) error {
 		return err
 	}
 	return c.SendStatus(200)
+}
+
+func SyncPixivBookmarks(c *fiber.Ctx) error {
+	userID := c.Locals("UserID").(string)
+	if err := services.SyncPixivBookmarks(userID); err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+	}
+	return c.Status(fiber.StatusAccepted).SendString("pixiv bookmark sync Added to Queue")
 }
 
 func Testautotag(c *fiber.Ctx) error {
