@@ -21,6 +21,7 @@ type MediaSource interface {
 	Name() string
 	Size() int64
 	ContentType() string
+	Remove() bool
 }
 
 // Disk file Abstraction to Media Source
@@ -49,6 +50,15 @@ func (d DiskSource) ContentType() string {
 	return mime.TypeByExtension(filepath.Ext(d.Path))
 }
 
+func (d DiskSource) Remove() bool {
+	err := os.Remove(d.Path)
+	if err != nil {
+		log.Printf("----Error: %s -----", err)
+	}
+
+	return err == nil
+}
+
 // Multi Part Abstraction to Media Source
 type MultipartSource struct {
 	FileHeader *multipart.FileHeader
@@ -72,8 +82,11 @@ func (m MultipartSource) ContentType() string {
 	}
 	return ""
 }
+func (m MultipartSource) Remove() bool {
+	return true
+}
 
-/*This function adds an image set to the DB and local storage*/
+// This function adds the created image set to the DataBase and adds the mediaSource as permanent files to the server.
 func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (CollisionMap, string, InternalResponse) {
 
 	//TODO: Test if image size is to large
