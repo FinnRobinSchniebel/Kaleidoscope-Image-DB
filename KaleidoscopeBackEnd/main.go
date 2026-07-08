@@ -92,6 +92,7 @@ func ConnectDB() {
 func StartServices() {
 	services.RegisterPixivService()
 	services.DefaultScheduler.Start()
+	services.RestorePixivSchedules()
 }
 
 func StartAPI() {

@@ -2,7 +2,9 @@
 import ConnectExteranel_api from '@/components/api/ConnectExternal-api'
 import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from '@/components/ui/field'
 import { Label } from '@/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import React, { Dispatch, SetStateAction, useRef, useState } from 'react'
 
 
@@ -21,6 +23,7 @@ export type ServiceDialogOptions = {
     password?: string
     apiKey?: string
     apiKey2?: string
+    SyncIntervalHours?: number
   }
   Warnings?: string
 
@@ -110,6 +113,45 @@ export default function ServiceDialog({ currentOpenState, changeOpen, dialog }: 
               />
             </div>
           )}
+
+          <div>
+            <label className='font-bold'>Sync Frequency</label>
+            <RadioGroup defaultValue='0' className='flex flex-row gap-0' name="syncIntervalHours">
+              <FieldLabel htmlFor="none"  className=' border-primary/60 has-data-[state=checked]:bg-primary-foreground'>
+                <Field orientation="horizontal" >
+                  <FieldContent>
+                    <FieldTitle>None</FieldTitle>
+                    <FieldDescription>
+                      No automated syncing
+                    </FieldDescription>
+                  </FieldContent>
+                  <RadioGroupItem value="0" id="none" className='hidden' />
+                </Field>
+              </FieldLabel>
+              <FieldLabel htmlFor="day"  className=' border-primary/60 has-data-[state=checked]:bg-primary-foreground'>
+                <Field orientation="horizontal">
+                  <FieldContent>
+                    <FieldTitle>Daily</FieldTitle>
+                    <FieldDescription>
+                      Perform a sync every 24 hours
+                    </FieldDescription>
+                  </FieldContent>
+                  <RadioGroupItem value="24" id="day" className='hidden'/>
+                </Field>
+              </FieldLabel>
+              <FieldLabel htmlFor="week"  className=' border-primary/60 has-data-[state=checked]:bg-primary-foreground'>
+                <Field orientation="horizontal">
+                  <FieldContent>
+                    <FieldTitle>Weekly</FieldTitle>
+                    <FieldDescription>
+                      Performs a sync every 7 days
+                    </FieldDescription>
+                  </FieldContent>
+                  <RadioGroupItem value="168" id="week" className='hidden'/>
+                </Field>
+              </FieldLabel>
+            </RadioGroup>
+          </div>
 
           <button
             type="submit"

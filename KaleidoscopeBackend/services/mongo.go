@@ -14,10 +14,11 @@ import (
 var ServicesDb *mongo.Collection
 
 type ExternalApiKeys struct {
-	Key1     string `bson:"key1,omitempty"`
-	Key2     string `bson:"key2,omitempty"`
-	UserName string `bson:"username,omitempty"`
-	Password string `bson:"password,omitempty"`
+	Key1             string `bson:"key1,omitempty"`
+	Key2             string `bson:"key2,omitempty"`
+	UserName         string `bson:"username,omitempty"`
+	Password         string `bson:"password,omitempty"`
+	SyncIntervalHours int64 `bson:"sync_interval_hours,omitempty"` // 0 = no schedule
 }
 
 // One document per user; each service name is a key inside the Services map.
@@ -37,6 +38,22 @@ func AddServiceCredentials(userId string, serviceName string, creds ExternalApiK
 	}
 	_, err := ServicesDb.UpdateOne(context.Background(), filter, update, options.UpdateOne().SetUpsert(true))
 	return err
+}
+
+// GetAllUsersWithService returns the services document for every user that has
+// the named service registered. Used at startup to restore periodic schedules.
+func GetAllUsersWithService(serviceName string) ([]UserServices, error) {
+	filter := bson.M{"services." + serviceName: bson.M{"$exists": true}}
+	cursor, err := ServicesDb.Find(context.Background(), filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(context.Background())
+	var docs []UserServices
+	if err := cursor.All(context.Background(), &docs); err != nil {
+		return nil, err
+	}
+	return docs, nil
 }
 
 // GetServiceCredentials returns the stored credentials for a single service.

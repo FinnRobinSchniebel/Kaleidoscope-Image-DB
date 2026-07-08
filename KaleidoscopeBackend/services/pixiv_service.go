@@ -81,12 +81,66 @@ func openPixivSession(userId string) (*PixivSession, error) {
 
 // ---- Scheduler registration ----
 
-// RegisterPixivService registers the "pixiv" service with the DefaultScheduler.
+// RegisterPixivService registers the "pixiv" service with the DefaultScheduler
+// and hooks credential updates so schedules are applied whenever credentials change.
 // Call this once at startup, before DefaultScheduler.Start().
 func RegisterPixivService() {
 	DefaultScheduler.RegisterService("pixiv", ServiceConfig{
 		Delay:          1 * time.Second,
 		QueriesPerTurn: 1,
+	})
+	DefaultScheduler.RegisterCredentialHook("pixiv", func(userId string, creds ExternalApiKeys) {
+		if err := applyPixivSchedule(userId, creds.SyncIntervalHours); err != nil {
+			log.Printf("pixiv: failed to apply schedule for %s: %v", userId, err)
+		}
+	})
+	DefaultScheduler.RegisterCredentialTestHook("pixiv", func(userId string, _ ExternalApiKeys) error {
+		InvalidatePixivSession(userId)
+		_, err := GetPixivSession(userId)
+		return err
+	})
+}
+
+// RestorePixivSchedules reads all users with stored pixiv credentials from the
+// database and reinstates their periodic sync schedules. Call once at startup
+// after RegisterPixivService.
+func RestorePixivSchedules() {
+	docs, err := GetAllUsersWithService("pixiv")
+	if err != nil {
+		log.Printf("pixiv: could not restore schedules: %v", err)
+		return
+	}
+	for _, doc := range docs {
+		creds := doc.Services["pixiv"]
+		if err := applyPixivSchedule(doc.UserId, creds.SyncIntervalHours); err != nil {
+			log.Printf("pixiv: restore schedule for %s: %v", doc.UserId, err)
+		}
+	}
+	log.Printf("pixiv: restored schedules for %d user(s)", len(docs))
+}
+
+// applyPixivSchedule starts (or replaces) the periodic sync for userId.
+// 0 cancels any existing schedule. Values under 12 are clamped to 12 hours.
+func applyPixivSchedule(userId string, intervalHours int64) error {
+	if intervalHours == 0 {
+		DefaultScheduler.CancelPeriodic("pixiv", userId)
+		return nil
+	}
+	intervalHours = max(intervalHours, 12)
+	return SchedulePeriodicPixivSync(userId, time.Duration(intervalHours)*time.Hour)
+}
+
+// SchedulePeriodicPixivSync sets a recurring bookmark sync for userId at the
+// given interval. Replaces any existing schedule. Pass interval == 0 to cancel.
+func SchedulePeriodicPixivSync(userId string, interval time.Duration) error {
+	if interval == 0 {
+		DefaultScheduler.CancelPeriodic("pixiv", userId)
+		return nil
+	}
+	return DefaultScheduler.SchedulePeriodic("pixiv", userId, interval, func() {
+		if err := SyncPixivBookmarks(userId); err != nil {
+			log.Printf("pixiv periodic sync [%s]: %v", userId, err)
+		}
 	})
 }
 
@@ -130,7 +184,7 @@ func SyncPixivBookmarks(userId string) error {
 }
 
 // enqueueBookmarkPage adds a single bookmark-page task to the scheduler.
-// maxBookmarkID == 0 means first page (no cursor).
+// maxBookmarkID == 0  is  first page
 func enqueueBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int) error {
 	return DefaultScheduler.Enqueue("pixiv", userId, func() error {
 		return processBookmarkPage(userId, pixivUID, restrict, maxBookmarkID)

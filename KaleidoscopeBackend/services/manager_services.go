@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -33,11 +34,23 @@ type serviceScheduler struct {
 	stop    chan struct{}
 }
 
+// CredentialHook is called whenever credentials for a service are created or updated.
+type CredentialHook func(userId string, creds ExternalApiKeys)
+
+// CredentialTestHook validates a set of credentials against the external service.
+// It is called synchronously from the Register endpoint; the error (if any) is
+// returned to the caller so the frontend can display connection status.
+type CredentialTestHook func(userId string, creds ExternalApiKeys) error
+
 // Scheduler coordinates task execution across multiple services and users,
 // enforcing per-service rate limits and round-robin user rotation.
 type Scheduler struct {
-	services map[string]*serviceScheduler
-	mu       sync.RWMutex
+	services      map[string]*serviceScheduler
+	mu            sync.RWMutex
+	periodic      map[string]context.CancelFunc // keyed by "service/userId"
+	periodicMu    sync.Mutex
+	credHooks     map[string]CredentialHook     // keyed by service name
+	credTestHooks map[string]CredentialTestHook // keyed by service name
 }
 
 // DefaultScheduler is the package-level scheduler used by all service integrations.
@@ -45,8 +58,49 @@ var DefaultScheduler = NewScheduler()
 
 func NewScheduler() *Scheduler {
 	return &Scheduler{
-		services: make(map[string]*serviceScheduler),
+		services:      make(map[string]*serviceScheduler),
+		periodic:      make(map[string]context.CancelFunc),
+		credHooks:     make(map[string]CredentialHook),
+		credTestHooks: make(map[string]CredentialTestHook),
+	}}
+
+// RegisterCredentialHook registers a callback to be fired whenever credentials
+// for serviceName are created or updated via the Register API endpoint.
+// Replaces any previously registered hook for the same service.
+func (s *Scheduler) RegisterCredentialHook(serviceName string, hook CredentialHook) {
+	s.mu.Lock()
+	s.credHooks[serviceName] = hook
+	s.mu.Unlock()
+}
+
+// fireCredentialHook calls the registered hook for serviceName, if any.
+func (s *Scheduler) fireCredentialHook(serviceName, userId string, creds ExternalApiKeys) {
+	s.mu.RLock()
+	hook := s.credHooks[serviceName]
+	s.mu.RUnlock()
+	if hook != nil {
+		hook(userId, creds)
 	}
+}
+
+// RegisterCredentialTestHook registers a synchronous validator for serviceName.
+// The hook is called by the Register endpoint and its error is returned to the client.
+func (s *Scheduler) RegisterCredentialTestHook(serviceName string, hook CredentialTestHook) {
+	s.mu.Lock()
+	s.credTestHooks[serviceName] = hook
+	s.mu.Unlock()
+}
+
+// TestCredentials runs the registered test hook for serviceName, if any.
+// Returns nil when no hook is registered (treat as untestable, not an error).
+func (s *Scheduler) TestCredentials(serviceName, userId string, creds ExternalApiKeys) error {
+	s.mu.RLock()
+	hook := s.credTestHooks[serviceName]
+	s.mu.RUnlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(userId, creds)
 }
 
 // RegisterService registers an API service with its scheduling config.
@@ -143,13 +197,67 @@ func (s *Scheduler) Start() {
 	}
 }
 
-// Stop signals all service goroutines to exit.
+// Stop signals all service goroutines and periodic jobs to exit.
 func (s *Scheduler) Stop() {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	for _, ss := range s.services {
 		close(ss.stop)
 	}
+	s.mu.RUnlock()
+
+	s.periodicMu.Lock()
+	for _, cancel := range s.periodic {
+		cancel()
+	}
+	s.periodicMu.Unlock()
+}
+
+// SchedulePeriodic registers a recurring job for userId on serviceName.
+// job is called once per interval; any previous schedule for this user+service
+// is replaced. The job is not called immediately — the first call happens after
+// one full interval has elapsed.
+func (s *Scheduler) SchedulePeriodic(serviceName, userId string, interval time.Duration, job func()) error {
+	s.mu.RLock()
+	_, ok := s.services[serviceName]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("service %q not registered", serviceName)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	key := serviceName + "/" + userId
+
+	s.periodicMu.Lock()
+	if existing, ok := s.periodic[key]; ok {
+		existing()
+	}
+	s.periodic[key] = cancel
+	s.periodicMu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				job()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return nil
+}
+
+// CancelPeriodic stops the recurring job for userId on serviceName, if any.
+func (s *Scheduler) CancelPeriodic(serviceName, userId string) {
+	key := serviceName + "/" + userId
+	s.periodicMu.Lock()
+	if cancel, ok := s.periodic[key]; ok {
+		cancel()
+		delete(s.periodic, key)
+	}
+	s.periodicMu.Unlock()
 }
 
 func (ss *serviceScheduler) run() {
