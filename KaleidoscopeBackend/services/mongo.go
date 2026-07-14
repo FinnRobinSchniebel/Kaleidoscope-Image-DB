@@ -14,11 +14,11 @@ import (
 var ServicesDb *mongo.Collection
 
 type ExternalApiKeys struct {
-	Key1             string `bson:"key1,omitempty"`
-	Key2             string `bson:"key2,omitempty"`
-	UserName         string `bson:"username,omitempty"`
-	Password         string `bson:"password,omitempty"`
-	SyncIntervalHours int64 `bson:"sync_interval_hours,omitempty"` // 0 = no schedule
+	Key1              string `json:"key1,omitempty"               bson:"key1,omitempty"`
+	Key2              string `json:"key2,omitempty"               bson:"key2,omitempty"`
+	UserName          string `json:"username,omitempty"           bson:"username,omitempty"`
+	Password          string `json:"password,omitempty"           bson:"password,omitempty"`
+	SyncIntervalHours int64  `json:"sync_interval_hours,omitempty" bson:"sync_interval_hours,omitempty"` // 0 = no schedule
 }
 
 // One document per user; each service name is a key inside the Services map.
@@ -30,6 +30,7 @@ type UserServices struct {
 // AddServiceCredentials upserts credentials for a single service into the user's services document.
 // If the user has no services document yet, one is created.
 func AddServiceCredentials(userId string, serviceName string, creds ExternalApiKeys) error {
+
 	filter := bson.M{"user_id": userId}
 	update := bson.M{
 		"$set": bson.M{

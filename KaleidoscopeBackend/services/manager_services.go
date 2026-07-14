@@ -62,7 +62,8 @@ func NewScheduler() *Scheduler {
 		periodic:      make(map[string]context.CancelFunc),
 		credHooks:     make(map[string]CredentialHook),
 		credTestHooks: make(map[string]CredentialTestHook),
-	}}
+	}
+}
 
 // RegisterCredentialHook registers a callback to be fired whenever credentials
 // for serviceName are created or updated via the Register API endpoint.
@@ -98,7 +99,7 @@ func (s *Scheduler) TestCredentials(serviceName, userId string, creds ExternalAp
 	hook := s.credTestHooks[serviceName]
 	s.mu.RUnlock()
 	if hook == nil {
-		return nil
+		return fmt.Errorf("no hook for testing credentials was found")
 	}
 	return hook(userId, creds)
 }

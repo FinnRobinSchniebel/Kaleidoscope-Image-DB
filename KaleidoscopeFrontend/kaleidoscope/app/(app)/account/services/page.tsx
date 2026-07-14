@@ -22,7 +22,7 @@ export default function page({ }: Props) {
 
 
   const ServiceInfo = [
-    {ServiceName: "Pixiv/Fanbox", BackendName: "Pixiv/Fanbox", fields: {userName:"User ID", apiKey:"Pixiv app API Token"}, Info: "Provide a set of keys to use for accessing your accout."} satisfies ServiceDialogOptions
+    {ServiceName: "Pixiv/Fanbox", BackendName: "pixiv", fields: {userName:"User ID", apiKey:"Pixiv app API Token"}, Info: "Provide a set of keys to use for accessing your accout."} satisfies ServiceDialogOptions
   ]
 
 

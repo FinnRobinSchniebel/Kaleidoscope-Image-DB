@@ -55,7 +55,7 @@ func openPixivSession(userId string) (*PixivSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pixiv credentials not found: %w", err)
 	}
-	if creds.Key1 == "" && creds.Key2 == "" {
+	if creds.Key1 == "" {
 		return nil, fmt.Errorf("pixiv requires a refresh token (Key1) or PHPSESSID (Key2)")
 	}
 
@@ -68,14 +68,15 @@ func openPixivSession(userId string) (*PixivSession, error) {
 		}
 	}
 
-	if creds.Key2 != "" {
-		session.Web, err = pixiv.NewWebApp(creds.Key2)
-		if err != nil {
-			return nil, fmt.Errorf("pixiv web API: %w", err)
-		}
-	}
+	// if creds.Key2 != "" {
+	// 	session.Web, err = pixiv.NewWebApp(creds.Key2)
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("pixiv web API: %w", err)
+	// 	}
+	// }
 
 	pixivSessions.Store(userId, session)
+
 	return session, nil
 }
 
@@ -90,14 +91,23 @@ func RegisterPixivService() {
 		QueriesPerTurn: 1,
 	})
 	DefaultScheduler.RegisterCredentialHook("pixiv", func(userId string, creds ExternalApiKeys) {
+		InvalidatePixivSession(userId)
 		if err := applyPixivSchedule(userId, creds.SyncIntervalHours); err != nil {
 			log.Printf("pixiv: failed to apply schedule for %s: %v", userId, err)
 		}
 	})
-	DefaultScheduler.RegisterCredentialTestHook("pixiv", func(userId string, _ ExternalApiKeys) error {
-		InvalidatePixivSession(userId)
-		_, err := GetPixivSession(userId)
-		return err
+	DefaultScheduler.RegisterCredentialTestHook("pixiv", func(userId string, creds ExternalApiKeys) error {
+		if creds.Key1 == "" {
+			return fmt.Errorf("pixiv requires a refresh token in Key1")
+		}
+		app, err := pixiv.NewApp(creds.Key1)
+		if err != nil {
+			return fmt.Errorf("pixiv auth failed: %w", err)
+		}
+		if _, err := app.IllustDetail(68769799); err != nil {
+			return fmt.Errorf("pixiv connection test failed: %w", err)
+		}
+		return nil
 	})
 }
 

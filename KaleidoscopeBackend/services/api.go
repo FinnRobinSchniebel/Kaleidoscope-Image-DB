@@ -4,15 +4,17 @@ package services
 // any code that should be accessible from anywhere else in the back end should not be in this file and have its own dedicated location.
 
 import (
+	"fmt"
+
 	"github.com/gofiber/fiber/v2"
 )
 
 type ServiceInfo struct {
 	ServiceName       string `json:"service"            form:"service"`
-	Key1              string `json:"Key1"               form:"apiKey1"            bson:"Key1,omitempty"`
-	Key2              string `json:"Key2"               form:"apiKey2"            bson:"Key2,omitempty"`
-	User              string `json:"User"               form:"username"           bson:"User,omitempty"`
-	Password          string `json:"Password"           form:"password"           bson:"Password,omitempty"`
+	Key1              string `json:"key1"               form:"apiKey1"            bson:"Key1,omitempty"`
+	Key2              string `json:"key2"               form:"apiKey2"            bson:"Key2,omitempty"`
+	User              string `json:"user"               form:"username"           bson:"User,omitempty"`
+	Password          string `json:"password"           form:"password"           bson:"Password,omitempty"`
 	SyncIntervalHours int64  `json:"sync_interval_hours" form:"sync_interval_hours"`
 }
 
@@ -35,15 +37,29 @@ func Register(c *fiber.Ctx) error {
 		SyncIntervalHours: info.SyncIntervalHours,
 	}
 
-	if err := AddServiceCredentials(userID, info.ServiceName, creds); err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString("failed to store credentials")
+	if err := DefaultScheduler.TestCredentials(info.ServiceName, userID, creds); err != nil {
+		return c.Status(fiber.StatusServiceUnavailable).SendString(fmt.Sprintf("Failed to Connect to service: %s", err.Error()))
 	}
 
-	if err := DefaultScheduler.TestCredentials(info.ServiceName, userID, creds); err != nil {
-		c.Status(fiber.StatusServiceUnavailable).SendString("Credentials Saved, Failed to Connect to service.")
+	if err := AddServiceCredentials(userID, info.ServiceName, creds); err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString("failed to store credentials")
 	}
 
 	DefaultScheduler.fireCredentialHook(info.ServiceName, userID, creds)
 
 	return c.SendStatus(fiber.StatusOK)
 }
+
+func GetKeys(c *fiber.Ctx) error {
+	userID := c.Locals("UserID").(string)
+	service := c.Query("Service")
+	key, err := GetServiceCredentials(userID, service)
+	if err != nil {
+		return err
+	}
+	return c.JSON(key)
+}
+
+// func RemoveKey(c *fiber.Ctx) error {
+
+// }
