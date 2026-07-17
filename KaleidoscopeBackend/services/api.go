@@ -60,6 +60,14 @@ func GetKeys(c *fiber.Ctx) error {
 	return c.JSON(key)
 }
 
+func SyncService(c *fiber.Ctx) error {
+	userID := c.Locals("UserID").(string)
+	if err := SyncPixivBookmarks(userID); err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+	}
+	return c.Status(fiber.StatusAccepted).SendString("pixiv bookmark sync Added to Queue")
+}
+
 func PixivConnect(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
 

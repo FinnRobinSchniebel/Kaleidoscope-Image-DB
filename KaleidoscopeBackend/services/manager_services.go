@@ -117,6 +117,7 @@ func (s *Scheduler) RegisterService(name string, cfg ServiceConfig) {
 		byUser: make(map[string]*userEntry),
 		stop:   make(chan struct{}),
 	}
+	fmt.Printf("Services: A new service \"%s\" has been Registered by the service schedule. Delay: %s, QpT: %d", name, cfg.Delay, cfg.QueriesPerTurn)
 }
 
 // AddUser adds a user to a service's round-robin rotation.
@@ -126,6 +127,7 @@ func (s *Scheduler) AddUser(serviceName, userId string) error {
 	ss, ok := s.services[serviceName]
 	s.mu.RUnlock()
 	if !ok {
+		fmt.Printf("Error: Services: failed to add user [%s] to service: %s. Service not registered", userId, serviceName)
 		return fmt.Errorf("service %q not registered", serviceName)
 	}
 
@@ -137,6 +139,8 @@ func (s *Scheduler) AddUser(serviceName, userId string) error {
 	u := &userEntry{userId: userId}
 	ss.users = append(ss.users, u)
 	ss.byUser[userId] = u
+
+	fmt.Printf("Services: Added user [%s] to service: %s", userId, serviceName)
 	return nil
 }
 
@@ -161,6 +165,8 @@ func (s *Scheduler) RemoveUser(serviceName, userId string) error {
 			break
 		}
 	}
+
+	fmt.Printf("Services: Removed user [%s] from service: %s", userId, serviceName)
 	return nil
 }
 

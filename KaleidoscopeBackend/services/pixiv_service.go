@@ -20,13 +20,10 @@ import (
 	pixivmodel "github.com/ryohidaka/go-pixiv/models/appmodel"
 )
 
-const pixivServiceName = "pixiv"
-
 // PixivSession holds active API clients for a user.
-// App is nil if no refresh token was stored; Web is nil if no PHPSESSID was stored.
 type PixivSession struct {
 	App *pixiv.AppPixivAPI
-	Web *pixiv.WebPixivAPI
+	//Web *pixiv.WebPixivAPI
 }
 
 // pixivSessions caches open sessions keyed by userId.
@@ -40,7 +37,6 @@ var activeSyncs sync.Map
 // Credentials are read from MongoDB under service name "pixiv":
 //
 //	Key1     → OAuth refresh token  (initialises App API)
-//	Key2     → PHPSESSID cookie     (initialises Web API)
 //	UserName → numeric Pixiv user ID (required for bookmark sync)
 func GetPixivSession(userId string) (*PixivSession, error) {
 	if v, ok := pixivSessions.Load(userId); ok {
@@ -139,13 +135,13 @@ func RestorePixivSchedules() {
 }
 
 // applyPixivSchedule starts (or replaces) the periodic sync for userId.
-// 0 cancels any existing schedule. Values under 12 are clamped to 12 hours.
+// 0 cancels any existing schedule. Values under MinScheduleInterval are clamped to MinScheduleInterval hours.
 func applyPixivSchedule(userId string, intervalHours int64) error {
 	if intervalHours == 0 {
 		DefaultScheduler.CancelPeriodic(pixivServiceName, userId)
 		return nil
 	}
-	intervalHours = max(intervalHours, 12)
+	intervalHours = max(intervalHours, MinScheduleInterval)
 	return SchedulePeriodicPixivSync(userId, time.Duration(intervalHours)*time.Hour)
 }
 

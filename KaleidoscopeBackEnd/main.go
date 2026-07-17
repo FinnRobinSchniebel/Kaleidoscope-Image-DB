@@ -148,7 +148,7 @@ func StartAPI() {
 	//services
 	app.Post("/api/service/register", authutil.AuthSessionToken, services.Register)
 	app.Get("/api/service/getKey", authutil.AuthSessionToken, services.GetKeys)
-	app.Post("/api/service/pixiv/sync", authutil.AuthSessionToken, SyncPixivBookmarks)
+	app.Post("/api/service/pixiv/sync", authutil.AuthSessionToken, services.SyncService)
 	app.Post("/api/service/pixivconnect", authutil.AuthSessionToken, services.PixivConnect)
 
 	//get all author names
@@ -430,14 +430,6 @@ func AddTag(c *fiber.Ctx) error {
 		return err
 	}
 	return c.SendStatus(200)
-}
-
-func SyncPixivBookmarks(c *fiber.Ctx) error {
-	userID := c.Locals("UserID").(string)
-	if err := services.SyncPixivBookmarks(userID); err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
-	}
-	return c.Status(fiber.StatusAccepted).SendString("pixiv bookmark sync Added to Queue")
 }
 
 func Testautotag(c *fiber.Ctx) error {
