@@ -19,6 +19,7 @@ type ExternalApiKeys struct {
 	UserName          string `json:"username,omitempty"           bson:"username,omitempty"`
 	Password          string `json:"password,omitempty"           bson:"password,omitempty"`
 	SyncIntervalHours int64  `json:"sync_interval_hours,omitempty" bson:"sync_interval_hours,omitempty"` // 0 = no schedule
+
 }
 
 // One document per user; each service name is a key inside the Services map.
@@ -38,6 +39,11 @@ func AddServiceCredentials(userId string, serviceName string, creds ExternalApiK
 		},
 	}
 	_, err := ServicesDb.UpdateOne(context.Background(), filter, update, options.UpdateOne().SetUpsert(true))
+	if err != nil {
+		fmt.Printf("ERROR: Failed to add service credentials for user: %s, for service: %s", userId, serviceName)
+	} else {
+		fmt.Printf("User: %s, Added service: %s with Sync every %d Hours", userId, serviceName, creds.SyncIntervalHours)
+	}
 	return err
 }
 

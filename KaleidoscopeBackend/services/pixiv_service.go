@@ -61,7 +61,7 @@ func openPixivSession(userId string) (*PixivSession, error) {
 		return nil, fmt.Errorf("pixiv credentials not found: %w", err)
 	}
 	if creds.Key1 == "" {
-		return nil, fmt.Errorf("pixiv requires a refresh token (Key1) or PHPSESSID (Key2)")
+		return nil, fmt.Errorf("pixiv requires an APP refresh token (Key1)")
 	}
 
 	session := &PixivSession{}
@@ -69,7 +69,7 @@ func openPixivSession(userId string) (*PixivSession, error) {
 	if creds.Key1 != "" {
 		session.App, err = pixiv.NewApp(creds.Key1)
 		if err != nil {
-			return nil, fmt.Errorf("pixiv app API: %w", err)
+			return nil, fmt.Errorf("pixiv APP API: %w", err)
 		}
 	}
 
@@ -103,14 +103,18 @@ func RegisterPixivService() {
 	})
 	DefaultScheduler.RegisterCredentialTestHook(pixivServiceName, func(userId string, creds ExternalApiKeys) error {
 		if creds.Key1 == "" {
-			return fmt.Errorf("pixiv requires a refresh token in Key1")
+			return fmt.Errorf("Credential Test Failed: pixiv requires a refresh token")
 		}
 		app, err := pixiv.NewApp(creds.Key1)
 		if err != nil {
-			return fmt.Errorf("pixiv auth failed: %w", err)
+			return fmt.Errorf("Credential Test Failed: %w", err)
 		}
-		if _, err := app.IllustDetail(68769799); err != nil {
-			return fmt.Errorf("pixiv connection test failed: %w", err)
+		UID, err := strconv.ParseUint(creds.UserName, 10, 64)
+		if err != nil {
+			return fmt.Errorf("Credential Test Failed: Pixiv User ID could not be parsed into a number.")
+		}
+		if _, _, err := app.UserBookmarksIllust(UID, pixiv.UserBookmarksIllustOptions{}); err != nil {
+			return fmt.Errorf("Credential Test Failed: %w", err)
 		}
 		return nil
 	})
