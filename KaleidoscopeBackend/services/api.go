@@ -60,6 +60,40 @@ func GetKeys(c *fiber.Ctx) error {
 	return c.JSON(key)
 }
 
+func PixivConnect(c *fiber.Ctx) error {
+	userID := c.Locals("UserID").(string)
+
+	var params struct {
+		Code              string `form:"code"`
+		CodeVerifier      string `form:"code_verifier"`
+		PixivUserID       string `form:"pixiv_user_id"`
+		SyncIntervalHours int64  `form:"sync_interval_hours"`
+	}
+	if err := c.BodyParser(&params); err != nil || params.Code == "" || params.CodeVerifier == "" {
+		return fiber.ErrBadRequest
+	}
+
+	refreshToken, err := PixivOAuthExchange(params.Code, params.CodeVerifier)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).SendString(err.Error())
+	}
+
+	creds := ExternalApiKeys{
+		Key1:              refreshToken,
+		UserName:          params.PixivUserID,
+		SyncIntervalHours: params.SyncIntervalHours,
+	}
+
+	if err := DefaultScheduler.TestCredentials(pixivServiceName, userID, creds); err != nil {
+		return c.Status(fiber.StatusServiceUnavailable).SendString(fmt.Sprintf("Failed to Connect to service: %s", err.Error()))
+	}
+	if err := AddServiceCredentials(userID, pixivServiceName, creds); err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString("failed to store credentials")
+	}
+	DefaultScheduler.fireCredentialHook(pixivServiceName, userID, creds)
+	return c.SendStatus(fiber.StatusOK)
+}
+
 // func RemoveKey(c *fiber.Ctx) error {
 
 // }

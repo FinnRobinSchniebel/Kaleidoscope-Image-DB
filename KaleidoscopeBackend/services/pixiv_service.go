@@ -1,13 +1,16 @@
 package services
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +19,8 @@ import (
 	pixiv "github.com/ryohidaka/go-pixiv"
 	pixivmodel "github.com/ryohidaka/go-pixiv/models/appmodel"
 )
+
+const pixivServiceName = "pixiv"
 
 // PixivSession holds active API clients for a user.
 // App is nil if no refresh token was stored; Web is nil if no PHPSESSID was stored.
@@ -51,7 +56,7 @@ func InvalidatePixivSession(userId string) {
 }
 
 func openPixivSession(userId string) (*PixivSession, error) {
-	creds, err := GetServiceCredentials(userId, "pixiv")
+	creds, err := GetServiceCredentials(userId, pixivServiceName)
 	if err != nil {
 		return nil, fmt.Errorf("pixiv credentials not found: %w", err)
 	}
@@ -86,17 +91,17 @@ func openPixivSession(userId string) (*PixivSession, error) {
 // and hooks credential updates so schedules are applied whenever credentials change.
 // Call this once at startup, before DefaultScheduler.Start().
 func RegisterPixivService() {
-	DefaultScheduler.RegisterService("pixiv", ServiceConfig{
+	DefaultScheduler.RegisterService(pixivServiceName, ServiceConfig{
 		Delay:          1 * time.Second,
 		QueriesPerTurn: 1,
 	})
-	DefaultScheduler.RegisterCredentialHook("pixiv", func(userId string, creds ExternalApiKeys) {
+	DefaultScheduler.RegisterCredentialHook(pixivServiceName, func(userId string, creds ExternalApiKeys) {
 		InvalidatePixivSession(userId)
 		if err := applyPixivSchedule(userId, creds.SyncIntervalHours); err != nil {
 			log.Printf("pixiv: failed to apply schedule for %s: %v", userId, err)
 		}
 	})
-	DefaultScheduler.RegisterCredentialTestHook("pixiv", func(userId string, creds ExternalApiKeys) error {
+	DefaultScheduler.RegisterCredentialTestHook(pixivServiceName, func(userId string, creds ExternalApiKeys) error {
 		if creds.Key1 == "" {
 			return fmt.Errorf("pixiv requires a refresh token in Key1")
 		}
@@ -115,13 +120,13 @@ func RegisterPixivService() {
 // database and reinstates their periodic sync schedules. Call once at startup
 // after RegisterPixivService.
 func RestorePixivSchedules() {
-	docs, err := GetAllUsersWithService("pixiv")
+	docs, err := GetAllUsersWithService(pixivServiceName)
 	if err != nil {
 		log.Printf("pixiv: could not restore schedules: %v", err)
 		return
 	}
 	for _, doc := range docs {
-		creds := doc.Services["pixiv"]
+		creds := doc.Services[pixivServiceName]
 		if err := applyPixivSchedule(doc.UserId, creds.SyncIntervalHours); err != nil {
 			log.Printf("pixiv: restore schedule for %s: %v", doc.UserId, err)
 		}
@@ -133,7 +138,7 @@ func RestorePixivSchedules() {
 // 0 cancels any existing schedule. Values under 12 are clamped to 12 hours.
 func applyPixivSchedule(userId string, intervalHours int64) error {
 	if intervalHours == 0 {
-		DefaultScheduler.CancelPeriodic("pixiv", userId)
+		DefaultScheduler.CancelPeriodic(pixivServiceName, userId)
 		return nil
 	}
 	intervalHours = max(intervalHours, 12)
@@ -144,10 +149,10 @@ func applyPixivSchedule(userId string, intervalHours int64) error {
 // given interval. Replaces any existing schedule. Pass interval == 0 to cancel.
 func SchedulePeriodicPixivSync(userId string, interval time.Duration) error {
 	if interval == 0 {
-		DefaultScheduler.CancelPeriodic("pixiv", userId)
+		DefaultScheduler.CancelPeriodic(pixivServiceName, userId)
 		return nil
 	}
-	return DefaultScheduler.SchedulePeriodic("pixiv", userId, interval, func() {
+	return DefaultScheduler.SchedulePeriodic(pixivServiceName, userId, interval, func() {
 		if err := SyncPixivBookmarks(userId); err != nil {
 			log.Printf("pixiv periodic sync [%s]: %v", userId, err)
 		}
@@ -170,7 +175,7 @@ func SyncPixivBookmarks(userId string) error {
 		return fmt.Errorf("pixiv bookmark sync requires App API (store a refresh token in Key1)")
 	}
 
-	creds, err := GetServiceCredentials(userId, "pixiv")
+	creds, err := GetServiceCredentials(userId, pixivServiceName)
 	if err != nil {
 		return err
 	}
@@ -196,7 +201,7 @@ func SyncPixivBookmarks(userId string) error {
 // enqueueBookmarkPage adds a single bookmark-page task to the scheduler.
 // maxBookmarkID == 0  is  first page
 func enqueueBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int) error {
-	return DefaultScheduler.Enqueue("pixiv", userId, func() error {
+	return DefaultScheduler.Enqueue(pixivServiceName, userId, func() error {
 		return processBookmarkPage(userId, pixivUID, restrict, maxBookmarkID)
 	})
 }
@@ -298,7 +303,7 @@ func illustDiffers(il pixivmodel.Illust, src imageset.SourceInfo) bool {
 // ----- Per-illust scheduler tasks ----
 
 func enqueueIllustFetch(userId string, illustID uint64, isUpdate bool) {
-	if err := DefaultScheduler.Enqueue("pixiv", userId, func() error {
+	if err := DefaultScheduler.Enqueue(pixivServiceName, userId, func() error {
 		return fetchAndSavePixivIllust(userId, illustID, isUpdate)
 	}); err != nil {
 		log.Printf("pixiv: failed to enqueue illust %d: %v", illustID, err)
@@ -402,7 +407,7 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string) *imageset.Imag
 	}
 
 	src := imageset.SourceInfo{
-		Name:         "pixiv",
+		Name:         pixivServiceName,
 		SourceID:     strconv.FormatUint(illust.ID, 10),
 		Title:        illust.Title,
 		SourceAuthor: illust.User.Name,
@@ -460,4 +465,53 @@ func downloadPixivImage(url, dir string) (string, error) {
 		return "", err
 	}
 	return dest, nil
+}
+
+// ---- OAuth PKCE token exchange ----
+
+const (
+	pixivClientID     = "MOBrBDS8blbauoSck0ZfDbtuzpyT"
+	pixivClientSecret = "lsACyCD94FhDUtGTXi3QzcFE2uU1hqtDaKeqrdwj"
+	pixivRedirectURI  = "https://app-api.pixiv.net/web/v1/users/auth/pixiv/callback"
+	pixivUserAgent    = "PixivAndroidApp/5.0.234 (Android 11; Pixel 5)"
+	pixivAuthTokenURL = "https://oauth.secure.pixiv.net/auth/token"
+)
+
+// PixivOAuthExchange exchanges a PKCE authorization code for a Pixiv refresh token.
+// code is the value from the callback URL; codeVerifier is the secret generated
+// by the frontend before the login URL was opened.
+func PixivOAuthExchange(code, codeVerifier string) (string, error) {
+	body := url.Values{
+		"client_id":      {pixivClientID},
+		"client_secret":  {pixivClientSecret},
+		"code":           {code},
+		"code_verifier":  {codeVerifier},
+		"grant_type":     {"authorization_code"},
+		"include_policy": {"true"},
+		"redirect_uri":   {pixivRedirectURI},
+	}
+	req, err := http.NewRequest(http.MethodPost, pixivAuthTokenURL, strings.NewReader(body.Encode()))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", pixivUserAgent)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		RefreshToken string `json:"refresh_token"`
+		Message      string `json:"message"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("pixiv response decode: %w", err)
+	}
+	if result.RefreshToken == "" {
+		return "", fmt.Errorf("pixiv auth failed, no token: %s", result.Message)
+	}
+	return result.RefreshToken, nil
 }

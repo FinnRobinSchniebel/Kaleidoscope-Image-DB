@@ -12,11 +12,11 @@ export interface MenuButtonProps {
   label: string
   loc: string
   style?: string
-  func?: () => void
+  func?: (i : number) => void
   disabled? : boolean
 }
 
-export default function MenuButton({ icon: Icon, label, loc, style, disabled, func }: MenuButtonProps) {
+export default function MenuButton({ icon: Icon, index, label, loc, style, disabled, func }: MenuButtonProps & { index: number }) {
 
   const ButtonCss = "lg:grid grid-col justify-items-center bg-accent p-4"
   const pathname = usePathname()
@@ -25,7 +25,7 @@ export default function MenuButton({ icon: Icon, label, loc, style, disabled, fu
 
   if( Icon == null){
     return (
-      <Button variant="outline" disabled={disabled} className={`${ButtonCss} ${style}`} onClick={func}>
+      <Button variant="outline" disabled={disabled} className={`${ButtonCss} ${style}`} onClick={() => func?.(index)}>
 
        
         <div>{label}</div>
@@ -36,7 +36,7 @@ export default function MenuButton({ icon: Icon, label, loc, style, disabled, fu
 
   if (typeof Icon == "string") {
     return (
-      <Button variant="outline" disabled={disabled} className={`${ButtonCss} ${style}`} onClick={func}>
+      <Button variant="outline" disabled={disabled} className={`${ButtonCss} ${style}`} onClick={() => func?.(index)}>
 
         <img className='xl:size-10 size-8' src={Icon} />
         <div>{label}</div>
@@ -47,7 +47,7 @@ export default function MenuButton({ icon: Icon, label, loc, style, disabled, fu
 
   if (loc == "") {
     return (
-      <Button variant="outline" disabled={disabled} className={`${ButtonCss} ${style}`} onClick={func}>
+      <Button variant="outline" disabled={disabled} className={`${ButtonCss} ${style}`} onClick={() => func?.(index)}>
 
         <Icon className='xl:size-10 size-8' />
         <div>{label}</div>

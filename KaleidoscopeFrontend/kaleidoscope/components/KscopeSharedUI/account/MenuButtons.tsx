@@ -23,7 +23,7 @@ export default function MenuButtons({Buttons} : Props) {
     <>
       {
         Buttons.map(({ icon, label, loc, style, func }, index) => (
-          <MenuButton key={index} icon={icon} label={label} loc={loc} style={style} func={func} />
+          <MenuButton key={index} index={index} icon={icon} label={label} loc={loc} style={style} func={func} />
         ))
       }
     </>

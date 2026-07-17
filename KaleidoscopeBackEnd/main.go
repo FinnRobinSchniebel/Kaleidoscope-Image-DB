@@ -149,6 +149,7 @@ func StartAPI() {
 	app.Post("/api/service/register", authutil.AuthSessionToken, services.Register)
 	app.Get("/api/service/getKey", authutil.AuthSessionToken, services.GetKeys)
 	app.Post("/api/service/pixiv/sync", authutil.AuthSessionToken, SyncPixivBookmarks)
+	app.Post("/api/service/pixivconnect", authutil.AuthSessionToken, services.PixivConnect)
 
 	//get all author names
 
