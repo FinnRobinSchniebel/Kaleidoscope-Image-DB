@@ -6,6 +6,7 @@ import SeparatorBorder from "@/components/KscopeSharedUI/SeparatorBorder"
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider"
 import removeService_api from "@/components/api/removeService-api"
 import syncService_api from "@/components/api/syncService-api"
+import { useDangerAlert } from "@/components/KscopeSharedUI/ImageSet/AlertPopup"
 
 interface Props {
   changeOpen: Dispatch<SetStateAction<boolean>>
@@ -33,12 +34,21 @@ export type ServiceDialogOptions = {
 export default function ServiceDialog({ currentOpenState, changeOpen, dialog }: Props) {
 
   const protectedApi = useProtected()
+  const confirm = useDangerAlert()
   const [isRemoving, setIsRemoving] = useState(false)
   const [removeError, setRemoveError] = useState('')
   const [isSyncing, setIsSyncing] = useState(false)
   const [syncError, setSyncError] = useState('')
 
   async function handleRemove() {
+    const ok = await confirm({
+      title: `Remove ${dialog.ServiceName}`,
+      description: "This will delete your stored credentials for this service and stop any current actions. This action cannot be undone.",
+      confirmText: "Remove",
+      cancelText: "Cancel"
+    })
+    if (!ok) return
+
     setRemoveError('')
     setIsRemoving(true)
     const success = await removeService_api(dialog.BackendName, protectedApi)

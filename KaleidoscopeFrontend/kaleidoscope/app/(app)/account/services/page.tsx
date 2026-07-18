@@ -8,6 +8,7 @@ import { ChevronLeft } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import ServiceDialog, { ServiceDialogOptions } from "./serviceDialog";
+import AlertPopup from "@/components/KscopeSharedUI/ImageSet/AlertPopup";
 
 
 
@@ -50,7 +51,10 @@ export default function page({ }: Props) {
           <MenuButtons Buttons={Buttons} />
         </div>
       </div>
-      <ServiceDialog dialog={ServiceInfo[serviceIndex]} changeOpen={setDialogOpen} currentOpenState={dialogOpen}/>
+      <AlertPopup>
+        <ServiceDialog dialog={ServiceInfo[serviceIndex]} changeOpen={setDialogOpen} currentOpenState={dialogOpen}/>
+      </AlertPopup>
+      
 
     </>
   )
