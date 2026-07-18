@@ -1,8 +1,11 @@
-import { Dispatch, SetStateAction } from "react"
+import { Dispatch, SetStateAction, useState } from "react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import ConnectPixiv from "./connectPixiv"
 import ConnectService from "./connectService"
 import SeparatorBorder from "@/components/KscopeSharedUI/SeparatorBorder"
+import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider"
+import removeService_api from "@/components/api/removeService-api"
+import syncService_api from "@/components/api/syncService-api"
 
 interface Props {
   changeOpen: Dispatch<SetStateAction<boolean>>
@@ -29,6 +32,33 @@ export type ServiceDialogOptions = {
 
 export default function ServiceDialog({ currentOpenState, changeOpen, dialog }: Props) {
 
+  const protectedApi = useProtected()
+  const [isRemoving, setIsRemoving] = useState(false)
+  const [removeError, setRemoveError] = useState('')
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [syncError, setSyncError] = useState('')
+
+  async function handleRemove() {
+    setRemoveError('')
+    setIsRemoving(true)
+    const success = await removeService_api(dialog.BackendName, protectedApi)
+    setIsRemoving(false)
+    if (success) {
+      changeOpen(false)
+    } else {
+      setRemoveError('Failed to remove service. Please try again.')
+    }
+  }
+
+  async function handleSync() {
+    setSyncError('')
+    setIsSyncing(true)
+    const success = await syncService_api(dialog.BackendName, protectedApi)
+    setIsSyncing(false)
+    if (!success) {
+      setSyncError('Failed to start sync. Please try again.')
+    }
+  }
 
   return (
 
@@ -43,23 +73,33 @@ export default function ServiceDialog({ currentOpenState, changeOpen, dialog }: 
 
         <SeparatorBorder className="p-2 mb-4 flex flex-col">
           <h1 className="font-bold text-2xl text-center my-2">Manage</h1>
+
+          <p className="text-lg"><span className="font-bold ">Last Synced:</span> %tba%</p>
+          <p className="text-lg"><span  className="font-bold">Next Sync in:</span> %tba% Hours</p>
+
           <button
             type="button"
-            className="mt-4 bg-amber-200/40 border-1 border-primary-foreground/50 shadow-black p-2 rounded font-bold
-             hover:shadow-sm 
+            onClick={handleSync}
+            disabled={isSyncing}
+            className="mt-4 bg-accent border-1 border-amber-500/80 shadow-black shadow-xs p-2 rounded font-bold
+             hover:shadow-sm
              active:bg-accent"
           >
-            Sync
+            {isSyncing ? 'Starting Sync...' : 'Sync'}
           </button>
+          {syncError && <p className="text-destructive text-sm mt-2">{syncError}</p>}
           <button
             type="button"
-            className="mt-4 bg-destructive border-1 border-destructive shadow-black shadow-xs p-2 rounded font-bold
+            onClick={handleRemove}
+            disabled={isRemoving}
+            className="mt-4 bg-accent border-1 border-destructive shadow-black shadow-xs p-2 rounded font-bold
              hover:shadow-sm
              active:bg-accent transition-colors"
           >
-            Remove
+            {isRemoving ? 'Removing...' : 'Remove'}
           </button>
-          
+          {removeError && <p className="text-destructive text-sm mt-2">{removeError}</p>}
+
         </SeparatorBorder>
 
 
@@ -67,7 +107,7 @@ export default function ServiceDialog({ currentOpenState, changeOpen, dialog }: 
           <h1 className="font-bold text-2xl text-center my-2">Add/Update Credentials</h1>
           {dialog.BackendName == "pixiv" && (
             <>
-              <ConnectPixiv onOpenChange={changeOpen}></ConnectPixiv>
+              <ConnectPixiv onOpenChange={changeOpen} currentOpenState={currentOpenState} />
 
               <h1 className="font-bold text-center m-2  text-2xl">
                 OR

@@ -192,9 +192,8 @@ export default function ConnectService({ currentOpenState, changeOpen, dialog }:
 
         <button
           type="submit"
-          className="mt-4 bg-green-600/60 group-has-[input:invalid]:bg-primary/10 border-1 border-gray-500 shadow-black shadow-xs [input:invalid]:shadow-none p-2 rounded font-bold
-             hover:shadow-sm
-             active:bg-accent transition-colors"
+          className='mt-4 bg-green-200/20 border-1 border-green-800/80 shadow-black shadow-xs p-2 rounded font-bold hover:shadow-sm active:bg-accent transition-colors  
+          group-has-[input:invalid]:hover:shadow-xs  group-has-[input:invalid]:border-accent   group-has-[input:invalid]:bg-accent'
         >
           Connect
         </button>
