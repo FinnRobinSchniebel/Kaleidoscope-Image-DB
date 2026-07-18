@@ -1,6 +1,6 @@
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider"
 import { SetData } from "@/components/api/jwt_apis/search-api"
-import { SearchPageCountResults, SearchSkipResults } from "@/components/api/SearchResults"
+import { searchPageCountResults, SearchSkipResults } from "@/components/api/searchResults"
 import { createContext, useCallback, useContext, useRef, useState } from "react"
 
 interface ImageSetsContextType {
@@ -33,7 +33,7 @@ export function ImageSetsProvider({ children }: { children: React.ReactNode }) {
 
     try {
 
-      const res = await SearchPageCountResults({
+      const res = await searchPageCountResults({
         protected: protectedAPI,
         page
       })

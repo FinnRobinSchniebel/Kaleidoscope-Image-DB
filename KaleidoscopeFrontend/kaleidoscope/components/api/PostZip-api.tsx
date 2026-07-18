@@ -6,7 +6,7 @@ interface Props {
     protectedApi: protectedAPI
 }
 
-export default async function  PostZip({ form, protectedApi }: Props) : Promise<{status: number, response: any, errorString: string | undefined}> {
+export default async function  postZip({ form, protectedApi }: Props) : Promise<{status: number, response: any, errorString: string | undefined}> {
 
     const newRequest: GORequest = {
         endpoint: `/uploadZip`,

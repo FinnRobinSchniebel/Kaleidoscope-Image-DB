@@ -9,50 +9,34 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-type ServiceInfo struct {
-	ServiceName       string `json:"service"            form:"service"`
-	Key1              string `json:"key1"               form:"apiKey1"            bson:"Key1,omitempty"`
-	Key2              string `json:"key2"               form:"apiKey2"            bson:"Key2,omitempty"`
-	User              string `json:"user"               form:"username"           bson:"User,omitempty"`
-	Password          string `json:"password"           form:"password"           bson:"Password,omitempty"`
-	SyncIntervalHours int64  `json:"sync_interval_hours" form:"sync_interval_hours"`
-}
-
 func Register(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
-
-	var info ServiceInfo
-	if err := c.BodyParser(&info); err != nil {
-		return fiber.ErrBadRequest
-	}
-	if info.ServiceName == "" {
+	service := c.Params("name")
+	if service == "" {
 		return fiber.ErrBadRequest
 	}
 
-	creds := ExternalApiKeys{
-		Key1:              info.Key1,
-		Key2:              info.Key2,
-		UserName:          info.User,
-		Password:          info.Password,
-		SyncIntervalHours: info.SyncIntervalHours,
+	var creds ExternalApiKeys
+	if err := c.BodyParser(&creds); err != nil {
+		return fiber.ErrBadRequest
 	}
 
-	if err := DefaultScheduler.TestCredentials(info.ServiceName, userID, creds); err != nil {
+	if err := DefaultScheduler.TestCredentials(service, userID, creds); err != nil {
 		return c.Status(fiber.StatusServiceUnavailable).SendString(fmt.Sprintf("Failed to Connect to service: %s", err.Error()))
 	}
 
-	if err := AddServiceCredentials(userID, info.ServiceName, creds); err != nil {
+	if err := AddServiceCredentials(userID, service, creds); err != nil {
 		return c.Status(fiber.StatusInternalServerError).SendString("failed to store credentials")
 	}
 
-	DefaultScheduler.fireCredentialHook(info.ServiceName, userID, creds)
+	DefaultScheduler.fireCredentialHook(service, userID, creds)
 
 	return c.SendStatus(fiber.StatusOK)
 }
 
 func GetKeys(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
-	service := c.Query("Service")
+	service := c.Params("name")
 	key, err := GetServiceCredentials(userID, service)
 	if err != nil {
 		return err
@@ -62,10 +46,26 @@ func GetKeys(c *fiber.Ctx) error {
 
 func SyncService(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
-	if err := SyncPixivBookmarks(userID); err != nil {
+	service := c.Params("name")
+	if service == "" {
+		return fiber.ErrBadRequest
+	}
+	if err := DefaultScheduler.SyncUser(service, userID); err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
-	return c.Status(fiber.StatusAccepted).SendString("pixiv bookmark sync Added to Queue")
+	return c.Status(fiber.StatusAccepted).SendString(service + " sync added to queue")
+}
+
+func RemoveService(c *fiber.Ctx) error {
+	userID := c.Locals("UserID").(string)
+	service := c.Params("name")
+	if service == "" {
+		return fiber.ErrBadRequest
+	}
+	if err := DefaultScheduler.RemoveService(service, userID); err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+	}
+	return c.SendStatus(fiber.StatusOK)
 }
 
 func PixivConnect(c *fiber.Ctx) error {
@@ -102,6 +102,3 @@ func PixivConnect(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusOK)
 }
 
-// func RemoveKey(c *fiber.Ctx) error {
-
-// }

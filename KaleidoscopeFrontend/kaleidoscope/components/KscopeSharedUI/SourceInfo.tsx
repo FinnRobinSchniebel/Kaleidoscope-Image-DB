@@ -1,4 +1,4 @@
-import { SourceInfo } from "../api/GetImageSetData-api";
+import { SourceInfo } from "../api/getImageSetData-api";
 
 
 interface props {

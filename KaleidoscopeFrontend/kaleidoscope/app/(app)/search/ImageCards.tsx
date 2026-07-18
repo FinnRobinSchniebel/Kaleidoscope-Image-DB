@@ -1,7 +1,7 @@
 'use client'
 
 import {imageRequest, thumbNailAPI } from "@/components/api/image-api";
-import { imageCache } from "@/components/api/ImageCaching";
+import { imageCache } from "@/components/api/imageCaching";
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider";
 import { DialogTrigger } from "@/components/ui/dialog";
 import { Item } from "@/components/ui/item";

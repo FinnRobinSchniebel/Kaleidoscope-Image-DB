@@ -14,12 +14,11 @@ import (
 var ServicesDb *mongo.Collection
 
 type ExternalApiKeys struct {
-	Key1              string `json:"key1,omitempty"               bson:"key1,omitempty"`
-	Key2              string `json:"key2,omitempty"               bson:"key2,omitempty"`
-	UserName          string `json:"username,omitempty"           bson:"username,omitempty"`
-	Password          string `json:"password,omitempty"           bson:"password,omitempty"`
-	SyncIntervalHours int64  `json:"sync_interval_hours,omitempty" bson:"sync_interval_hours,omitempty"` // 0 = no schedule
-
+	Key1              string `json:"key1,omitempty"                bson:"key1,omitempty"                form:"apiKey1"`
+	Key2              string `json:"key2,omitempty"                bson:"key2,omitempty"                form:"apiKey2"`
+	UserName          string `json:"username,omitempty"            bson:"username,omitempty"            form:"username"`
+	Password          string `json:"password,omitempty"            bson:"password,omitempty"            form:"password"`
+	SyncIntervalHours int64  `json:"sync_interval_hours,omitempty" bson:"sync_interval_hours,omitempty" form:"sync_interval_hours"` // 0 = no schedule
 }
 
 // One document per user; each service name is a key inside the Services map.

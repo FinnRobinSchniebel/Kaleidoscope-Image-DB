@@ -1,6 +1,6 @@
 import { LoadingImageCard } from "@/app/(app)/search/ImageCards"
-import { imageAPI, imageRequest, ImageRequestToString } from "@/components/api/image-api"
-import { imageCache } from "@/components/api/ImageCaching"
+import { imageAPI, imageRequest, imageRequestToString } from "@/components/api/image-api"
+import { imageCache } from "@/components/api/imageCaching"
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider"
 import { CarouselItem } from "@/components/ui/carousel"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -64,7 +64,7 @@ export default function ImageSetCarouselImage({ SetID, index: index, distance, c
     // get image from api
     const t = async () => {
 
-      const requestName = ImageRequestToString(request)
+      const requestName = imageRequestToString(request)
 
       const url = await imageCache.get(requestName, async () => {return await imageAPI(request) }, "")
 

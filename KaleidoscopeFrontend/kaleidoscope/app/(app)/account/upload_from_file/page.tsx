@@ -19,9 +19,10 @@ import FolderList from './FolderList'
 import UploadInstructions from './UploadInstructions'
 import DropFile from './DropFile'
 import { SubmitErrorHandler, SubmitHandler, useForm } from 'react-hook-form'
-import PostZip from '@/components/api/PostZip-api'
+
 import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider'
 import { Item } from '@radix-ui/react-navigation-menu'
+import postZip from '@/components/api/PostZip-api'
 
 export type UploadFormValues = {
   zipFile: File | null
@@ -94,7 +95,7 @@ export default function page({ }: Props) {
       formData.append(`folders`, folder == "" ? "NAN" : folder)
     })
 
-    const { status, response, errorString } = await PostZip({ form: formData, protectedApi: protectedApi })
+    const { status, response, errorString } = await postZip({ form: formData, protectedApi: protectedApi })
 
     if (errorString != undefined) {
       setErrorMessage(errorString)

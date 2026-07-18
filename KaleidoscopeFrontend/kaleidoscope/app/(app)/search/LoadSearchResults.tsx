@@ -5,7 +5,7 @@ import { useEffect } from "react";
 
 import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
 import { useInView } from 'react-intersection-observer';
-import { SearchPageCountResults } from '../../../components/api/SearchResults';
+import { searchPageCountResults } from '../../../components/api/searchResults';
 import Image from 'next/image';
 import { Dialog } from '@/components/ui/dialog';
 

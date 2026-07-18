@@ -1,4 +1,4 @@
-import { FullImageSetData, SourceInfo } from "@/components/api/GetImageSetData-api";
+import { FullImageSetData, SourceInfo } from "@/components/api/getImageSetData-api";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 

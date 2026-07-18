@@ -9,12 +9,12 @@ export interface ServiceCredentials {
   sync_interval_hours?: number
 }
 
-export async function GetServiceCredentials(
+export async function getServiceCredentials(
   service: string,
   protectedApi: protectedAPI
 ): Promise<ServiceCredentials | null> {
   const request: GORequest = {
-    endpoint: `/service/getKey?Service=${encodeURIComponent(service)}`,
+    endpoint: `/service/${encodeURIComponent(service)}/key`,
     type: "GET",
     header: {},
   }

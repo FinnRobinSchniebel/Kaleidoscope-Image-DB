@@ -17,7 +17,7 @@ type SearchPageCountProps = {
 
 
 
-export async function SearchPageCountResults(props: SearchPageCountProps): Promise<{ imageSets: SetData[]; count: number }> {
+export async function searchPageCountResults(props: SearchPageCountProps): Promise<{ imageSets: SetData[]; count: number }> {
 
   const request: SearchRequest = {
     pageCount: 8,

@@ -42,6 +42,18 @@ type CredentialHook func(userId string, creds ExternalApiKeys)
 // returned to the caller so the frontend can display connection status.
 type CredentialTestHook func(userId string, creds ExternalApiKeys) error
 
+// ServiceProvider is implemented by every external service integration.
+// Register a provider once at startup via DefaultScheduler.RegisterProvider.
+type ServiceProvider interface {
+	Name() string
+	Config() ServiceConfig
+	TestCredentials(userId string, creds ExternalApiKeys) error
+	OnCredentialsUpdated(userId string, creds ExternalApiKeys)
+	OnCredentialsRemoved(userId string)
+	RestoreSchedules()
+	Sync(userId string) error
+}
+
 // Scheduler coordinates task execution across multiple services and users,
 // enforcing per-service rate limits and round-robin user rotation.
 type Scheduler struct {
@@ -51,6 +63,7 @@ type Scheduler struct {
 	periodicMu    sync.Mutex
 	credHooks     map[string]CredentialHook     // keyed by service name
 	credTestHooks map[string]CredentialTestHook // keyed by service name
+	providers     map[string]ServiceProvider    // keyed by service name
 }
 
 // DefaultScheduler is the package-level scheduler used by all service integrations.
@@ -62,6 +75,7 @@ func NewScheduler() *Scheduler {
 		periodic:      make(map[string]context.CancelFunc),
 		credHooks:     make(map[string]CredentialHook),
 		credTestHooks: make(map[string]CredentialTestHook),
+		providers:     make(map[string]ServiceProvider),
 	}
 }
 
@@ -265,6 +279,58 @@ func (s *Scheduler) CancelPeriodic(serviceName, userId string) {
 		delete(s.periodic, key)
 	}
 	s.periodicMu.Unlock()
+}
+
+// RegisterProvider registers a service via its ServiceProvider interface,
+// replacing the three separate Register* calls that were previously required.
+func (s *Scheduler) RegisterProvider(p ServiceProvider) {
+	s.RegisterService(p.Name(), p.Config())
+	s.RegisterCredentialHook(p.Name(), p.OnCredentialsUpdated)
+	s.RegisterCredentialTestHook(p.Name(), p.TestCredentials)
+	s.mu.Lock()
+	s.providers[p.Name()] = p
+	s.mu.Unlock()
+}
+
+// RestoreAllSchedules calls RestoreSchedules on every registered provider.
+// Call once at startup after Start.
+func (s *Scheduler) RestoreAllSchedules() {
+	s.mu.RLock()
+	ps := make([]ServiceProvider, 0, len(s.providers))
+	for _, p := range s.providers {
+		ps = append(ps, p)
+	}
+	s.mu.RUnlock()
+	for _, p := range ps {
+		p.RestoreSchedules()
+	}
+}
+
+// SyncUser triggers an on-demand sync for userId on the named service.
+func (s *Scheduler) SyncUser(serviceName, userId string) error {
+	s.mu.RLock()
+	p, ok := s.providers[serviceName]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("service %q not registered", serviceName)
+	}
+	return p.Sync(userId)
+}
+
+// RemoveService cleans up a user's service: fires OnCredentialsRemoved, cancels
+// any periodic job, removes the user from the scheduler rotation, and deletes
+// the stored credentials from the database.
+func (s *Scheduler) RemoveService(serviceName, userId string) error {
+	s.mu.RLock()
+	p, ok := s.providers[serviceName]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("service %q not registered", serviceName)
+	}
+	p.OnCredentialsRemoved(userId)
+	s.CancelPeriodic(serviceName, userId)
+	_ = s.RemoveUser(serviceName, userId)
+	return DeleteServiceInfo(userId, serviceName)
 }
 
 func (ss *serviceScheduler) run() {

@@ -16,7 +16,7 @@ export interface imageSetIDResponse {
   count: number
 }
 
-export function ImageRequestToString(r : imageRequest): string {
+export function imageRequestToString(r : imageRequest): string {
   return `${r.ID}-${r.Index}-${r.Lowres}`
 }
 

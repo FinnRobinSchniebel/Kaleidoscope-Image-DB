@@ -2,7 +2,7 @@
 import React from 'react'
 import SearchBar from './SearchBar'
 import { ScrollArea } from '@radix-ui/react-scroll-area'
-import {SearchPageCountResults} from '../../../components/api/SearchResults'
+import {searchPageCountResults} from '../../../components/api/searchResults'
 import Search from './Search'
 import { protectedAPI } from '@/components/api/jwt_apis/protected-api-client'
 import { ReadToken } from '@/components/api/get_variables_server'

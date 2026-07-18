@@ -81,45 +81,48 @@ func openPixivSession(userId string) (*PixivSession, error) {
 	return session, nil
 }
 
-// ---- Scheduler registration ----
+// ---- ServiceProvider implementation ----
 
-// RegisterPixivService registers the "pixiv" service with the DefaultScheduler
-// and hooks credential updates so schedules are applied whenever credentials change.
-// Call this once at startup, before DefaultScheduler.Start().
-func RegisterPixivService() {
-	DefaultScheduler.RegisterService(pixivServiceName, ServiceConfig{
-		Delay:          1 * time.Second,
-		QueriesPerTurn: 1,
-	})
-	DefaultScheduler.RegisterCredentialHook(pixivServiceName, func(userId string, creds ExternalApiKeys) {
-		InvalidatePixivSession(userId)
-		if err := applyPixivSchedule(userId, creds.SyncIntervalHours); err != nil {
-			log.Printf("pixiv: failed to apply schedule for %s: %v", userId, err)
-		}
-	})
-	DefaultScheduler.RegisterCredentialTestHook(pixivServiceName, func(userId string, creds ExternalApiKeys) error {
-		if creds.Key1 == "" {
-			return fmt.Errorf("Credential Test Failed: pixiv requires a refresh token")
-		}
-		app, err := pixiv.NewApp(creds.Key1)
-		if err != nil {
-			return fmt.Errorf("Credential Test Failed: %w", err)
-		}
-		UID, err := strconv.ParseUint(creds.UserName, 10, 64)
-		if err != nil {
-			return fmt.Errorf("Credential Test Failed: Pixiv User ID could not be parsed into a number.")
-		}
-		if _, _, err := app.UserBookmarksIllust(UID, pixiv.UserBookmarksIllustOptions{}); err != nil {
-			return fmt.Errorf("Credential Test Failed: %w", err)
-		}
-		return nil
-	})
+// PixivProvider implements ServiceProvider for the Pixiv integration.
+type PixivProvider struct{}
+
+func (p *PixivProvider) Name() string { return pixivServiceName }
+
+func (p *PixivProvider) Config() ServiceConfig {
+	return ServiceConfig{Delay: PixivDelaySec * time.Second, QueriesPerTurn: PixivQpT}
 }
 
-// RestorePixivSchedules reads all users with stored pixiv credentials from the
-// database and reinstates their periodic sync schedules. Call once at startup
-// after RegisterPixivService.
-func RestorePixivSchedules() {
+func (p *PixivProvider) TestCredentials(userId string, creds ExternalApiKeys) error {
+	if creds.Key1 == "" {
+		return fmt.Errorf("Credential Test Failed: pixiv requires a refresh token")
+	}
+	app, err := pixiv.NewApp(creds.Key1)
+	if err != nil {
+		return fmt.Errorf("Credential Test Failed: %w", err)
+	}
+	UID, err := strconv.ParseUint(creds.UserName, 10, 64)
+	if err != nil {
+		return fmt.Errorf("Credential Test Failed: Pixiv User ID could not be parsed into a number.")
+	}
+	if _, _, err := app.UserBookmarksIllust(UID, pixiv.UserBookmarksIllustOptions{}); err != nil {
+		return fmt.Errorf("Credential Test Failed: %w", err)
+	}
+	return nil
+}
+
+func (p *PixivProvider) OnCredentialsUpdated(userId string, creds ExternalApiKeys) {
+	InvalidatePixivSession(userId)
+	if err := applyPixivSchedule(userId, creds.SyncIntervalHours); err != nil {
+		log.Printf("pixiv: failed to apply schedule for %s: %v", userId, err)
+	}
+}
+
+func (p *PixivProvider) OnCredentialsRemoved(userId string) {
+	InvalidatePixivSession(userId)
+	activeSyncs.Delete(userId)
+}
+
+func (p *PixivProvider) RestoreSchedules() {
 	docs, err := GetAllUsersWithService(pixivServiceName)
 	if err != nil {
 		log.Printf("pixiv: could not restore schedules: %v", err)
@@ -132,6 +135,10 @@ func RestorePixivSchedules() {
 		}
 	}
 	log.Printf("pixiv: restored schedules for %d user(s)", len(docs))
+}
+
+func (p *PixivProvider) Sync(userId string) error {
+	return SyncPixivBookmarks(userId)
 }
 
 // applyPixivSchedule starts (or replaces) the periodic sync for userId.

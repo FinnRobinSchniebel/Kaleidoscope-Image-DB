@@ -86,11 +86,11 @@ func ConnectDB() {
 }
 
 // StartServices registers all external service integrations with the scheduler
-// and starts the background worker. Add a Register* call here for each new service.
+// and starts the background worker. Add a RegisterProvider call here for each new service.
 func StartServices() {
-	services.RegisterPixivService()
+	services.DefaultScheduler.RegisterProvider(&services.PixivProvider{})
 	services.DefaultScheduler.Start()
-	services.RestorePixivSchedules()
+	services.DefaultScheduler.RestoreAllSchedules()
 }
 
 func StartAPI() {
@@ -146,9 +146,10 @@ func StartAPI() {
 	app.Post("/api/addtag", authutil.AuthSessionToken, AddTag)
 
 	//services
-	app.Post("/api/service/register", authutil.AuthSessionToken, services.Register)
-	app.Get("/api/service/getKey", authutil.AuthSessionToken, services.GetKeys)
-	app.Post("/api/service/pixiv/sync", authutil.AuthSessionToken, services.SyncService)
+	app.Post("/api/service/:name/register", authutil.AuthSessionToken, services.Register)
+	app.Get("/api/service/:name/key", authutil.AuthSessionToken, services.GetKeys)
+	app.Post("/api/service/:name/sync", authutil.AuthSessionToken, services.SyncService)
+	app.Delete("/api/service/:name", authutil.AuthSessionToken, services.RemoveService)
 	app.Post("/api/service/pixivconnect", authutil.AuthSessionToken, services.PixivConnect)
 
 	//get all author names

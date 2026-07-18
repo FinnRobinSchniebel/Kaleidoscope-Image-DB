@@ -1,7 +1,7 @@
 'use client'
 
 import SeparatorBorder from '@/components/KscopeSharedUI/SeparatorBorder'
-import { GetServiceCredentials } from '@/components/api/GetServiceCredentials-api'
+import { getServiceCredentials } from '@/components/api/getServiceCredentials-api'
 import { GORequest } from '@/components/api/apicaller'
 import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -46,7 +46,7 @@ export default function ConnectPixiv({ onOpenChange }: Props) {
       setError('')
       return
     }
-    GetServiceCredentials('pixiv', protectedApi).then(creds => {
+    getServiceCredentials('pixiv', protectedApi).then(creds => {
       if (!creds) return
       setPixivUserId(creds.username ?? '')
       setSyncInterval(String(creds.sync_interval_hours ?? 0))
