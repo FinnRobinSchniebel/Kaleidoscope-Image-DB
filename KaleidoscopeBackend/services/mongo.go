@@ -13,6 +13,11 @@ import (
 
 var ServicesDb *mongo.Collection
 
+// type ExternalApiInfo struct{
+// 	SyncIntervalHours int64  `json:"sync_interval_hours,omitempty" bson:"sync_interval_hours,omitempty" form:"sync_interval_hours"` // 0 = no schedule
+// 	LastSyncTime
+// }
+
 type ExternalApiKeys struct {
 	Key1              string `json:"key1,omitempty"                bson:"key1,omitempty"                form:"apiKey1"`
 	Key2              string `json:"key2,omitempty"                bson:"key2,omitempty"                form:"apiKey2"`

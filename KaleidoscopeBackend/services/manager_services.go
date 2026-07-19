@@ -1,7 +1,7 @@
 package services
 
 import (
-	"context"
+	"container/heap"
 	"fmt"
 	"sync"
 	"time"
@@ -54,16 +54,59 @@ type ServiceProvider interface {
 	Sync(userId string) error
 }
 
+// periodicEntry is a single scheduled recurring job, ordered in the scheduler's
+// heap by nextRun (soonest first).
+type periodicEntry struct {
+	key       string // "service/userId"
+	interval  time.Duration
+	job       func()
+	nextRun   time.Time
+	index     int // position in periodicHeap; -1 when not in the heap
+	cancelled bool
+}
+
+// periodicHeap is a min-heap of periodicEntry ordered by nextRun.
+type periodicHeap []*periodicEntry
+
+func (h periodicHeap) Len() int           { return len(h) }
+func (h periodicHeap) Less(i, j int) bool { return h[i].nextRun.Before(h[j].nextRun) }
+func (h periodicHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index = i
+	h[j].index = j
+}
+func (h *periodicHeap) Push(x any) {
+	e := x.(*periodicEntry)
+	e.index = len(*h)
+	*h = append(*h, e)
+}
+func (h *periodicHeap) Pop() any {
+	old := *h
+	n := len(old)
+	e := old[n-1]
+	old[n-1] = nil
+	e.index = -1
+	*h = old[:n-1]
+	return e
+}
+
 // Scheduler coordinates task execution across multiple services and users,
 // enforcing per-service rate limits and round-robin user rotation.
 type Scheduler struct {
 	services      map[string]*serviceScheduler
 	mu            sync.RWMutex
-	periodic      map[string]context.CancelFunc // keyed by "service/userId"
-	periodicMu    sync.Mutex
 	credHooks     map[string]CredentialHook     // keyed by service name
 	credTestHooks map[string]CredentialTestHook // keyed by service name
 	providers     map[string]ServiceProvider    // keyed by service name
+
+	// sleeps until the soonest-due entry in periodicHeap, fires it in its own
+	// goroutine, reschedules it, and goes back to sleep. This avoids spinning
+	periodicMu    sync.Mutex
+	periodicHeap  periodicHeap
+	periodicByKey map[string]*periodicEntry // keyed by "service/userId"
+	periodicWake  chan struct{}             // nudges runPeriodic when the schedule changes
+	periodicStop  chan struct{}
+	periodicOnce  sync.Once
 }
 
 // DefaultScheduler is the package-level scheduler used by all service integrations.
@@ -72,10 +115,12 @@ var DefaultScheduler = NewScheduler()
 func NewScheduler() *Scheduler {
 	return &Scheduler{
 		services:      make(map[string]*serviceScheduler),
-		periodic:      make(map[string]context.CancelFunc),
 		credHooks:     make(map[string]CredentialHook),
 		credTestHooks: make(map[string]CredentialTestHook),
 		providers:     make(map[string]ServiceProvider),
+		periodicByKey: make(map[string]*periodicEntry),
+		periodicWake:  make(chan struct{}, 1),
+		periodicStop:  make(chan struct{}),
 	}
 }
 
@@ -209,16 +254,21 @@ func (s *Scheduler) Enqueue(serviceName, userId string, task Task) error {
 	return nil
 }
 
-// Start launches a background goroutine for each registered service.
+// Start launches a background goroutine for each registered service, plus the
+// single goroutine that drives all periodic jobs.
 func (s *Scheduler) Start() {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	for _, ss := range s.services {
 		go ss.run()
 	}
+	s.mu.RUnlock()
+
+	s.periodicOnce.Do(func() {
+		go s.runPeriodic()
+	})
 }
 
-// Stop signals all service goroutines and periodic jobs to exit.
+// Stop signals all service goroutines and the periodic runner to exit.
 func (s *Scheduler) Stop() {
 	s.mu.RLock()
 	for _, ss := range s.services {
@@ -226,17 +276,19 @@ func (s *Scheduler) Stop() {
 	}
 	s.mu.RUnlock()
 
-	s.periodicMu.Lock()
-	for _, cancel := range s.periodic {
-		cancel()
-	}
-	s.periodicMu.Unlock()
+	close(s.periodicStop)
 }
 
 // SchedulePeriodic registers a recurring job for userId on serviceName.
 // job is called once per interval; any previous schedule for this user+service
 // is replaced. The job is not called immediately — the first call happens after
-// one full interval has elapsed.
+// one full interval has elapsed from the time it is scheduled.
+//
+// All periodic jobs across every service share a single driver goroutine
+// (see runPeriodic): jobs are kept in a min-heap ordered by their next run
+// time, and the driver sleeps only until the soonest one is due, firing it in
+// its own goroutine at that point. This keeps periodic scheduling to one
+// long-lived goroutine no matter how many jobs are registered.
 func (s *Scheduler) SchedulePeriodic(serviceName, userId string, interval time.Duration, job func()) error {
 	s.mu.RLock()
 	_, ok := s.services[serviceName]
@@ -245,28 +297,26 @@ func (s *Scheduler) SchedulePeriodic(serviceName, userId string, interval time.D
 		return fmt.Errorf("service %q not registered", serviceName)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	key := serviceName + "/" + userId
+	entry := &periodicEntry{
+		key:      key,
+		interval: interval,
+		job:      job,
+		nextRun:  time.Now().Add(interval),
+	}
 
 	s.periodicMu.Lock()
-	if existing, ok := s.periodic[key]; ok {
-		existing()
+	if existing, ok := s.periodicByKey[key]; ok {
+		existing.cancelled = true
+		if existing.index >= 0 {
+			heap.Remove(&s.periodicHeap, existing.index)
+		}
 	}
-	s.periodic[key] = cancel
+	s.periodicByKey[key] = entry
+	heap.Push(&s.periodicHeap, entry)
 	s.periodicMu.Unlock()
 
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				job()
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	s.wakePeriodicRunner()
 	return nil
 }
 
@@ -274,11 +324,90 @@ func (s *Scheduler) SchedulePeriodic(serviceName, userId string, interval time.D
 func (s *Scheduler) CancelPeriodic(serviceName, userId string) {
 	key := serviceName + "/" + userId
 	s.periodicMu.Lock()
-	if cancel, ok := s.periodic[key]; ok {
-		cancel()
-		delete(s.periodic, key)
+	if entry, ok := s.periodicByKey[key]; ok {
+		entry.cancelled = true
+		if entry.index >= 0 {
+			heap.Remove(&s.periodicHeap, entry.index)
+		}
+		delete(s.periodicByKey, key)
 	}
 	s.periodicMu.Unlock()
+}
+
+// wakePeriodicRunner nudges runPeriodic to re-evaluate the schedule, e.g.
+// because a newly added job is due sooner than whatever it was sleeping on.
+func (s *Scheduler) wakePeriodicRunner() {
+	select {
+	case s.periodicWake <- struct{}{}:
+	default:
+	}
+}
+
+// runPeriodic is the single goroutine responsible for all periodic jobs.
+// It sleeps until the soonest-due entry in periodicHeap, then fires every
+// entry that has come due (each in its own goroutine) and reschedules them,
+// before going back to sleep. New jobs and cancellations wake it early via
+// periodicWake so it never sleeps past a newly-added earlier job.
+func (s *Scheduler) runPeriodic() {
+	for {
+		s.periodicMu.Lock()
+		hasNext := s.periodicHeap.Len() > 0
+		var wait time.Duration
+		if hasNext {
+			wait = max(time.Until(s.periodicHeap[0].nextRun), 0)
+		}
+		s.periodicMu.Unlock()
+
+		if !hasNext {
+			select {
+			case <-s.periodicStop:
+				return
+			case <-s.periodicWake:
+				continue
+			}
+		}
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-s.periodicStop:
+			timer.Stop()
+			return
+		case <-s.periodicWake:
+			timer.Stop()
+			continue
+		case <-timer.C:
+			s.firePeriodicDue()
+		}
+	}
+}
+
+// firePeriodicDue pops every entry whose nextRun has arrived, reschedules
+// each for now+interval, and launches their jobs in new goroutines. Entries
+// cancelled or replaced between being popped and rescheduled are dropped.
+func (s *Scheduler) firePeriodicDue() {
+	now := time.Now()
+
+	s.periodicMu.Lock()
+	due := make([]*periodicEntry, 0, 1)
+	for s.periodicHeap.Len() > 0 && !s.periodicHeap[0].nextRun.After(now) {
+		e := heap.Pop(&s.periodicHeap).(*periodicEntry)
+		due = append(due, e)
+	}
+	for _, e := range due {
+		if e.cancelled {
+			continue
+		}
+		e.nextRun = now.Add(e.interval)
+		heap.Push(&s.periodicHeap, e)
+	}
+	s.periodicMu.Unlock()
+
+	for _, e := range due {
+		if e.cancelled {
+			continue
+		}
+		go e.job()
+	}
 }
 
 // RegisterProvider registers a service via its ServiceProvider interface,

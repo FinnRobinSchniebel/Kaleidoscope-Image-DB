@@ -69,13 +69,6 @@ func openPixivSession(userId string) (*PixivSession, error) {
 		}
 	}
 
-	// if creds.Key2 != "" {
-	// 	session.Web, err = pixiv.NewWebApp(creds.Key2)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("pixiv web API: %w", err)
-	// 	}
-	// }
-
 	pixivSessions.Store(userId, session)
 
 	return session, nil
