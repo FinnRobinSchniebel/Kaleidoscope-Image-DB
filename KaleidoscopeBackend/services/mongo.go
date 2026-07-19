@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -13,10 +14,10 @@ import (
 
 var ServicesDb *mongo.Collection
 
-// type ExternalApiInfo struct{
-// 	SyncIntervalHours int64  `json:"sync_interval_hours,omitempty" bson:"sync_interval_hours,omitempty" form:"sync_interval_hours"` // 0 = no schedule
-// 	LastSyncTime
-// }
+type ExternalApiInfo struct {
+	SyncIntervalHours int64     `json:"sync_interval_hours,omitempty" bson:"sync_interval_hours,omitempty" form:"sync_interval_hours"` // 0 = no schedule
+	LastSynced        time.Time `json:"last_synced,omitempty"         bson:"last_synced,omitempty"`
+}
 
 type ExternalApiKeys struct {
 	Key1              string `json:"key1,omitempty"                bson:"key1,omitempty"                form:"apiKey1"`

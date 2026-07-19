@@ -25,6 +25,17 @@ type userEntry struct {
 	mu          sync.Mutex
 }
 
+// periodicEntry is a single scheduled recurring job, ordered in the scheduler's
+// heap by nextRun (soonest first).
+type periodicEntry struct {
+	key       string // "service/userId"
+	interval  time.Duration
+	job       func()
+	nextRun   time.Time
+	index     int // position in periodicHeap; -1 when not in the heap
+	cancelled bool
+}
+
 type serviceScheduler struct {
 	config  ServiceConfig
 	users   []*userEntry
@@ -52,17 +63,6 @@ type ServiceProvider interface {
 	OnCredentialsRemoved(userId string)
 	RestoreSchedules()
 	Sync(userId string) error
-}
-
-// periodicEntry is a single scheduled recurring job, ordered in the scheduler's
-// heap by nextRun (soonest first).
-type periodicEntry struct {
-	key       string // "service/userId"
-	interval  time.Duration
-	job       func()
-	nextRun   time.Time
-	index     int // position in periodicHeap; -1 when not in the heap
-	cancelled bool
 }
 
 // periodicHeap is a min-heap of periodicEntry ordered by nextRun.
