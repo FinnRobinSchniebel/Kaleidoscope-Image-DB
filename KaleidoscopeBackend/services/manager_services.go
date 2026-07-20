@@ -1,7 +1,6 @@
 package services
 
 import (
-	"container/heap"
 	"fmt"
 	"sync"
 	"time"
@@ -25,17 +24,6 @@ type userEntry struct {
 	mu          sync.Mutex
 }
 
-// periodicEntry is a single scheduled recurring job, ordered in the scheduler's
-// heap by nextRun (soonest first).
-type periodicEntry struct {
-	key       string // "service/userId"
-	interval  time.Duration
-	job       func()
-	nextRun   time.Time
-	index     int // position in periodicHeap; -1 when not in the heap
-	cancelled bool
-}
-
 type serviceScheduler struct {
 	config  ServiceConfig
 	users   []*userEntry
@@ -44,14 +32,6 @@ type serviceScheduler struct {
 	lastRun time.Time
 	stop    chan struct{}
 }
-
-// CredentialHook is called whenever credentials for a service are created or updated.
-type CredentialHook func(userId string, creds ExternalApiKeys)
-
-// CredentialTestHook validates a set of credentials against the external service.
-// It is called synchronously from the Register endpoint; the error (if any) is
-// returned to the caller so the frontend can display connection status.
-type CredentialTestHook func(userId string, creds ExternalApiKeys) error
 
 // ServiceProvider is implemented by every external service integration.
 // Register a provider once at startup via DefaultScheduler.RegisterProvider.
@@ -65,39 +45,12 @@ type ServiceProvider interface {
 	Sync(userId string) error
 }
 
-// periodicHeap is a min-heap of periodicEntry ordered by nextRun.
-type periodicHeap []*periodicEntry
-
-func (h periodicHeap) Len() int           { return len(h) }
-func (h periodicHeap) Less(i, j int) bool { return h[i].nextRun.Before(h[j].nextRun) }
-func (h periodicHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-	h[i].index = i
-	h[j].index = j
-}
-func (h *periodicHeap) Push(x any) {
-	e := x.(*periodicEntry)
-	e.index = len(*h)
-	*h = append(*h, e)
-}
-func (h *periodicHeap) Pop() any {
-	old := *h
-	n := len(old)
-	e := old[n-1]
-	old[n-1] = nil
-	e.index = -1
-	*h = old[:n-1]
-	return e
-}
-
 // Scheduler coordinates task execution across multiple services and users,
 // enforcing per-service rate limits and round-robin user rotation.
 type Scheduler struct {
-	services      map[string]*serviceScheduler
-	mu            sync.RWMutex
-	credHooks     map[string]CredentialHook     // keyed by service name
-	credTestHooks map[string]CredentialTestHook // keyed by service name
-	providers     map[string]ServiceProvider    // keyed by service name
+	services  map[string]*serviceScheduler
+	mu        sync.RWMutex
+	providers map[string]ServiceProvider // keyed by service name
 
 	// sleeps until the soonest-due entry in periodicHeap, fires it in its own
 	// goroutine, reschedules it, and goes back to sleep. This avoids spinning
@@ -111,148 +64,6 @@ type Scheduler struct {
 
 // DefaultScheduler is the package-level scheduler used by all service integrations.
 var DefaultScheduler = NewScheduler()
-
-func NewScheduler() *Scheduler {
-	return &Scheduler{
-		services:      make(map[string]*serviceScheduler),
-		credHooks:     make(map[string]CredentialHook),
-		credTestHooks: make(map[string]CredentialTestHook),
-		providers:     make(map[string]ServiceProvider),
-		periodicByKey: make(map[string]*periodicEntry),
-		periodicWake:  make(chan struct{}, 1),
-		periodicStop:  make(chan struct{}),
-	}
-}
-
-// RegisterCredentialHook registers a callback to be fired whenever credentials
-// for serviceName are created or updated via the Register API endpoint.
-// Replaces any previously registered hook for the same service.
-func (s *Scheduler) RegisterCredentialHook(serviceName string, hook CredentialHook) {
-	s.mu.Lock()
-	s.credHooks[serviceName] = hook
-	s.mu.Unlock()
-}
-
-// fireCredentialHook calls the registered hook for serviceName, if any.
-func (s *Scheduler) fireCredentialHook(serviceName, userId string, creds ExternalApiKeys) {
-	s.mu.RLock()
-	hook := s.credHooks[serviceName]
-	s.mu.RUnlock()
-	if hook != nil {
-		hook(userId, creds)
-	}
-}
-
-// RegisterCredentialTestHook registers a synchronous validator for serviceName.
-// The hook is called by the Register endpoint and its error is returned to the client.
-func (s *Scheduler) RegisterCredentialTestHook(serviceName string, hook CredentialTestHook) {
-	s.mu.Lock()
-	s.credTestHooks[serviceName] = hook
-	s.mu.Unlock()
-}
-
-// TestCredentials runs the registered test hook for serviceName, if any.
-// Returns nil when no hook is registered (treat as untestable, not an error).
-func (s *Scheduler) TestCredentials(serviceName, userId string, creds ExternalApiKeys) error {
-	s.mu.RLock()
-	hook := s.credTestHooks[serviceName]
-	s.mu.RUnlock()
-	if hook == nil {
-		return fmt.Errorf("no hook for testing credentials was found")
-	}
-	return hook(userId, creds)
-}
-
-// RegisterService registers an API service with its scheduling config.
-// Must be called before Start.
-func (s *Scheduler) RegisterService(name string, cfg ServiceConfig) {
-	if cfg.QueriesPerTurn <= 0 {
-		cfg.QueriesPerTurn = 1
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.services[name] = &serviceScheduler{
-		config: cfg,
-		byUser: make(map[string]*userEntry),
-		stop:   make(chan struct{}),
-	}
-	fmt.Printf("Services: A new service \"%s\" has been Registered by the service schedule. Delay: %s, QpT: %d", name, cfg.Delay, cfg.QueriesPerTurn)
-}
-
-// AddUser adds a user to a service's round-robin rotation.
-// Safe to call after Start. No-op if the user is already present.
-func (s *Scheduler) AddUser(serviceName, userId string) error {
-	s.mu.RLock()
-	ss, ok := s.services[serviceName]
-	s.mu.RUnlock()
-	if !ok {
-		fmt.Printf("Error: Services: failed to add user [%s] to service: %s. Service not registered", userId, serviceName)
-		return fmt.Errorf("service %q not registered", serviceName)
-	}
-
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	if _, exists := ss.byUser[userId]; exists {
-		return nil
-	}
-	u := &userEntry{userId: userId}
-	ss.users = append(ss.users, u)
-	ss.byUser[userId] = u
-
-	fmt.Printf("Services: Added user [%s] to service: %s", userId, serviceName)
-	return nil
-}
-
-// RemoveUser removes a user from a service's rotation and discards their queued tasks.
-func (s *Scheduler) RemoveUser(serviceName, userId string) error {
-	s.mu.RLock()
-	ss, ok := s.services[serviceName]
-	s.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("service %q not registered", serviceName)
-	}
-
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	if _, exists := ss.byUser[userId]; !exists {
-		return nil
-	}
-	delete(ss.byUser, userId)
-	for i, u := range ss.users {
-		if u.userId == userId {
-			ss.users = append(ss.users[:i], ss.users[i+1:]...)
-			break
-		}
-	}
-
-	fmt.Printf("Services: Removed user [%s] from service: %s", userId, serviceName)
-	return nil
-}
-
-// Enqueue submits a task for a user on the named service.
-// The user is added to the rotation automatically if not already present.
-func (s *Scheduler) Enqueue(serviceName, userId string, task Task) error {
-	s.mu.RLock()
-	ss, ok := s.services[serviceName]
-	s.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("service %q not registered", serviceName)
-	}
-
-	ss.mu.Lock()
-	u, exists := ss.byUser[userId]
-	if !exists {
-		u = &userEntry{userId: userId}
-		ss.users = append(ss.users, u)
-		ss.byUser[userId] = u
-	}
-	ss.mu.Unlock()
-
-	u.mu.Lock()
-	u.tasks = append(u.tasks, task)
-	u.mu.Unlock()
-	return nil
-}
 
 // Start launches a background goroutine for each registered service, plus the
 // single goroutine that drives all periodic jobs.
@@ -279,159 +90,106 @@ func (s *Scheduler) Stop() {
 	close(s.periodicStop)
 }
 
-// SchedulePeriodic registers a recurring job for userId on serviceName.
-// job is called once per interval; any previous schedule for this user+service
-// is replaced. interval must be > 0 (callers should cancel via CancelPeriodic
-// instead of scheduling a zero interval); it is clamped up to
-// MinScheduleInterval hours, centralizing the floor so individual service
-// providers don't each need to enforce it.
-//
-// lastSynced determines the first run time: if it is zero (never synced) or
-// lastSynced+interval already elapsed (e.g. the schedule lapsed during server
-// downtime), the job fires immediately to catch up. Otherwise it fires at
-// lastSynced+interval, preserving the existing cadence instead of resetting it
-// to now+interval.
-//
-// All periodic jobs across every service share a single driver goroutine
-// (see runPeriodic): jobs are kept in a min-heap ordered by their next run
-// time, and the driver sleeps only until the soonest one is due, firing it in
-// its own goroutine at that point. This keeps periodic scheduling to one
-// long-lived goroutine no matter how many jobs are registered.
-func (s *Scheduler) SchedulePeriodic(serviceName, userId string, interval time.Duration, lastSynced time.Time, job func()) error {
+func NewScheduler() *Scheduler {
+	return &Scheduler{
+		services:      make(map[string]*serviceScheduler),
+		providers:     make(map[string]ServiceProvider),
+		periodicByKey: make(map[string]*periodicEntry),
+		periodicWake:  make(chan struct{}, 1),
+		periodicStop:  make(chan struct{}),
+	}
+}
+
+// service returns the serviceScheduler registered for name, if any.
+func (s *Scheduler) service(name string) (*serviceScheduler, bool) {
 	s.mu.RLock()
-	_, ok := s.services[serviceName]
-	s.mu.RUnlock()
+	defer s.mu.RUnlock()
+	ss, ok := s.services[name]
+	return ss, ok
+}
+
+// provider returns the ServiceProvider registered for name, if any.
+func (s *Scheduler) provider(name string) (ServiceProvider, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	p, ok := s.providers[name]
+	return p, ok
+}
+
+// RegisterService registers an API service with its scheduling config.
+// Must be called before Start.
+func (s *Scheduler) RegisterService(name string, cfg ServiceConfig) {
+	if cfg.QueriesPerTurn <= 0 {
+		cfg.QueriesPerTurn = 1
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.services[name] = &serviceScheduler{
+		config: cfg,
+		byUser: make(map[string]*userEntry),
+		stop:   make(chan struct{}),
+	}
+	fmt.Printf("Services: A new service \"%s\" has been Registered by the service schedule. Delay: %s, QpT: %d", name, cfg.Delay, cfg.QueriesPerTurn)
+}
+
+// AddUser adds a user to a service's round-robin rotation.
+// Safe to call after Start. No-op if the user is already present.
+func (s *Scheduler) AddUser(serviceName, userId string) error {
+	ss, ok := s.service(serviceName)
 	if !ok {
+		fmt.Printf("Error: Services: failed to add user [%s] to service: %s. Service not registered", userId, serviceName)
 		return fmt.Errorf("service %q not registered", serviceName)
 	}
-	interval = max(interval, time.Duration(MinScheduleInterval)*time.Hour)
 
-	nextRun := time.Now()
-	if !lastSynced.IsZero() {
-		if due := lastSynced.Add(interval); due.After(nextRun) {
-			nextRun = due
-		}
+	if _, created := ss.ensureUser(userId); created {
+		fmt.Printf("Services: Added user [%s] to service: %s", userId, serviceName)
 	}
-
-	key := serviceName + "/" + userId
-	entry := &periodicEntry{
-		key:      key,
-		interval: interval,
-		job:      job,
-		nextRun:  nextRun,
-	}
-
-	s.periodicMu.Lock()
-	if existing, ok := s.periodicByKey[key]; ok {
-		existing.cancelled = true
-		if existing.index >= 0 {
-			heap.Remove(&s.periodicHeap, existing.index)
-		}
-	}
-	s.periodicByKey[key] = entry
-	heap.Push(&s.periodicHeap, entry)
-	s.periodicMu.Unlock()
-
-	s.wakePeriodicRunner()
 	return nil
 }
 
-// CancelPeriodic stops the recurring job for userId on serviceName, if any.
-func (s *Scheduler) CancelPeriodic(serviceName, userId string) {
-	key := serviceName + "/" + userId
-	s.periodicMu.Lock()
-	if entry, ok := s.periodicByKey[key]; ok {
-		entry.cancelled = true
-		if entry.index >= 0 {
-			heap.Remove(&s.periodicHeap, entry.index)
-		}
-		delete(s.periodicByKey, key)
+// RemoveUser removes a user from a service's rotation and discards their queued tasks.
+func (s *Scheduler) RemoveUser(serviceName, userId string) error {
+	ss, ok := s.service(serviceName)
+	if !ok {
+		return fmt.Errorf("service %q not registered", serviceName)
 	}
-	s.periodicMu.Unlock()
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if _, exists := ss.byUser[userId]; !exists {
+		return nil
+	}
+	delete(ss.byUser, userId)
+	for i, u := range ss.users {
+		if u.userId == userId {
+			ss.users = append(ss.users[:i], ss.users[i+1:]...)
+			break
+		}
+	}
+
+	fmt.Printf("Services: Removed user [%s] from service: %s", userId, serviceName)
+	return nil
 }
 
-// wakePeriodicRunner nudges runPeriodic to re-evaluate the schedule, e.g.
-// because a newly added job is due sooner than whatever it was sleeping on.
-func (s *Scheduler) wakePeriodicRunner() {
-	select {
-	case s.periodicWake <- struct{}{}:
-	default:
+// Enqueue submits a task for a user on the named service.
+// The user is added to the rotation automatically if not already present.
+func (s *Scheduler) Enqueue(serviceName, userId string, task Task) error {
+	ss, ok := s.service(serviceName)
+	if !ok {
+		return fmt.Errorf("service %q not registered", serviceName)
 	}
+
+	u, _ := ss.ensureUser(userId)
+
+	u.mu.Lock()
+	u.tasks = append(u.tasks, task)
+	u.mu.Unlock()
+	return nil
 }
 
-// runPeriodic is the single goroutine responsible for all periodic jobs.
-// It sleeps until the soonest-due entry in periodicHeap, then fires every
-// entry that has come due (each in its own goroutine) and reschedules them,
-// before going back to sleep. New jobs and cancellations wake it early via
-// periodicWake so it never sleeps past a newly-added earlier job.
-func (s *Scheduler) runPeriodic() {
-	for {
-		s.periodicMu.Lock()
-		hasNext := s.periodicHeap.Len() > 0
-		var wait time.Duration
-		if hasNext {
-			wait = max(time.Until(s.periodicHeap[0].nextRun), 0)
-		}
-		s.periodicMu.Unlock()
-
-		if !hasNext {
-			select {
-			case <-s.periodicStop:
-				return
-			case <-s.periodicWake:
-				continue
-			}
-		}
-
-		timer := time.NewTimer(wait)
-		select {
-		case <-s.periodicStop:
-			timer.Stop()
-			return
-		case <-s.periodicWake:
-			timer.Stop()
-			continue
-		case <-timer.C:
-			s.firePeriodicDue()
-		}
-	}
-}
-
-// firePeriodicDue pops every entry whose nextRun has arrived, reschedules
-// each for now+interval, and launches their jobs in new goroutines. Entries
-// cancelled or replaced between being popped and rescheduled are dropped.
-func (s *Scheduler) firePeriodicDue() {
-	now := time.Now()
-
-	s.periodicMu.Lock()
-	due := make([]*periodicEntry, 0, 1)
-	for s.periodicHeap.Len() > 0 && !s.periodicHeap[0].nextRun.After(now) {
-		e := heap.Pop(&s.periodicHeap).(*periodicEntry)
-		due = append(due, e)
-	}
-	for _, e := range due {
-		if e.cancelled {
-			continue
-		}
-		e.nextRun = now.Add(e.interval)
-		heap.Push(&s.periodicHeap, e)
-	}
-	s.periodicMu.Unlock()
-
-	for _, e := range due {
-		if e.cancelled {
-			continue
-		}
-		go e.job()
-	}
-}
-
-// RegisterProvider registers a service via its ServiceProvider interface,
-// replacing the three separate Register* calls that were previously required.
+// RegisterProvider registers a service via its ServiceProvider interface.
 func (s *Scheduler) RegisterProvider(p ServiceProvider) {
 	s.RegisterService(p.Name(), p.Config())
-	s.RegisterCredentialHook(p.Name(), p.OnCredentialsUpdated)
-	s.RegisterCredentialTestHook(p.Name(), p.TestCredentials)
 	s.mu.Lock()
 	s.providers[p.Name()] = p
 	s.mu.Unlock()
@@ -453,9 +211,7 @@ func (s *Scheduler) RestoreAllSchedules() {
 
 // SyncUser triggers an on-demand sync for userId on the named service.
 func (s *Scheduler) SyncUser(serviceName, userId string) error {
-	s.mu.RLock()
-	p, ok := s.providers[serviceName]
-	s.mu.RUnlock()
+	p, ok := s.provider(serviceName)
 	if !ok {
 		return fmt.Errorf("service %q not registered", serviceName)
 	}
@@ -466,9 +222,7 @@ func (s *Scheduler) SyncUser(serviceName, userId string) error {
 // any periodic job, removes the user from the scheduler rotation, and deletes
 // the stored credentials from the database.
 func (s *Scheduler) RemoveService(serviceName, userId string) error {
-	s.mu.RLock()
-	p, ok := s.providers[serviceName]
-	s.mu.RUnlock()
+	p, ok := s.provider(serviceName)
 	if !ok {
 		return fmt.Errorf("service %q not registered", serviceName)
 	}
@@ -476,6 +230,21 @@ func (s *Scheduler) RemoveService(serviceName, userId string) error {
 	s.CancelPeriodic(serviceName, userId)
 	_ = s.RemoveUser(serviceName, userId)
 	return DeleteServiceInfo(userId, serviceName)
+}
+
+// ensureUser returns the userEntry for userId within ss, creating it and
+// adding it to the rotation if it doesn't already exist. The bool reports
+// whether the entry was newly created.
+func (ss *serviceScheduler) ensureUser(userId string) (*userEntry, bool) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if u, exists := ss.byUser[userId]; exists {
+		return u, false
+	}
+	u := &userEntry{userId: userId}
+	ss.users = append(ss.users, u)
+	ss.byUser[userId] = u
+	return u, true
 }
 
 func (ss *serviceScheduler) run() {
@@ -535,4 +304,21 @@ func (ss *serviceScheduler) nextTask() (Task, bool) {
 	}
 
 	return nil, false
+}
+
+// fireCredentialHook calls the registered provider's OnCredentialsUpdated for
+// serviceName, if any.
+func (s *Scheduler) fireCredentialHook(serviceName, userId string, creds ExternalApiKeys) {
+	if p, ok := s.provider(serviceName); ok {
+		p.OnCredentialsUpdated(userId, creds)
+	}
+}
+
+// TestCredentials runs the registered provider's TestCredentials for serviceName.
+func (s *Scheduler) TestCredentials(serviceName, userId string, creds ExternalApiKeys) error {
+	p, ok := s.provider(serviceName)
+	if !ok {
+		return fmt.Errorf("no hook for testing credentials was found")
+	}
+	return p.TestCredentials(userId, creds)
 }

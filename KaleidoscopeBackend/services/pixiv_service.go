@@ -139,28 +139,12 @@ func (p *PixivProvider) Sync(userId string) error {
 	return SyncPixivBookmarks(userId)
 }
 
-// applyPixivSchedule starts (or replaces) the periodic sync.
-// SyncIntervalHours == 0 cancels any existing schedule. sync.LastSynced is
-// passed through so SchedulePeriodic can decide whether the first run should
-// happen immediately (never synced, or the schedule lapsed during downtime)
-// or at its normal cadence.
+// applyPixivSchedule starts (or replaces) the periodic sync for userId based
+// on stored sync metadata. The manager (Scheduler.SchedulePeriodic) decides
+// whether to cancel (SyncIntervalHours == 0), clamp the interval, and whether
+// the first run should fire immediately or at its normal cadence.
 func applyPixivSchedule(userId string, sync ExternalApiSync) error {
-	if sync.SyncIntervalHours == 0 {
-		DefaultScheduler.CancelPeriodic(pixivServiceName, userId)
-		return nil
-	}
-	return SchedulePeriodicPixivSync(userId, time.Duration(sync.SyncIntervalHours)*time.Hour, sync.LastSynced)
-}
-
-// SchedulePeriodicPixivSync sets a recurring bookmark sync for userId at the
-// given interval. Replaces any existing schedule. Pass interval == 0 to cancel.
-// lastSynced is used to compute the first run time (see Scheduler.SchedulePeriodic).
-func SchedulePeriodicPixivSync(userId string, interval time.Duration, lastSynced time.Time) error {
-	if interval == 0 {
-		DefaultScheduler.CancelPeriodic(pixivServiceName, userId)
-		return nil
-	}
-	return DefaultScheduler.SchedulePeriodic(pixivServiceName, userId, interval, lastSynced, func() {
+	return DefaultScheduler.SchedulePeriodic(pixivServiceName, userId, sync.SyncIntervalHours, sync.LastSynced, func() {
 		if err := SyncPixivBookmarks(userId); err != nil {
 			log.Printf("pixiv periodic sync [%s]: %v", userId, err)
 		}
