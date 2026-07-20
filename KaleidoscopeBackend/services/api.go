@@ -44,6 +44,7 @@ func GetKeys(c *fiber.Ctx) error {
 	return c.JSON(key)
 }
 
+// start sync of a service manually
 func SyncService(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
 	service := c.Params("name")
@@ -68,9 +69,9 @@ func RemoveService(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusOK)
 }
 
-// SetServiceSettings updates a user's sync scheduling settings for a service
+// SetServiceSyncSchedule updates a user's sync scheduling settings for a service
 // (currently just SyncIntervalHours) without touching stored credentials.
-func SetServiceSettings(c *fiber.Ctx) error {
+func SetServiceSyncSchedule(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
 	service := c.Params("name")
 	if service == "" {
@@ -92,6 +93,18 @@ func SetServiceSettings(c *fiber.Ctx) error {
 	DefaultScheduler.fireSyncSettingsHook(service, userID)
 
 	return c.SendStatus(fiber.StatusOK)
+}
+func GetServiceSyncInfo(c *fiber.Ctx) error {
+	userID := c.Locals("UserID").(string)
+	service := c.Params("name")
+	if service == "" {
+		return fiber.ErrBadRequest
+	}
+	syncInfo, err := GetServiceSync(userID, service)
+	if err != nil {
+		return err
+	}
+	return c.JSON(syncInfo)
 }
 
 func PixivConnect(c *fiber.Ctx) error {

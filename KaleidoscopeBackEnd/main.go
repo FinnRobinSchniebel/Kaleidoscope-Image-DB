@@ -149,8 +149,10 @@ func StartAPI() {
 	app.Post("/api/service/:name/register", authutil.AuthSessionToken, services.Register)
 	app.Get("/api/service/:name/key", authutil.AuthSessionToken, services.GetKeys)
 	app.Post("/api/service/:name/sync", authutil.AuthSessionToken, services.SyncService)
-	app.Post("/api/service/:name/settings", authutil.AuthSessionToken, services.SetServiceSettings)
+	app.Get("/api/service/:name/syncSchedule", authutil.AuthSessionToken, services.GetServiceSyncInfo)
+	app.Post("/api/service/:name/syncSchedule", authutil.AuthSessionToken, services.SetServiceSyncSchedule)
 	app.Delete("/api/service/:name", authutil.AuthSessionToken, services.RemoveService)
+	//special service
 	app.Post("/api/service/pixivconnect", authutil.AuthSessionToken, services.PixivConnect)
 
 	//get all author names

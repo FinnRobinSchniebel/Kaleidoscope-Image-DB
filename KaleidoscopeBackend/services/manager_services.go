@@ -316,6 +316,7 @@ func (s *Scheduler) fireCredentialHook(serviceName, userId string, creds Externa
 }
 
 // fireSyncSettingsHook calls the registered provider's OnSyncSettingsUpdated
+// starts process of reregistering any existing service in the schedule with the updated sync schedule.
 // for serviceName, if any.
 func (s *Scheduler) fireSyncSettingsHook(serviceName, userId string) {
 	if p, ok := s.provider(serviceName); ok {
