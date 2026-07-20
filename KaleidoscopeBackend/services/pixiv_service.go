@@ -105,6 +105,15 @@ func (p *PixivProvider) TestCredentials(userId string, creds ExternalApiKeys) er
 
 func (p *PixivProvider) OnCredentialsUpdated(userId string, creds ExternalApiKeys) {
 	InvalidatePixivSession(userId)
+	p.OnSyncSettingsUpdated(userId)
+}
+
+func (p *PixivProvider) OnCredentialsRemoved(userId string) {
+	InvalidatePixivSession(userId)
+	activeSyncs.Delete(userId)
+}
+
+func (p *PixivProvider) OnSyncSettingsUpdated(userId string) {
 	sync, err := GetServiceSync(userId, pixivServiceName)
 	if err != nil {
 		log.Printf("pixiv: failed to load sync settings for %s: %v", userId, err)
@@ -113,11 +122,6 @@ func (p *PixivProvider) OnCredentialsUpdated(userId string, creds ExternalApiKey
 	if err := applyPixivSchedule(userId, *sync); err != nil {
 		log.Printf("pixiv: failed to apply schedule for %s: %v", userId, err)
 	}
-}
-
-func (p *PixivProvider) OnCredentialsRemoved(userId string) {
-	InvalidatePixivSession(userId)
-	activeSyncs.Delete(userId)
 }
 
 func (p *PixivProvider) RestoreSchedules() {
@@ -140,9 +144,7 @@ func (p *PixivProvider) Sync(userId string) error {
 }
 
 // applyPixivSchedule starts (or replaces) the periodic sync for userId based
-// on stored sync metadata. The manager (Scheduler.SchedulePeriodic) decides
-// whether to cancel (SyncIntervalHours == 0), clamp the interval, and whether
-// the first run should fire immediately or at its normal cadence.
+// on stored sync metadata.
 func applyPixivSchedule(userId string, sync ExternalApiSync) error {
 	return DefaultScheduler.SchedulePeriodic(pixivServiceName, userId, sync.SyncIntervalHours, sync.LastSynced, func() {
 		if err := SyncPixivBookmarks(userId); err != nil {

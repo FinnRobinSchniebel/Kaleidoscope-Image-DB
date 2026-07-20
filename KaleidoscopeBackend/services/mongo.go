@@ -59,6 +59,32 @@ func AddServiceCredentials(userId string, serviceName string, creds ExternalApiK
 	return err
 }
 
+// SetServiceSyncInterval upserts a service's sync interval into the user's
+// services document, leaving LastSynced and stored credentials untouched.
+func SetServiceSyncInterval(userId string, serviceName string, hours int64) error {
+	filter := bson.M{"user_id": userId}
+	update := bson.M{
+		"$set": bson.M{
+			"services." + serviceName + ".sync.sync_interval_hours": hours,
+		},
+	}
+	_, err := ServicesDb.UpdateOne(context.Background(), filter, update, options.UpdateOne().SetUpsert(true))
+	return err
+}
+
+// SetServiceLastSynced records when a service's periodic sync last started for
+// a user, leaving SyncIntervalHours and stored credentials untouched.
+func SetServiceLastSynced(userId string, serviceName string, when time.Time) error {
+	filter := bson.M{"user_id": userId}
+	update := bson.M{
+		"$set": bson.M{
+			"services." + serviceName + ".sync.last_synced": when,
+		},
+	}
+	_, err := ServicesDb.UpdateOne(context.Background(), filter, update, options.UpdateOne().SetUpsert(true))
+	return err
+}
+
 // GetAllUsersWithService returns the services document for every user that has
 // the named service registered. Used at startup to restore periodic schedules.
 func GetAllUsersWithService(serviceName string) ([]UserServices, error) {

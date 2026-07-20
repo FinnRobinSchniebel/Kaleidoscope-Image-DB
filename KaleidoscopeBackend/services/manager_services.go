@@ -41,6 +41,7 @@ type ServiceProvider interface {
 	TestCredentials(userId string, creds ExternalApiKeys) error
 	OnCredentialsUpdated(userId string, creds ExternalApiKeys)
 	OnCredentialsRemoved(userId string)
+	OnSyncSettingsUpdated(userId string)
 	RestoreSchedules()
 	Sync(userId string) error
 }
@@ -311,6 +312,14 @@ func (ss *serviceScheduler) nextTask() (Task, bool) {
 func (s *Scheduler) fireCredentialHook(serviceName, userId string, creds ExternalApiKeys) {
 	if p, ok := s.provider(serviceName); ok {
 		p.OnCredentialsUpdated(userId, creds)
+	}
+}
+
+// fireSyncSettingsHook calls the registered provider's OnSyncSettingsUpdated
+// for serviceName, if any.
+func (s *Scheduler) fireSyncSettingsHook(serviceName, userId string) {
+	if p, ok := s.provider(serviceName); ok {
+		p.OnSyncSettingsUpdated(userId)
 	}
 }
 

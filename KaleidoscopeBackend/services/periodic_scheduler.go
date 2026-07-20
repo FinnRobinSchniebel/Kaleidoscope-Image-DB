@@ -21,6 +21,18 @@ func periodicKey(serviceName, userId string) string {
 	return serviceName + "/" + userId
 }
 
+// recordLastSynced wraps job so that, each time it fires, LastSynced is
+// stamped with the start time before the job itself runs. This lets a lapsed
+// schedule be detected and caught up on restart (see SchedulePeriodic).
+func recordLastSynced(serviceName, userId string, job func()) func() {
+	return func() {
+		if err := SetServiceLastSynced(userId, serviceName, time.Now()); err != nil {
+			fmt.Printf("ERROR: Services: failed to record last synced for user: %s, service: %s: %v", userId, serviceName, err)
+		}
+		job()
+	}
+}
+
 // periodicHeap is a min-heap of periodicEntry ordered by nextRun.
 type periodicHeap []*periodicEntry
 
@@ -58,8 +70,6 @@ func (h *periodicHeap) Pop() any {
 // downtime), the job fires immediately to catch up. Otherwise it fires at
 // lastSynced+interval, preserving the existing cadence instead of resetting it
 // to now+interval.
-//
-// Periodic tasks are pushed onto the periodic schedular.
 func (s *Scheduler) SchedulePeriodic(serviceName, userId string, intervalHours int64, lastSynced time.Time, job func()) error {
 	if intervalHours == 0 {
 		s.CancelPeriodic(serviceName, userId)
@@ -81,7 +91,7 @@ func (s *Scheduler) SchedulePeriodic(serviceName, userId string, intervalHours i
 	key := periodicKey(serviceName, userId)
 	entry := &periodicEntry{
 		interval: interval,
-		job:      job,
+		job:      recordLastSynced(serviceName, userId, job),
 		nextRun:  nextRun,
 	}
 
@@ -124,7 +134,7 @@ func (s *Scheduler) wakePeriodicRunner() {
 }
 
 // runPeriodic is the single goroutine responsible for all periodic jobs.
-// It sleeps until the soonest-due entry in periodicHeap, then fires every
+// Sleeps until the soonest-due entry in periodicHeap, then fires every
 // entry that has come due (each in its own goroutine) and reschedules them,
 // before going back to sleep. New jobs and cancellations wake it early via
 // periodicWake so it never sleeps past a newly-added earlier job.

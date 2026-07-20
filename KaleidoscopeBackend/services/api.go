@@ -68,6 +68,32 @@ func RemoveService(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusOK)
 }
 
+// SetServiceSettings updates a user's sync scheduling settings for a service
+// (currently just SyncIntervalHours) without touching stored credentials.
+func SetServiceSettings(c *fiber.Ctx) error {
+	userID := c.Locals("UserID").(string)
+	service := c.Params("name")
+	if service == "" {
+		return fiber.ErrBadRequest
+	}
+
+	var params struct {
+		SyncIntervalHours int64 `form:"sync_interval_hours"`
+	}
+	if err := c.BodyParser(&params); err != nil {
+		return fiber.ErrBadRequest
+	}
+	params.SyncIntervalHours = max(params.SyncIntervalHours, MinScheduleInterval)
+
+	if err := SetServiceSyncInterval(userID, service, params.SyncIntervalHours); err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString("failed to update service settings")
+	}
+
+	DefaultScheduler.fireSyncSettingsHook(service, userID)
+
+	return c.SendStatus(fiber.StatusOK)
+}
+
 func PixivConnect(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
 
@@ -99,4 +125,3 @@ func PixivConnect(c *fiber.Ctx) error {
 	DefaultScheduler.fireCredentialHook(pixivServiceName, userID, creds)
 	return c.SendStatus(fiber.StatusOK)
 }
-
