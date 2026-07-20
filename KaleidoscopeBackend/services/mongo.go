@@ -14,40 +14,47 @@ import (
 
 var ServicesDb *mongo.Collection
 
-type ExternalApiInfo struct {
-	SyncIntervalHours int64     `json:"sync_interval_hours,omitempty" bson:"sync_interval_hours,omitempty" form:"sync_interval_hours"` // 0 = no schedule
+type ExternalApiSync struct {
+	SyncIntervalHours int64     `json:"sync_interval_hours,omitempty" bson:"sync_interval_hours,omitempty"` // 0 = no schedule
 	LastSynced        time.Time `json:"last_synced,omitempty"         bson:"last_synced,omitempty"`
 }
 
 type ExternalApiKeys struct {
-	Key1              string `json:"key1,omitempty"                bson:"key1,omitempty"                form:"apiKey1"`
-	Key2              string `json:"key2,omitempty"                bson:"key2,omitempty"                form:"apiKey2"`
-	UserName          string `json:"username,omitempty"            bson:"username,omitempty"            form:"username"`
-	Password          string `json:"password,omitempty"            bson:"password,omitempty"            form:"password"`
-	SyncIntervalHours int64  `json:"sync_interval_hours,omitempty" bson:"sync_interval_hours,omitempty" form:"sync_interval_hours"` // 0 = no schedule
+	Key1     string `json:"key1,omitempty"     bson:"key1,omitempty"     form:"apiKey1"`
+	Key2     string `json:"key2,omitempty"     bson:"key2,omitempty"     form:"apiKey2"`
+	UserName string `json:"username,omitempty" bson:"username,omitempty" form:"username"`
+	Password string `json:"password,omitempty" bson:"password,omitempty" form:"password"`
+}
+
+// ServiceEntry groups one service's credentials and sync scheduling metadata
+// as sub-documents under the service's key in UserServices.Services.
+type ServiceEntry struct {
+	Credentials ExternalApiKeys `bson:"credentials"`
+	Sync        ExternalApiSync `bson:"sync"`
 }
 
 // One document per user; each service name is a key inside the Services map.
 type UserServices struct {
-	UserId   string                     `bson:"user_id"`
-	Services map[string]ExternalApiKeys `bson:"services"`
+	UserId   string                  `bson:"user_id"`
+	Services map[string]ServiceEntry `bson:"services"`
 }
 
 // AddServiceCredentials upserts credentials for a single service into the user's services document.
-// If the user has no services document yet, one is created.
+// If the user has no services document yet, one is created. Sync scheduling metadata
+// (services.<name>.sync) is left untouched.
 func AddServiceCredentials(userId string, serviceName string, creds ExternalApiKeys) error {
 
 	filter := bson.M{"user_id": userId}
 	update := bson.M{
 		"$set": bson.M{
-			"services." + serviceName: creds,
+			"services." + serviceName + ".credentials": creds,
 		},
 	}
 	_, err := ServicesDb.UpdateOne(context.Background(), filter, update, options.UpdateOne().SetUpsert(true))
 	if err != nil {
 		fmt.Printf("ERROR: Failed to add service credentials for user: %s, for service: %s", userId, serviceName)
 	} else {
-		fmt.Printf("User: %s, Added service: %s with Sync every %d Hours", userId, serviceName, creds.SyncIntervalHours)
+		fmt.Printf("User: %s, Added service: %s", userId, serviceName)
 	}
 	return err
 }
@@ -68,18 +75,36 @@ func GetAllUsersWithService(serviceName string) ([]UserServices, error) {
 	return docs, nil
 }
 
-// GetServiceCredentials returns the stored credentials for a single service.
-func GetServiceCredentials(userId string, serviceName string) (*ExternalApiKeys, error) {
+// GetServiceEntry returns the stored credentials+sync document for a single service.
+func GetServiceEntry(userId string, serviceName string) (*ServiceEntry, error) {
 	filter := bson.M{"user_id": userId}
 	var doc UserServices
 	if err := ServicesDb.FindOne(context.Background(), filter).Decode(&doc); err != nil {
 		return nil, err
 	}
-	creds, ok := doc.Services[serviceName]
+	entry, ok := doc.Services[serviceName]
 	if !ok {
 		return nil, fmt.Errorf("service %q not registered for user", serviceName)
 	}
-	return &creds, nil
+	return &entry, nil
+}
+
+// GetServiceCredentials returns the stored credentials for a single service.
+func GetServiceCredentials(userId string, serviceName string) (*ExternalApiKeys, error) {
+	entry, err := GetServiceEntry(userId, serviceName)
+	if err != nil {
+		return nil, err
+	}
+	return &entry.Credentials, nil
+}
+
+// GetServiceSync returns the stored sync scheduling metadata for a single service.
+func GetServiceSync(userId string, serviceName string) (*ExternalApiSync, error) {
+	entry, err := GetServiceEntry(userId, serviceName)
+	if err != nil {
+		return nil, err
+	}
+	return &entry.Sync, nil
 }
 
 // DeleteServiceInfo removes a service entry from the user's services document.

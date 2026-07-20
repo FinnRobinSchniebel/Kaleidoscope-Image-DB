@@ -72,10 +72,9 @@ func PixivConnect(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
 
 	var params struct {
-		Code              string `form:"code"`
-		CodeVerifier      string `form:"code_verifier"`
-		PixivUserID       string `form:"pixiv_user_id"`
-		SyncIntervalHours int64  `form:"sync_interval_hours"`
+		Code         string `form:"code"`
+		CodeVerifier string `form:"code_verifier"`
+		PixivUserID  string `form:"pixiv_user_id"`
 	}
 	if err := c.BodyParser(&params); err != nil || params.Code == "" || params.CodeVerifier == "" {
 		return fiber.ErrBadRequest
@@ -87,9 +86,8 @@ func PixivConnect(c *fiber.Ctx) error {
 	}
 
 	creds := ExternalApiKeys{
-		Key1:              refreshToken,
-		UserName:          params.PixivUserID,
-		SyncIntervalHours: params.SyncIntervalHours,
+		Key1:     refreshToken,
+		UserName: params.PixivUserID,
 	}
 
 	if err := DefaultScheduler.TestCredentials(pixivServiceName, userID, creds); err != nil {

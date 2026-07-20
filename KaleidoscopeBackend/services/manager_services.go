@@ -281,20 +281,36 @@ func (s *Scheduler) Stop() {
 
 // SchedulePeriodic registers a recurring job for userId on serviceName.
 // job is called once per interval; any previous schedule for this user+service
-// is replaced. The job is not called immediately — the first call happens after
-// one full interval has elapsed from the time it is scheduled.
+// is replaced. interval must be > 0 (callers should cancel via CancelPeriodic
+// instead of scheduling a zero interval); it is clamped up to
+// MinScheduleInterval hours, centralizing the floor so individual service
+// providers don't each need to enforce it.
+//
+// lastSynced determines the first run time: if it is zero (never synced) or
+// lastSynced+interval already elapsed (e.g. the schedule lapsed during server
+// downtime), the job fires immediately to catch up. Otherwise it fires at
+// lastSynced+interval, preserving the existing cadence instead of resetting it
+// to now+interval.
 //
 // All periodic jobs across every service share a single driver goroutine
 // (see runPeriodic): jobs are kept in a min-heap ordered by their next run
 // time, and the driver sleeps only until the soonest one is due, firing it in
 // its own goroutine at that point. This keeps periodic scheduling to one
 // long-lived goroutine no matter how many jobs are registered.
-func (s *Scheduler) SchedulePeriodic(serviceName, userId string, interval time.Duration, job func()) error {
+func (s *Scheduler) SchedulePeriodic(serviceName, userId string, interval time.Duration, lastSynced time.Time, job func()) error {
 	s.mu.RLock()
 	_, ok := s.services[serviceName]
 	s.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("service %q not registered", serviceName)
+	}
+	interval = max(interval, time.Duration(MinScheduleInterval)*time.Hour)
+
+	nextRun := time.Now()
+	if !lastSynced.IsZero() {
+		if due := lastSynced.Add(interval); due.After(nextRun) {
+			nextRun = due
+		}
 	}
 
 	key := serviceName + "/" + userId
@@ -302,7 +318,7 @@ func (s *Scheduler) SchedulePeriodic(serviceName, userId string, interval time.D
 		key:      key,
 		interval: interval,
 		job:      job,
-		nextRun:  time.Now().Add(interval),
+		nextRun:  nextRun,
 	}
 
 	s.periodicMu.Lock()
