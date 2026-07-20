@@ -10,15 +10,15 @@ import (
 )
 
 type SourceInfo struct {
-	Name         string    `json:"name" form:"name"`
-	ID           string    `json:"id" form:"id"`                       // ID of source itself (created by DB)
-	Title        string    `json:"title" form:"title"`                 // Title of work at source
-	SourceAuthor string    `json:"source_author" form:"source_author"` //the authors name at this source
-	AttributedTo []int     `json:"attributed_to" form:"attributed_to"` //index of images in set that this source belongs to
-	SourceID     string    `json:"source_id" form:"source_id"`         // id of art WORK at the source
-	AuthorID     string    `json:"author_id" form:"author_id"`         //id the author user was assigned
-	Tags         []string  `json:"tags" form:"tags"`                   //tags provided at the source
-	Date         time.Time `json:"date" form:"date"`                   //Publishing date
+	Name         string    `json:"name" bson:"name" form:"name"`
+	ID           string    `json:"id" bson:"id" form:"id"`                                  // ID of source itself (created by DB)
+	Title        string    `json:"title" bson:"title" form:"title"`                         // Title of work at source
+	SourceAuthor string    `json:"source_author" bson:"source_author" form:"source_author"` //the authors name at this source
+	AttributedTo []int     `json:"attributed_to" bson:"attributed_to" form:"attributed_to"` //index of images in set that this source belongs to
+	SourceID     string    `json:"source_id" bson:"source_id" form:"source_id"`             // id of art WORK at the source
+	AuthorID     string    `json:"author_id" bson:"author_id" form:"author_id"`             //id the author user was assigned
+	Tags         []string  `json:"tags" bson:"tags" form:"tags"`                            //tags provided at the source
+	Date         time.Time `json:"date" bson:"date" form:"date"`                            //Publishing date
 }
 
 // info regarding the images location on the DB and current state

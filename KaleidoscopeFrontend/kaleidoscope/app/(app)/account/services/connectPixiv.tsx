@@ -32,7 +32,6 @@ export default function ConnectPixiv({ onOpenChange, currentOpenState }: Props) 
   const [codeVerifier, setCodeVerifier] = useState('')
   const [code, setCode] = useState('')
   const [pixivUserId, setPixivUserId] = useState('')
-  const [syncInterval, setSyncInterval] = useState('0')
   const [loginStarted, setLoginStarted] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -48,7 +47,6 @@ export default function ConnectPixiv({ onOpenChange, currentOpenState }: Props) 
     getServiceCredentials('pixiv', protectedApi).then(creds => {
       if (!creds) return
       setPixivUserId(creds.username ?? '')
-      setSyncInterval(String(creds.sync_interval_hours ?? 0))
     })
   }, [currentOpenState])
 
@@ -134,43 +132,7 @@ export default function ConnectPixiv({ onOpenChange, currentOpenState }: Props) 
           />
         </div>
 
-        <div>
-          <label className='font-bold'>Sync Frequency</label>
-          <RadioGroup
-            value={syncInterval}
-            onValueChange={setSyncInterval}
-            name='sync_interval_hours'
-            className='flex flex-row gap-0'
-          >
-            <FieldLabel htmlFor='pv-none' className='border-primary/60 has-data-[state=checked]:bg-primary-foreground'>
-              <Field orientation='horizontal'>
-                <FieldContent>
-                  <FieldTitle>None</FieldTitle>
-                  <FieldDescription>No automated syncing</FieldDescription>
-                </FieldContent>
-                <RadioGroupItem value='0' id='pv-none' className='hidden' />
-              </Field>
-            </FieldLabel>
-            <FieldLabel htmlFor='pv-day' className='border-primary/60 has-data-[state=checked]:bg-primary-foreground'>
-              <Field orientation='horizontal'>
-                <FieldContent>
-                  <FieldTitle>Daily</FieldTitle>
-                  <FieldDescription>Every 24 hours</FieldDescription>
-                </FieldContent>
-                <RadioGroupItem value='24' id='pv-day' className='hidden' />
-              </Field>
-            </FieldLabel>
-            <FieldLabel htmlFor='pv-week' className='border-primary/60 has-data-[state=checked]:bg-primary-foreground'>
-              <Field orientation='horizontal'>
-                <FieldContent>
-                  <FieldTitle>Weekly</FieldTitle>
-                  <FieldDescription>Every 7 days</FieldDescription>
-                </FieldContent>
-                <RadioGroupItem value='168' id='pv-week' className='hidden' />
-              </Field>
-            </FieldLabel>
-          </RadioGroup>
-        </div>
+       
 
         {error && <p className='text-destructive text-sm'>{error}</p>}
 

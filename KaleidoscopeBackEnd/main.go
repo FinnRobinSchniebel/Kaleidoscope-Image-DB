@@ -286,7 +286,7 @@ func GetImageFromID(c *fiber.Ctx) error {
 				return c.Status(500).SendString("failed to create low res image: " + err.Error())
 			}
 			//todo save image
-			go imageset.AddLowresToSetAndStorage(iset[0].Path, iset[0].Title+"_low", retImage, iset[0], requestParams.IndexList)
+			go imageset.AddLowresToSetAndStorage(iset[0].Path, iset[0].Title, retImage, iset[0], requestParams.IndexList)
 
 		} else {
 			retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path, imageLink, true)

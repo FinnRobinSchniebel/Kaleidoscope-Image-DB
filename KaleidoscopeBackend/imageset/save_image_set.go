@@ -114,7 +114,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	err = testFilePath(BackendVolumeLocation)
 	//determine folder path for images and add the path to the imagset before first insert
 
-	imageSet.Path, err = MakeFileDirectoryFromAuthor(imageSet.Authors[0])
+	imageSet.Path, err = MakeFileDirectoryFromAuthor(userId, imageSet.Authors[0])
 
 	if err != nil {
 		return nil, "", InternalResponse{500, err.Error()}
@@ -143,14 +143,14 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 
 	imageSet.ID = insertResult.InsertedID.(bson.ObjectID)
 
-	var hashHits CollisionMap
+	hashHits := make(CollisionMap)
 
 	for index := range media {
 
-		fmt.Println(media[index].Name(), media[index].Size(), media[index].ContentType())
+		//fmt.Println(media[index].Name(), media[index].Size(), media[index].ContentType())
 
 		/**		save media		**/
-		fileName := media[index].Name()
+		fileName := imageSet.Title
 
 		//Need to know the file type to save it in the correct format
 		itype, err := getFileTypeFromHeader(media[index])
@@ -200,7 +200,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	}
 
 	//Note: could be go functioned but that may create a race condition if image is viewed before the save finishes
-	CreateThumbnailForNew(imageSet.Path, imageSet.Image[0].Name, imageSet.ID)
+	CreateThumbnailForNew(imageSet.Path, imageSet.Image[0].Name, imageSet.Title, imageSet.ID)
 
 	log.Print("Files Uploaded")
 
@@ -229,13 +229,13 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	return nil, imageSet.ID.Hex(), InternalResponse{201, "Ok, Added to DB"}
 }
 
-func CreateThumbnailForNew(path string, name string, id bson.ObjectID) {
+func CreateThumbnailForNew(path string, existingFileName string, title string, id bson.ObjectID) {
 
-	newimg, _, _, err := GenerateLowResFromHigh(path, name, 256, 265)
+	newimg, _, _, err := GenerateLowResFromHigh(path, existingFileName, 256, 265)
 	if err != nil {
 		log.Println(err)
 	}
-	SaveThumbnailLocal(path, name, newimg, id, 0)
+	SaveThumbnailLocal(path, title, newimg, id, 0)
 }
 
 func testFilePath(BackendVolumeLocation string) error {
@@ -248,8 +248,6 @@ func testFilePath(BackendVolumeLocation string) error {
 			fmt.Printf("Error accessing path %s: %v\n", BackendVolumeLocation, err)
 			return err
 		}
-	} else {
-		fmt.Printf("File or directory exists at: %s\n", BackendVolumeLocation)
 	}
 	return nil
 

@@ -1,12 +1,11 @@
-import { Dispatch, SetStateAction, useState } from "react"
+import { Dispatch, SetStateAction } from "react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import ConnectPixiv from "./connectPixiv"
 import ConnectService from "./connectService"
 import SeparatorBorder from "@/components/KscopeSharedUI/SeparatorBorder"
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider"
-import removeService_api from "@/components/api/removeService-api"
-import syncService_api from "@/components/api/syncService-api"
-import { useDangerAlert } from "@/components/KscopeSharedUI/ImageSet/AlertPopup"
+import ManagerService from "./ManageService"
+
 
 interface Props {
   changeOpen: Dispatch<SetStateAction<boolean>>
@@ -34,41 +33,9 @@ export type ServiceDialogOptions = {
 export default function ServiceDialog({ currentOpenState, changeOpen, dialog }: Props) {
 
   const protectedApi = useProtected()
-  const confirm = useDangerAlert()
-  const [isRemoving, setIsRemoving] = useState(false)
-  const [removeError, setRemoveError] = useState('')
-  const [isSyncing, setIsSyncing] = useState(false)
-  const [syncError, setSyncError] = useState('')
+  
 
-  async function handleRemove() {
-    const ok = await confirm({
-      title: `Remove ${dialog.ServiceName}`,
-      description: "This will delete your stored credentials for this service and stop any current actions. This action cannot be undone.",
-      confirmText: "Remove",
-      cancelText: "Cancel"
-    })
-    if (!ok) return
-
-    setRemoveError('')
-    setIsRemoving(true)
-    const success = await removeService_api(dialog.BackendName, protectedApi)
-    setIsRemoving(false)
-    if (success) {
-      changeOpen(false)
-    } else {
-      setRemoveError('Failed to remove service. Please try again.')
-    }
-  }
-
-  async function handleSync() {
-    setSyncError('')
-    setIsSyncing(true)
-    const success = await syncService_api(dialog.BackendName, protectedApi)
-    setIsSyncing(false)
-    if (!success) {
-      setSyncError('Failed to start sync. Please try again.')
-    }
-  }
+ 
 
   return (
 
@@ -81,37 +48,8 @@ export default function ServiceDialog({ currentOpenState, changeOpen, dialog }: 
           Connect and manage your {dialog.ServiceName} account
         </DialogDescription>
 
-        <SeparatorBorder className="p-2 mb-4 flex flex-col">
-          <h1 className="font-bold text-2xl text-center my-2">Manage</h1>
-
-          <p className="text-lg"><span className="font-bold ">Last Synced:</span> %tba%</p>
-          <p className="text-lg"><span  className="font-bold">Next Sync in:</span> %tba% Hours</p>
-
-          <button
-            type="button"
-            onClick={handleSync}
-            disabled={isSyncing}
-            className="mt-4 bg-accent border-1 border-amber-500/80 shadow-black shadow-xs p-2 rounded font-bold
-             hover:shadow-sm
-             active:bg-accent"
-          >
-            {isSyncing ? 'Starting Sync...' : 'Sync'}
-          </button>
-          {syncError && <p className="text-destructive text-sm mt-2">{syncError}</p>}
-          <button
-            type="button"
-            onClick={handleRemove}
-            disabled={isRemoving}
-            className="mt-4 bg-accent border-1 border-destructive shadow-black shadow-xs p-2 rounded font-bold
-             hover:shadow-sm
-             active:bg-accent transition-colors"
-          >
-            {isRemoving ? 'Removing...' : 'Remove'}
-          </button>
-          {removeError && <p className="text-destructive text-sm mt-2">{removeError}</p>}
-
-        </SeparatorBorder>
-
+        <ManagerService changeOpen={changeOpen} currentOpenState={currentOpenState} dialog={dialog} protectedApi={protectedApi} />
+        
 
         <SeparatorBorder className="p-2">
           <h1 className="font-bold text-2xl text-center my-2">Add/Update Credentials</h1>

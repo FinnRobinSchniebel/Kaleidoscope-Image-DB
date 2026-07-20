@@ -23,15 +23,13 @@ type FieldValues = {
   password: string
   apiKey1: string
   apiKey2: string
-  syncIntervalHours: string
 }
 
 const emptyFields: FieldValues = {
   username: '',
   password: '',
   apiKey1: '',
-  apiKey2: '',
-  syncIntervalHours: '0',
+  apiKey2: ''
 }
 
 export default function ConnectService({ currentOpenState, changeOpen, dialog }: Props) {
@@ -52,7 +50,6 @@ export default function ConnectService({ currentOpenState, changeOpen, dialog }:
         password: creds.password ?? '',
         apiKey1: creds.key1 ?? '',
         apiKey2: creds.key2 ?? '',
-        syncIntervalHours: String(creds.sync_interval_hours ?? 0),
       })
     })
   }, [currentOpenState])
@@ -145,50 +142,6 @@ export default function ConnectService({ currentOpenState, changeOpen, dialog }:
             />
           </div>
         )}
-
-        <div>
-          <label className='font-bold'>Sync Frequency</label>
-          <RadioGroup
-            value={fields.syncIntervalHours}
-            onValueChange={v => setFields(prev => ({ ...prev, syncIntervalHours: v }))}
-            className='flex flex-row gap-0'
-            name="sync_interval_hours"
-          >
-            <FieldLabel htmlFor="none" className=' border-primary/60 has-data-[state=checked]:bg-primary-foreground'>
-              <Field orientation="horizontal" >
-                <FieldContent>
-                  <FieldTitle>None</FieldTitle>
-                  <FieldDescription>
-                    No automated syncing
-                  </FieldDescription>
-                </FieldContent>
-                <RadioGroupItem value="0" id="none" className='hidden' />
-              </Field>
-            </FieldLabel>
-            <FieldLabel htmlFor="day" className=' border-primary/60 has-data-[state=checked]:bg-primary-foreground'>
-              <Field orientation="horizontal">
-                <FieldContent>
-                  <FieldTitle>Daily</FieldTitle>
-                  <FieldDescription>
-                    Every 24 hours
-                  </FieldDescription>
-                </FieldContent>
-                <RadioGroupItem value="24" id="day" className='hidden' />
-              </Field>
-            </FieldLabel>
-            <FieldLabel htmlFor="week" className=' border-primary/60 has-data-[state=checked]:bg-primary-foreground'>
-              <Field orientation="horizontal">
-                <FieldContent>
-                  <FieldTitle>Weekly</FieldTitle>
-                  <FieldDescription>
-                  Every 7 days
-                  </FieldDescription>
-                </FieldContent>
-                <RadioGroupItem value="168" id="week" className='hidden' />
-              </Field>
-            </FieldLabel>
-          </RadioGroup>
-        </div>
 
         <button
           type="submit"

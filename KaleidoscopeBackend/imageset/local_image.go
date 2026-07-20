@@ -134,8 +134,11 @@ func CheckImageSetFileDeletionPermissions(entryToDelete ImageSetMongo) error {
 	return nil
 }
 
-func MakeFileDirectoryFromAuthor(FirstAuthorName string) (string, error) {
+// creates the directory for a user to store image by an author in.
+// Sets folder directory to be accessible by current user only
+func MakeFileDirectoryFromAuthor(userId string, FirstAuthorName string) (string, error) {
 
+	userId = cleanInvalidFileSymbols(userId)
 	FirstAuthorName = cleanInvalidFileSymbols(FirstAuthorName)
 	var fileAuthorName string
 	if len(FirstAuthorName) > 0 {
@@ -145,10 +148,7 @@ func MakeFileDirectoryFromAuthor(FirstAuthorName string) (string, error) {
 		fileAuthorName = "unknown"
 	}
 
-	filePath := BackendVolumeLocation + "/" + fileAuthorName + "/"
-	//print state
-	fileInfo, _ := os.Stat(BackendVolumeLocation)
-	fmt.Println(fileInfo.Mode())
+	filePath := BackendVolumeLocation + "/" + userId + "/" + fileAuthorName + "/"
 
 	//create folder
 	err := os.MkdirAll(filePath, 0700)
@@ -156,8 +156,7 @@ func MakeFileDirectoryFromAuthor(FirstAuthorName string) (string, error) {
 		return "", err
 	}
 
-	//fileInfo, _ = os.Stat(filePath)
-	fmt.Println("Folder Created")
+	fmt.Println("New Folder Created")
 
 	return filePath, nil
 }
@@ -176,6 +175,7 @@ func cleanInvalidFileSymbols(name string) string {
 		"\\", "",
 		"<", "",
 		">", "",
+		"/", "",
 	)
 	return r.Replace(name)
 }

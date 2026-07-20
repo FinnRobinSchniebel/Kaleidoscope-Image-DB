@@ -14,14 +14,19 @@ import (
 )
 
 // thumbnails are considered a lowres Path for purposes of folder navigation
-func SaveThumbnailLocal(path string, name string, img image.Image, ImageSetID bson.ObjectID, generatedFromIndex int) {
+//
+// title is expected to be the image set's raw title (NOT an already generated file name
+// such as ImageInfo.Name) - "thumbnail_" is prepended here to derive the file name.
+func SaveThumbnailLocal(path string, title string, img image.Image, ImageSetID bson.ObjectID, generatedFromIndex int) {
 
 	lowresFullPath := path + LowResPathAppend
 
-	if path == "" || name == "" {
+	if path == "" || title == "" {
 		log.Println("No file name or path given to save thumbnail file with")
 		return
 	}
+
+	name := "thumbnail_" + title
 
 	err := os.MkdirAll(lowresFullPath, 0700)
 	if err != nil {
@@ -47,7 +52,7 @@ func SaveThumbnailLocal(path string, name string, img image.Image, ImageSetID bs
 		if err != nil {
 			log.Println("Mango Error: " + err.Error())
 		}
-		err = os.Remove(fmt.Sprintf("%s%s", lowresFullPath, name))
+		err = os.Remove(fmt.Sprintf("%s%s", lowresFullPath, filename))
 		if err != nil {
 			log.Println("Add Lowres: could not make changes to db...\n COULD NOT remove image from disk: " + err.Error())
 		} else {
@@ -169,8 +174,10 @@ func ResizeAndCropCenter(src image.Image, targetW, targetH int) image.Image {
 }
 
 /*This function accepts a low res version of an image and stores it to the local storage for future retrieval */
-
-func AddLowresToSetAndStorage(path string, name string, img image.Image, imageset ImageSetMongo, index int) {
+//
+// title is expected to be the image set's raw title (NOT an already generated file name
+// such as ImageInfo.Name) - "low_" is prepended here to derive the file name.
+func AddLowresToSetAndStorage(path string, title string, img image.Image, imageset ImageSetMongo, index int) {
 
 	if index < 0 || index > len(imageset.Image) {
 		log.Println("Add Lowres: index out of bounds")
@@ -178,13 +185,15 @@ func AddLowresToSetAndStorage(path string, name string, img image.Image, imagese
 	}
 	lowresFullPath := path + LowResPathAppend
 
+	name := "low_" + title
+
 	err := os.MkdirAll(lowresFullPath, 0700)
 	if err != nil {
 		log.Println("Add Lowres failed to make dir: " + err.Error())
 		return
 	}
 
-	filename, _, err := SaveImage(img, lowresFullPath, name+"_ThumbNail_", imageset.ID, index, "png")
+	filename, _, err := SaveImage(img, lowresFullPath, name, imageset.ID, index, "png")
 	if err != nil {
 		log.Println("Add Lowres: could not save image: " + err.Error())
 		return
@@ -202,7 +211,7 @@ func AddLowresToSetAndStorage(path string, name string, img image.Image, imagese
 		if err != nil {
 			log.Println("Mango Error: " + err.Error())
 		}
-		err = os.Remove(fmt.Sprintf("%s%s", lowresFullPath, name))
+		err = os.Remove(fmt.Sprintf("%s%s", lowresFullPath, filename))
 		if err != nil {
 			log.Println("Add Lowres: could not make changes to db...\n COULD NOT remove image from disk: " + err.Error())
 		} else {
