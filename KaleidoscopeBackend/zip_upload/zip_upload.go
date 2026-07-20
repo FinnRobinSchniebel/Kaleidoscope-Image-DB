@@ -49,9 +49,16 @@ func ProcessZip(fileHeader *multipart.FileHeader, ruleLayers []string, fileLayer
 	defer RemoveTempZip(pathName)
 
 	//unzip the zip for better access
-	folderPathName, err := Unzip(pathName, imageset.BackendVolumeLocation+"/Temp")
+	//each request gets its own temp dir so concurrent uploads can never collide on the zip's base name
+	unzipTempDir, err := os.MkdirTemp("", "kaleidoscope_unzip_*")
+	if err != nil {
+		return fiber.StatusInternalServerError, nil, nil, nil, fmt.Errorf("Failed to create temp directory.")
+	}
+
+	folderPathName, err := Unzip(pathName, unzipTempDir)
 
 	if err != nil {
+		os.RemoveAll(unzipTempDir)
 		return fiber.StatusInternalServerError, nil, nil, nil, fmt.Errorf("zip could not be Processed: %s", err.Error())
 	}
 
@@ -61,7 +68,7 @@ func ProcessZip(fileHeader *multipart.FileHeader, ruleLayers []string, fileLayer
 		if delegatedCleanup {
 			return
 		}
-		err := RemoveFolder(folderPathName)
+		err := RemoveFolder(unzipTempDir)
 		if err != nil {
 			log.Print(err)
 		}
@@ -79,7 +86,7 @@ func ProcessZip(fileHeader *multipart.FileHeader, ruleLayers []string, fileLayer
 
 	delegatedCleanup = true
 
-	go SaveImageSets(folderPathName, ISets, user)
+	go SaveImageSets(folderPathName, unzipTempDir, ISets, user)
 
 	//cleanup
 	//err = RemoveTempZip(pathName)
@@ -88,23 +95,25 @@ func ProcessZip(fileHeader *multipart.FileHeader, ruleLayers []string, fileLayer
 }
 
 func DownloadZip(fileHeader *multipart.FileHeader) (error, string) {
-	var location = imageset.BackendVolumeLocation + "/Temp"
-	if err := os.MkdirAll(location, 0755); err != nil {
+	location, err := os.MkdirTemp("", "kaleidoscope_zip_*")
+	if err != nil {
 		return err, ""
 	}
-	tempFilePath := filepath.Join(location, fileHeader.Filename)
+	//sanitize the client-supplied filename so it cannot escape the temp dir (e.g. "../../etc/foo.zip")
+	tempFilePath := filepath.Join(location, filepath.Base(fileHeader.Filename))
 	if err := fasthttp.SaveMultipartFile(fileHeader, tempFilePath); err != nil {
 		return err, ""
 	}
 	return nil, tempFilePath
 }
 
+// RemoveTempZip removes the entire per-upload temp directory created by DownloadZip.
 func RemoveTempZip(filePath string) error {
 	if filePath == "" {
 		return fmt.Errorf("No File path")
 
 	}
-	err := os.Remove(filePath)
+	err := os.RemoveAll(filepath.Dir(filePath))
 	if err != nil {
 		return err
 	}

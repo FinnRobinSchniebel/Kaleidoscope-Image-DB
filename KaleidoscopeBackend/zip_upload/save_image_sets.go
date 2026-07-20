@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 )
 
-func SaveImageSets(basePath string, fileIsetData []ImageSetFileBundle, user string) {
+// basePath is the extracted zip's root, used to resolve the relative file paths in fileIsetData.
+// cleanupPath is the temp directory wrapping basePath and is removed wholesale once done.
+func SaveImageSets(basePath string, cleanupPath string, fileIsetData []ImageSetFileBundle, user string) {
 
 	//Authority to delete the temparary files is delegated to here
 	defer func() {
-		err := RemoveFolder(basePath)
+		err := RemoveFolder(cleanupPath)
 		if err != nil {
 			log.Print(err)
 		}
