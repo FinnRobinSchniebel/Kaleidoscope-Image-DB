@@ -117,6 +117,14 @@ func (s *Scheduler) provider(name string) (ServiceProvider, bool) {
 	return p, ok
 }
 
+// IsRegisteredService reports whether a service provider has been registered under name.
+// API handlers should use this to validate a client-supplied service name before it is
+// used to build a DB field path (e.g. "services.<name>.credentials").
+func (s *Scheduler) IsRegisteredService(name string) bool {
+	_, ok := s.provider(name)
+	return ok
+}
+
 // RegisterService registers an API service with its scheduling config.
 // Must be called before Start.
 func (s *Scheduler) RegisterService(name string, cfg ServiceConfig) {
@@ -216,6 +224,7 @@ func (s *Scheduler) SyncUser(serviceName, userId string) error {
 	if !ok {
 		return fmt.Errorf("service %q not registered", serviceName)
 	}
+	fmt.Printf("Running  [manual] sync: User : %s  Service : %s\n", userId, serviceName)
 	return p.Sync(userId)
 }
 

@@ -9,11 +9,21 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// validateService rejects any service name that isn't a currently registered provider.
+// This must run before serviceName is used to build a DB field path (e.g. "services.<name>.credentials"),
+// since that name is otherwise attacker-controlled input taken straight from the URL.
+func validateService(service string) error {
+	if service == "" || !DefaultScheduler.IsRegisteredService(service) {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("unknown service: %q", service))
+	}
+	return nil
+}
+
 func Register(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
 	service := c.Params("name")
-	if service == "" {
-		return fiber.ErrBadRequest
+	if err := validateService(service); err != nil {
+		return err
 	}
 
 	var creds ExternalApiKeys
@@ -37,6 +47,9 @@ func Register(c *fiber.Ctx) error {
 func GetKeys(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
 	service := c.Params("name")
+	if err := validateService(service); err != nil {
+		return err
+	}
 	key, err := GetServiceCredentials(userID, service)
 	if err != nil {
 		return err
@@ -48,8 +61,8 @@ func GetKeys(c *fiber.Ctx) error {
 func SyncService(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
 	service := c.Params("name")
-	if service == "" {
-		return fiber.ErrBadRequest
+	if err := validateService(service); err != nil {
+		return err
 	}
 	if err := DefaultScheduler.SyncUser(service, userID); err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
@@ -60,8 +73,8 @@ func SyncService(c *fiber.Ctx) error {
 func RemoveService(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
 	service := c.Params("name")
-	if service == "" {
-		return fiber.ErrBadRequest
+	if err := validateService(service); err != nil {
+		return err
 	}
 	if err := DefaultScheduler.RemoveService(service, userID); err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
@@ -74,8 +87,8 @@ func RemoveService(c *fiber.Ctx) error {
 func SetServiceSyncSchedule(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
 	service := c.Params("name")
-	if service == "" {
-		return fiber.ErrBadRequest
+	if err := validateService(service); err != nil {
+		return err
 	}
 
 	var params struct {
@@ -84,7 +97,9 @@ func SetServiceSyncSchedule(c *fiber.Ctx) error {
 	if err := c.BodyParser(&params); err != nil {
 		return fiber.ErrBadRequest
 	}
-	params.SyncIntervalHours = max(params.SyncIntervalHours, MinScheduleInterval)
+	if params.SyncIntervalHours != 0 {
+		params.SyncIntervalHours = max(params.SyncIntervalHours, MinScheduleInterval)
+	}
 
 	if err := SetServiceSyncInterval(userID, service, params.SyncIntervalHours); err != nil {
 		return c.Status(fiber.StatusInternalServerError).SendString("failed to update service settings")
@@ -97,8 +112,8 @@ func SetServiceSyncSchedule(c *fiber.Ctx) error {
 func GetServiceSyncInfo(c *fiber.Ctx) error {
 	userID := c.Locals("UserID").(string)
 	service := c.Params("name")
-	if service == "" {
-		return fiber.ErrBadRequest
+	if err := validateService(service); err != nil {
+		return err
 	}
 	syncInfo, err := GetServiceSync(userID, service)
 	if err != nil {

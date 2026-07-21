@@ -4,7 +4,7 @@ import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/services"
-	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tags"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tagging"
 	zipupload "Kaleidoscopedb/Backend/KaleidoscopeBackend/zip_upload"
 
 	"context"
@@ -77,7 +77,7 @@ func ConnectDB() {
 	imageset.Collection = db.Collection(ImageDbName)
 	authutil.UserCollection = db.Collection(UserDbName)
 	authutil.SessionDb = db.Collection((SessionDbName))
-	tags.TagsDB = db.Collection(tagDbName)
+	tagging.TagsDB = db.Collection(tagDbName)
 	services.ServicesDb = db.Collection(servicesDbName)
 	imageset.LowResPathAppend = LowResPathAppend
 
@@ -412,7 +412,7 @@ Returns an array of images in the 'images' field
 */
 func AddTag(c *fiber.Ctx) error {
 
-	var inputs tags.Tag
+	var inputs tagging.Tag
 
 	c.BodyParser(&inputs)
 
@@ -428,7 +428,7 @@ func AddTag(c *fiber.Ctx) error {
 		return err
 	}
 
-	err = tags.AddTags(inputs)
+	err = tagging.AddTags(inputs)
 
 	if err != nil {
 		return err
@@ -450,7 +450,7 @@ func Testautotag(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).SendString("no tags given")
 	}
 
-	res, err := tags.FindAutoTag(items.Tags)
+	res, err := tagging.FindAutoTag(items.Tags)
 	if err != nil {
 		return err
 	}

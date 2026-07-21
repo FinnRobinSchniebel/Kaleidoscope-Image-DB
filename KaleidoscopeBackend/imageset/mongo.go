@@ -302,21 +302,38 @@ func SearchDBForImages(params SearchParams) (bson.M, error) {
 	return results, nil
 }
 
-// GetPixivSourcesByIDs returns a map of Pixiv source_id  SourceInfo for imagesets
-// owned by userId whose pixiv source_id is in sourceIDs.
-func GetPixivSourcesByIDs(userId string, sourceIDs []string) (map[string]SourceInfo, error) {
+// GetISetSourceInfoBySourceIDs returns the sourceInfos of all saved imageSets that have a source named "sourceName" and match a sourceID attained from that source.
+// They are returned in a map keys by their sourceID
+// Only contains items owned by the given user
+func GetISetSourceInfoBySourceIDs(userId string, sourceName string, sourceIDs []string) (map[string]SourceInfo, error) {
 	ctx := context.Background()
-	filter := bson.M{
-		"kscope_userid": userId,
-		"sources": bson.M{"$elemMatch": bson.M{
-			"name":      "pixiv",
-			"source_id": bson.M{"$in": sourceIDs},
-		}},
+
+	matchCond := bson.M{
+		"name":      sourceName,
+		"source_id": bson.M{"$in": sourceIDs},
 	}
 
-	cursor, err := Collection.Find(ctx, filter,
-		options.Find().SetProjection(bson.M{"_id": 0, "sources": 1}),
-	)
+	pipeline := mongo.Pipeline{
+		// select only documents owned by the user that have at least one matching source
+		{{Key: "$match", Value: bson.M{
+			"kscope_userid": userId,
+			"sources":       bson.M{"$elemMatch": matchCond},
+		}}},
+		// keep only the sources within each document that actually match, so the result never contains a name or ID the caller didn't ask for
+		{{Key: "$project", Value: bson.M{
+			"_id": 0,
+			"sources": bson.M{"$filter": bson.M{
+				"input": "$sources",
+				"as":    "src",
+				"cond": bson.M{"$and": bson.A{
+					bson.M{"$eq": bson.A{"$$src.name", sourceName}},
+					bson.M{"$in": bson.A{"$$src.source_id", sourceIDs}},
+				}},
+			}},
+		}}},
+	}
+
+	cursor, err := Collection.Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil, err
 	}
@@ -334,9 +351,7 @@ func GetPixivSourcesByIDs(userId string, sourceIDs []string) (map[string]SourceI
 			continue
 		}
 		for _, src := range doc.Sources {
-			if src.Name == "pixiv" {
-				result[src.SourceID] = src
-			}
+			result[src.SourceID] = src
 		}
 	}
 	return result, cursor.Err()

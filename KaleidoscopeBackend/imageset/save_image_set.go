@@ -1,6 +1,7 @@
 package imageset
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tagging"
 	"context"
 	"fmt"
 	"image"
@@ -11,6 +12,7 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -102,6 +104,16 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	}
 	//add userId (done as seperate step to avoid exploits if changes are made)
 	imageSet.KscopeUserId = userId
+
+	//derive main tag list suggestions from each source's own tags, merging into
+	//whatever tags were already set without duplicating any
+	for _, src := range imageSet.Sources {
+		for _, t := range tagging.AutoTag(userId, src.Name, src.Tags) {
+			if !slices.Contains(imageSet.Tags, t) {
+				imageSet.Tags = append(imageSet.Tags, t)
+			}
+		}
+	}
 
 	//check media count first to avoid empty imagsets in db
 	if len(media) == 0 {

@@ -29,6 +29,7 @@ func recordLastSynced(serviceName, userId string, job func()) func() {
 		if err := SetServiceLastSynced(userId, serviceName, time.Now()); err != nil {
 			fmt.Printf("ERROR: Services: failed to record last synced for user: %s, service: %s: %v", userId, serviceName, err)
 		}
+		fmt.Printf("Running  [periodic] sync: User : %s  Service : %s\n", userId, serviceName)
 		job()
 	}
 }
@@ -196,6 +197,7 @@ func (s *Scheduler) firePeriodicDue() {
 		if e.cancelled {
 			continue
 		}
+
 		go e.job()
 	}
 }

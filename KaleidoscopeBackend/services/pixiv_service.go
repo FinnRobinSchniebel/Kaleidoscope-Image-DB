@@ -226,7 +226,7 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 			sourceIDs[i] = strconv.FormatUint(il.ID, 10)
 		}
 
-		existing, dbErr := imageset.GetPixivSourcesByIDs(userId, sourceIDs)
+		existing, dbErr := imageset.GetISetSourceInfoBySourceIDs(userId, pixivServiceName, sourceIDs)
 		if dbErr != nil {
 			log.Printf("pixiv sync [%s]: DB lookup failed: %v – treating page as new", userId, dbErr)
 			existing = nil
@@ -267,6 +267,7 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 }
 
 // TODO: add check for edit date
+// TODO check individual tags for changes
 // illustDiffers reports whether the live Pixiv data differs from what is stored.
 func illustDiffers(il pixivmodel.Illust, src imageset.SourceInfo) bool {
 	if il.Title != src.Title || il.User.Name != src.SourceAuthor {
@@ -382,12 +383,13 @@ func illustImageURLs(illust *pixivmodel.Illust) []string {
 // buildPixivImageSet constructs the ImageSetMongo metadata from a Pixiv Illust.
 // Image slices and path are left empty; AddImageSet fills those in.
 func buildPixivImageSet(illust *pixivmodel.Illust, userId string) *imageset.ImageSetMongo {
-	tags := make([]string, 0, len(illust.Tags)+len(illust.Tools))
+	// Note: tools are intentionally not included here. They come from illust.Tools,
+	// which is only populated by the detail endpoint, not the bookmark-list endpoint
+	// illustDiffers compares against - mixing them into Tags made that comparison
+	// always report a difference.
+	tags := make([]string, 0, len(illust.Tags))
 	for _, t := range illust.Tags {
 		tags = append(tags, t.Name)
-	}
-	for _, t := range illust.Tools {
-		tags = append(tags, t)
 	}
 
 	pageCount := illust.PageCount
@@ -417,7 +419,6 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string) *imageset.Imag
 
 	return &imageset.ImageSetMongo{
 		Title:        illust.Title,
-		Tags:         tags,
 		Sources:      []imageset.SourceInfo{src},
 		Authors:      []string{illust.User.Name},
 		Description:  caption,
