@@ -119,7 +119,11 @@ func GetServiceSyncInfo(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(syncInfo)
+	return c.JSON(fiber.Map{
+		"sync_interval_hours": syncInfo.SyncIntervalHours,
+		"last_synced":         syncInfo.LastSynced,
+		"syncing":             DefaultScheduler.IsSyncing(service, userID),
+	})
 }
 
 func PixivConnect(c *fiber.Ctx) error {

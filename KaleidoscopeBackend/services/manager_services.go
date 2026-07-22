@@ -9,6 +9,12 @@ import (
 // Task is a unit of work submitted to the scheduler by a service integration.
 type Task func() error
 
+// SyncFunc type is used to pass ServiceProvider.Sync(...) function between functions.
+// Warning: This function should not be called outside the manager_services and periodic scheduler!
+// Calling it for a service will begin the sync process for a service.
+// When a sync concludes or fails it MUST call the done function to allow for a new sync to start.
+type SyncFunc func(userId string, done func()) error
+
 // ServiceConfig defines the rate-limiting behaviour for a single API service.
 type ServiceConfig struct {
 	// Delay is the minimum pause enforced between consecutive requests to this service.
@@ -43,7 +49,7 @@ type ServiceProvider interface {
 	OnCredentialsRemoved(userId string)
 	OnSyncSettingsUpdated(userId string)
 	RestoreSchedules()
-	Sync(userId string) error
+	Sync(userId string, done func()) error
 }
 
 // Scheduler coordinates task execution across multiple services and users,
@@ -61,6 +67,12 @@ type Scheduler struct {
 	periodicWake  chan struct{}             // nudges runPeriodic when the schedule changes
 	periodicStop  chan struct{}
 	periodicOnce  sync.Once
+
+	// activeSyncs guards against a second concurrent sync for the same
+	// service+user, keyed by periodicKey(serviceName, userId). Held for the
+	// true duration of a run (see runSync), not just until the launching call
+	// returns, since a run's work may continue asynchronously after that.
+	activeSyncs sync.Map
 }
 
 // DefaultScheduler is the package-level scheduler used by all service integrations.
@@ -224,8 +236,40 @@ func (s *Scheduler) SyncUser(serviceName, userId string) error {
 	if !ok {
 		return fmt.Errorf("service %q not registered", serviceName)
 	}
-	fmt.Printf("Running  [manual] sync: User : %s  Service : %s\n", userId, serviceName)
-	return p.Sync(userId)
+	return s.runSync(serviceName, userId, "manual", p.Sync)
+}
+
+// runSync launches sync for userId on serviceName: it guards against a second
+// concurrent run for the same service+user, stamps LastSynced, and logs the
+// launch as kind ("manual" or "periodic"). sync owns the guard from here on —
+// it must call the done callback it receives exactly once, on every return
+// path, once the run has truly finished (see SyncFunc).
+func (s *Scheduler) runSync(serviceName, userId, kind string, sync SyncFunc) error {
+	key := syncKey(serviceName, userId)
+	if _, alreadyRunning := s.activeSyncs.LoadOrStore(key, struct{}{}); alreadyRunning {
+		return fmt.Errorf("%s sync already in progress for user %s", serviceName, userId)
+	}
+	release := func() { s.activeSyncs.Delete(key) }
+
+	if err := SetServiceLastSynced(userId, serviceName, time.Now()); err != nil {
+		fmt.Printf("ERROR: Services: failed to record last synced for user: %s, service: %s: %v", userId, serviceName, err)
+	}
+	fmt.Printf("Running  [%s] sync: User : %s  Service : %s\n", kind, userId, serviceName)
+
+	return sync(userId, release)
+}
+
+// IsSyncing reports whether a sync for userId on serviceName is currently in progress.
+func (s *Scheduler) IsSyncing(serviceName, userId string) bool {
+	_, syncing := s.activeSyncs.Load(syncKey(serviceName, userId))
+	return syncing
+}
+
+// clearActiveSync forcibly releases the active-sync guard for a user+service,
+// e.g. when their credentials are removed mid-sync and no further completion
+// callback should be expected.
+func (s *Scheduler) clearActiveSync(serviceName, userId string) {
+	s.activeSyncs.Delete(syncKey(serviceName, userId))
 }
 
 // RemoveService cleans up a user's service: fires OnCredentialsRemoved, cancels

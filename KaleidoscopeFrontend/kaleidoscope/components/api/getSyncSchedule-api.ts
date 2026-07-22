@@ -4,6 +4,7 @@ import { protectedAPI } from "./jwt_apis/protected-api-client"
 export interface ServiceSyncInfo {
   sync_interval_hours?: number
   last_synced?: string
+  syncing?: boolean
 }
 
 export default async function getSyncSchedule_api(service: string, protectedApi: protectedAPI): Promise<ServiceSyncInfo | null> {

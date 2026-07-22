@@ -1,4 +1,4 @@
-import { Dispatch, SetStateAction, useEffect, useState } from "react"
+import { Dispatch, SetStateAction, useEffect, useRef, useState } from "react"
 import { ServiceDialogOptions } from "./serviceDialog"
 import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from "@/components/ui/field"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
@@ -46,28 +46,75 @@ export default function ManagerService({ currentOpenState, changeOpen, dialog, p
   const confirm = useDangerAlert()
   const [isRemoving, setIsRemoving] = useState(false)
   const [removeError, setRemoveError] = useState('')
-  const [isSyncing, setIsSyncing] = useState(false)
   const [syncError, setSyncError] = useState('')
-  const [syncIntervalHours, setSyncIntervalHours] = useState('0')
-  const [savedSyncIntervalHours, setSavedSyncIntervalHours] = useState('0')
+  const [syncIntervalHours, setSyncIntervalHours] = useState('0') //use as the local syncIntervalHours to compare against the server one in syncInfo
   const [syncInfo, setSyncInfo] = useState<ServiceSyncInfo | null>(null)
   const [isUpdating, setIsUpdating] = useState(false)
   const [updateError, setUpdateError] = useState('')
+  const syncPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const isSyncing = syncInfo?.syncing ?? false
+  const savedSyncIntervalHours = String(syncInfo?.sync_interval_hours ?? 0)
+
+  function stopSyncPoll() {
+    if (syncPollRef.current) {
+      clearInterval(syncPollRef.current)
+      syncPollRef.current = null
+    }
+  }
 
   useEffect(() => {
     if (!currentOpenState) {
+      stopSyncPoll()
       setSyncInfo(null)
       setSyncIntervalHours('0')
-      setSavedSyncIntervalHours('0')
       return
     }
     getSyncSchedule_api(dialog.BackendName, protectedApi).then(info => {
       if (!info) return
       setSyncInfo(info)
       setSyncIntervalHours(String(info.sync_interval_hours ?? 0))
-      setSavedSyncIntervalHours(String(info.sync_interval_hours ?? 0))
     })
+    return () => stopSyncPoll()
   }, [currentOpenState])
+
+
+
+  async function handleSync() {
+    setSyncError('')
+    setSyncInfo(prev => ({ ...(prev ?? {}), syncing: true }))
+    const success = await syncService_api(dialog.BackendName, protectedApi)
+    if (!success) {
+      setSyncInfo(prev => ({ ...(prev ?? {}), syncing: false }))
+      setSyncError('Failed to start sync. Please try again.')
+      return
+    }
+
+    stopSyncPoll()
+    syncPollRef.current = setInterval(async () => {
+      const info = await getSyncSchedule_api(dialog.BackendName, protectedApi)
+      if (!info) return
+      setSyncInfo(info)
+      if (!info.syncing) {
+        stopSyncPoll()
+      }
+    }, 5000)
+  }
+
+  async function handleUpdate() {
+    setUpdateError('')
+    setIsUpdating(true)
+    const success = await setSyncSchedule_api(dialog.BackendName, Number(syncIntervalHours), protectedApi)
+    if (success) {
+      const info = await getSyncSchedule_api(dialog.BackendName, protectedApi)
+      if (info) {
+        setSyncInfo(info)
+        setSyncIntervalHours(String(info.sync_interval_hours ?? 0))
+      }
+    } else {
+      setUpdateError('Failed to update sync schedule. Please try again.')
+    }
+    setIsUpdating(false)
+  }
 
   async function handleRemove() {
 
@@ -81,42 +128,14 @@ export default function ManagerService({ currentOpenState, changeOpen, dialog, p
 
     setRemoveError('')
     setIsRemoving(true)
-    const success = await removeService_api(dialog.BackendName, protectedApi)
+    const { success, error } = await removeService_api(dialog.BackendName, protectedApi)
     setIsRemoving(false)
     if (success) {
       changeOpen(false)
     } else {
-      setRemoveError('Failed to remove service. Please try again.')
+      setRemoveError(error || 'Failed to remove service. Please try again.')
     }
   }
-
-  async function handleSync() {
-    setSyncError('')
-    setIsSyncing(true)
-    const success = await syncService_api(dialog.BackendName, protectedApi)
-    setIsSyncing(false)
-    if (!success) {
-      setSyncError('Failed to start sync. Please try again.')
-    }
-  }
-
-  async function handleUpdate() {
-    setUpdateError('')
-    setIsUpdating(true)
-    const success = await setSyncSchedule_api(dialog.BackendName, Number(syncIntervalHours), protectedApi)
-    if (success) {
-      const info = await getSyncSchedule_api(dialog.BackendName, protectedApi)
-      if (info) {
-        setSyncInfo(info)
-        setSyncIntervalHours(String(info.sync_interval_hours ?? 0))
-        setSavedSyncIntervalHours(String(info.sync_interval_hours ?? 0))
-      }
-    } else {
-      setUpdateError('Failed to update sync schedule. Please try again.')
-    }
-    setIsUpdating(false)
-  }
-
 
   return (
     <SeparatorBorder className="p-2 mb-4 flex flex-col">
@@ -190,9 +209,10 @@ export default function ManagerService({ currentOpenState, changeOpen, dialog, p
         disabled={isSyncing}
         className="mt-4 bg-accent border-1 border-amber-500/80 shadow-black shadow-xs p-2 rounded font-bold
              hover:shadow-sm
-             active:bg-accent"
+             active:bg-accent
+             disabled:shadow-none disabled:border-amber-900/40"
       >
-        {isSyncing ? 'Starting Sync...' : 'Sync'}
+        {isSyncing ? 'Sync in progress' : 'Sync'}
       </button>
       {syncError && <p className="text-destructive text-sm mt-2">{syncError}</p>}
       <button

@@ -28,10 +28,6 @@ type PixivSession struct {
 // pixivSessions caches open sessions keyed by userId.
 var pixivSessions sync.Map
 
-// activeSyncs tracks users who have a bookmark sync currently in progress.
-// Cleared when the page chain ends (either normally or on error).
-var activeSyncs sync.Map
-
 // GetPixivSession returns a cached session or opens a new one from stored credentials.
 // Credentials are read from MongoDB under service name "pixiv":
 //
@@ -109,7 +105,7 @@ func (p *PixivProvider) OnCredentialsUpdated(userId string, creds ExternalApiKey
 
 func (p *PixivProvider) OnCredentialsRemoved(userId string) {
 	InvalidatePixivSession(userId)
-	activeSyncs.Delete(userId)
+	DefaultScheduler.clearActiveSync(pixivServiceName, userId)
 }
 
 func (p *PixivProvider) OnSyncSettingsUpdated(userId string) {
@@ -138,18 +134,14 @@ func (p *PixivProvider) RestoreSchedules() {
 	log.Printf("pixiv: restored schedules for %d user(s)", len(docs))
 }
 
-func (p *PixivProvider) Sync(userId string) error {
-	return SyncPixivBookmarks(userId)
+func (p *PixivProvider) Sync(userId string, done func()) error {
+	return SyncPixivBookmarks(userId, done)
 }
 
 // applyPixivSchedule starts (or replaces) the periodic sync for userId based
 // on stored sync metadata.
 func applyPixivSchedule(userId string, sync ExternalApiSync) error {
-	return DefaultScheduler.SchedulePeriodic(pixivServiceName, userId, sync.SyncIntervalHours, sync.LastSynced, func() {
-		if err := SyncPixivBookmarks(userId); err != nil {
-			log.Printf("pixiv periodic sync [%s]: %v", userId, err)
-		}
-	})
+	return DefaultScheduler.SchedulePeriodic(pixivServiceName, userId, sync.SyncIntervalHours, sync.LastSynced, SyncPixivBookmarks)
 }
 
 // ---- Bookmark sync ----
@@ -157,35 +149,37 @@ func applyPixivSchedule(userId string, sync ExternalApiSync) error {
 // SyncPixivBookmarks starts a bookmark sync by enqueuing the first page task
 // into the scheduler. Subsequent pages are chained automatically, one task per
 // scheduler turn, interleaved with any pending illust-fetch tasks.
-//
+// Only calls Done when the sync fails before starting.
+// Return does not mean the sync has finished, chained tasks must call done on fail or finish.
 // Prerequisites: Key1 = refresh token, UserName = numeric Pixiv UID.
-func SyncPixivBookmarks(userId string) error {
+func SyncPixivBookmarks(userId string, done func()) error {
 	sess, err := GetPixivSession(userId)
 	if err != nil {
+		done()
 		return err
 	}
 	if sess.App == nil {
+		done()
 		return fmt.Errorf("pixiv bookmark sync requires App API (store a refresh token in Key1)")
 	}
 
 	creds, err := GetServiceCredentials(userId, pixivServiceName)
 	if err != nil {
+		done()
 		return err
 	}
 	if creds.UserName == "" {
+		done()
 		return fmt.Errorf("pixiv user ID not set – store your numeric Pixiv UID in the UserName field")
 	}
 	pixivUID, err := strconv.ParseUint(creds.UserName, 10, 64)
 	if err != nil {
+		done()
 		return fmt.Errorf("invalid pixiv UID %q: %w", creds.UserName, err)
 	}
 
-	if _, alreadyRunning := activeSyncs.LoadOrStore(userId, struct{}{}); alreadyRunning {
-		return fmt.Errorf("pixiv bookmark sync already in progress for this user")
-	}
-
-	if err := enqueueBookmarkPage(userId, pixivUID, pixiv.Public, 0); err != nil {
-		activeSyncs.Delete(userId)
+	if err := enqueueBookmarkPage(userId, pixivUID, pixiv.Public, 0, done); err != nil {
+		done()
 		return err
 	}
 	return nil
@@ -193,19 +187,19 @@ func SyncPixivBookmarks(userId string) error {
 
 // enqueueBookmarkPage adds a single bookmark-page task to the scheduler.
 // maxBookmarkID == 0  is  first page
-func enqueueBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int) error {
+func enqueueBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int, done func()) error {
 	return DefaultScheduler.Enqueue(pixivServiceName, userId, func() error {
-		return processBookmarkPage(userId, pixivUID, restrict, maxBookmarkID)
+		return processBookmarkPage(userId, pixivUID, restrict, maxBookmarkID, done)
 	})
 }
 
 // processBookmarkPage fetches one page of bookmarks, queries the DB for only
 // those IDs, schedules fetch tasks for missing or changed items, then enqueues
 // the next page task. Public pages are followed by private pages.
-func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int) error {
+func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int, done func()) error {
 	sess, err := GetPixivSession(userId)
 	if err != nil {
-		activeSyncs.Delete(userId)
+		done()
 		return fmt.Errorf("pixiv session: %w", err)
 	}
 
@@ -216,7 +210,7 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 
 	illusts, next, err := sess.App.UserBookmarksIllust(pixivUID, opts)
 	if err != nil {
-		activeSyncs.Delete(userId)
+		done()
 		return fmt.Errorf("UserBookmarksIllust (restrict=%s after=%d): %w", restrict, maxBookmarkID, err)
 	}
 
@@ -244,24 +238,24 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 	}
 
 	// Chain to the next page, or transition Public→Private, or finish.
-	// Clear the active-sync flag whenever we do NOT successfully chain,
-	// so a new sync can be started after a failure or on completion.
+	// Call done whenever we do NOT successfully chain, so a new sync can be
+	// started after a failure or on completion.
 	var nextErr error
 	if next != 0 {
-		nextErr = enqueueBookmarkPage(userId, pixivUID, restrict, next)
+		nextErr = enqueueBookmarkPage(userId, pixivUID, restrict, next, done)
 	} else if restrict == pixiv.Public {
 		log.Printf("pixiv sync [%s]: public bookmarks done, starting private", userId)
-		nextErr = enqueueBookmarkPage(userId, pixivUID, pixiv.Private, 0)
+		nextErr = enqueueBookmarkPage(userId, pixivUID, pixiv.Private, 0, done)
 	} else {
 		log.Printf("pixiv sync [%s]: bookmark sync complete", userId)
 	}
 
 	if nextErr != nil {
-		activeSyncs.Delete(userId)
+		done()
 		return nextErr
 	}
 	if next == 0 && restrict == pixiv.Private {
-		activeSyncs.Delete(userId)
+		done()
 	}
 	return nil
 }
@@ -383,10 +377,7 @@ func illustImageURLs(illust *pixivmodel.Illust) []string {
 // buildPixivImageSet constructs the ImageSetMongo metadata from a Pixiv Illust.
 // Image slices and path are left empty; AddImageSet fills those in.
 func buildPixivImageSet(illust *pixivmodel.Illust, userId string) *imageset.ImageSetMongo {
-	// Note: tools are intentionally not included here. They come from illust.Tools,
-	// which is only populated by the detail endpoint, not the bookmark-list endpoint
-	// illustDiffers compares against - mixing them into Tags made that comparison
-	// always report a difference.
+
 	tags := make([]string, 0, len(illust.Tags))
 	for _, t := range illust.Tags {
 		tags = append(tags, t.Name)

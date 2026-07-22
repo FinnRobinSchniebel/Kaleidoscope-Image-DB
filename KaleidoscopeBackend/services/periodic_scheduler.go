@@ -16,22 +16,9 @@ type periodicEntry struct {
 	cancelled bool
 }
 
-// periodicKey builds the map key used to look up a user's periodic job on a service.
-func periodicKey(serviceName, userId string) string {
+// syncKey builds the map key used to look up a user's periodic job on a service.
+func syncKey(serviceName, userId string) string {
 	return serviceName + "/" + userId
-}
-
-// recordLastSynced wraps job so that, each time it fires, LastSynced is
-// stamped with the start time before the job itself runs. This lets a lapsed
-// schedule be detected and caught up on restart (see SchedulePeriodic).
-func recordLastSynced(serviceName, userId string, job func()) func() {
-	return func() {
-		if err := SetServiceLastSynced(userId, serviceName, time.Now()); err != nil {
-			fmt.Printf("ERROR: Services: failed to record last synced for user: %s, service: %s: %v", userId, serviceName, err)
-		}
-		fmt.Printf("Running  [periodic] sync: User : %s  Service : %s\n", userId, serviceName)
-		job()
-	}
 }
 
 // periodicHeap is a min-heap of periodicEntry ordered by nextRun.
@@ -59,19 +46,22 @@ func (h *periodicHeap) Pop() any {
 	return e
 }
 
-// SchedulePeriodic registers a recurring job for userId on serviceName, run
-// every intervalHours. job is called once per interval; any previous schedule
-// for this user+service is replaced. intervalHours == 0 cancels any existing
-// schedule instead (equivalent to calling CancelPeriodic) — individual service
-// providers don't need to check for this themselves. Positive values are
-// clamped up to MinScheduleInterval hours.
+// SchedulePeriodic registers a recurring sync for userId on serviceName, run
+// every intervalHours. sync is launched once per interval through the same
+// guarded path as manual syncs (see Scheduler.runSync): it won't fire if a
+// sync for this service+user is already in progress, and LastSynced is
+// stamped at launch. Any previous schedule for this user+service is replaced.
+// intervalHours == 0 cancels any existing schedule instead (equivalent to
+// calling CancelPeriodic) — individual service providers don't need to check
+// for this themselves. Positive values are clamped up to MinScheduleInterval
+// hours.
 //
 // lastSynced determines the first run time: if it is zero (never synced) or
 // lastSynced+interval already elapsed (e.g. the schedule lapsed during server
 // downtime), the job fires immediately to catch up. Otherwise it fires at
 // lastSynced+interval, preserving the existing cadence instead of resetting it
 // to now+interval.
-func (s *Scheduler) SchedulePeriodic(serviceName, userId string, intervalHours int64, lastSynced time.Time, job func()) error {
+func (s *Scheduler) SchedulePeriodic(serviceName, userId string, intervalHours int64, lastSynced time.Time, sync SyncFunc) error {
 	if intervalHours == 0 {
 		s.CancelPeriodic(serviceName, userId)
 		return nil
@@ -89,11 +79,15 @@ func (s *Scheduler) SchedulePeriodic(serviceName, userId string, intervalHours i
 		}
 	}
 
-	key := periodicKey(serviceName, userId)
+	key := syncKey(serviceName, userId)
 	entry := &periodicEntry{
 		interval: interval,
-		job:      recordLastSynced(serviceName, userId, job),
-		nextRun:  nextRun,
+		job: func() {
+			if err := s.runSync(serviceName, userId, "periodic", sync); err != nil {
+				fmt.Printf("ERROR: Services: periodic sync failed for user: %s, service: %s: %v", userId, serviceName, err)
+			}
+		},
+		nextRun: nextRun,
 	}
 
 	s.periodicMu.Lock()
@@ -113,7 +107,7 @@ func (s *Scheduler) SchedulePeriodic(serviceName, userId string, intervalHours i
 
 // CancelPeriodic stops the recurring job for userId on serviceName, if any.
 func (s *Scheduler) CancelPeriodic(serviceName, userId string) {
-	key := periodicKey(serviceName, userId)
+	key := syncKey(serviceName, userId)
 	s.periodicMu.Lock()
 	if entry, ok := s.periodicByKey[key]; ok {
 		entry.cancelled = true
