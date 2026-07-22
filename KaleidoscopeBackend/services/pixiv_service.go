@@ -100,49 +100,14 @@ func (p *PixivProvider) TestCredentials(userId string, creds ExternalApiKeys) er
 
 func (p *PixivProvider) OnCredentialsUpdated(userId string, creds ExternalApiKeys) {
 	InvalidatePixivSession(userId)
-	p.OnSyncSettingsUpdated(userId)
 }
 
 func (p *PixivProvider) OnCredentialsRemoved(userId string) {
 	InvalidatePixivSession(userId)
-	DefaultScheduler.clearActiveSync(pixivServiceName, userId)
-}
-
-func (p *PixivProvider) OnSyncSettingsUpdated(userId string) {
-	sync, err := GetServiceSync(userId, pixivServiceName)
-	if err != nil {
-		log.Printf("pixiv: failed to load sync settings for %s: %v", userId, err)
-		return
-	}
-	if err := applyPixivSchedule(userId, *sync); err != nil {
-		log.Printf("pixiv: failed to apply schedule for %s: %v", userId, err)
-	}
-}
-
-func (p *PixivProvider) RestoreSchedules() {
-	docs, err := GetAllUsersWithService(pixivServiceName)
-	if err != nil {
-		log.Printf("pixiv: could not restore schedules: %v", err)
-		return
-	}
-	for _, doc := range docs {
-		_ = DefaultScheduler.AddUser(pixivServiceName, doc.UserId)
-		entry := doc.Services[pixivServiceName]
-		if err := applyPixivSchedule(doc.UserId, entry.Sync); err != nil {
-			log.Printf("pixiv: restore schedule for %s: %v", doc.UserId, err)
-		}
-	}
-	log.Printf("pixiv: restored schedules for %d user(s)", len(docs))
 }
 
 func (p *PixivProvider) Sync(userId string, done func()) error {
 	return SyncPixivBookmarks(userId, done)
-}
-
-// applyPixivSchedule starts (or replaces) the periodic sync for userId based
-// on stored sync metadata.
-func applyPixivSchedule(userId string, sync ExternalApiSync) error {
-	return DefaultScheduler.SchedulePeriodic(pixivServiceName, userId, sync.SyncIntervalHours, sync.LastSynced, SyncPixivBookmarks)
 }
 
 // ---- Bookmark sync ----

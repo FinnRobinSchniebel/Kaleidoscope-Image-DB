@@ -51,10 +51,8 @@ type ServiceProvider interface {
 	Name() string                                               //returns the name of the service
 	Config() ServiceConfig                                      //returns the servie configurations used for the scheduler
 	TestCredentials(userId string, creds ExternalApiKeys) error // This function checks if the credentials are valid and the service can be reached
-	OnCredentialsUpdated(userId string, creds ExternalApiKeys)  //is called whenever a credential is changed and stops all existing or running scheduled items and replaces service specific information with the new info to then restart the periodic service
-	OnCredentialsRemoved(userId string)                         //stops all services using the credentials for that user and any service specific info
-	OnSyncSettingsUpdated(userId string)                        //replaces the sync settings with the new ones and replaces the periodic entry for that user
-	RestoreSchedules()                                          //Used to restore all schedules for all users of that service when a server restart occurs
+	OnCredentialsUpdated(userId string, creds ExternalApiKeys)  //handles service-specific cleanup when a credential is changed, e.g. invalidating a cached session. Rescheduling the periodic sync is handled centrally by the Scheduler after this returns.
+	OnCredentialsRemoved(userId string)                         //handles service-specific cleanup when credentials are removed, e.g. invalidating a cached session. Cancelling the periodic sync and clearing the active-sync guard is handled centrally by RemoveService.
 	Sync(userId string, done func()) error                      //sharts the sync process of the service. Its return is not tied to the completion of the sync. done MUST be called whenever a sync completes or fails.
 }
 
@@ -248,8 +246,9 @@ func (s *Scheduler) RegisterProvider(p ServiceProvider) {
 	s.mu.Unlock()
 }
 
-// RestoreAllSchedules calls RestoreSchedules on every registered provider.
-// Call once at startup after Start.
+// RestoreAllSchedules re-registers every user's rotation membership and
+// periodic sync job for every registered provider, from what's stored in the
+// database. Call once at startup after Start.
 func (s *Scheduler) RestoreAllSchedules() {
 	s.mu.RLock()
 	ps := make([]ServiceProvider, 0, len(s.providers))
@@ -257,9 +256,30 @@ func (s *Scheduler) RestoreAllSchedules() {
 		ps = append(ps, p)
 	}
 	s.mu.RUnlock()
+
 	for _, p := range ps {
-		p.RestoreSchedules()
+		docs, err := GetAllUsersWithService(p.Name())
+		if err != nil {
+			fmt.Printf("ERROR: Services: could not restore schedules for %s: %v\n", p.Name(), err)
+			continue
+		}
+		for _, doc := range docs {
+			_ = s.AddUser(p.Name(), doc.UserId)
+			entry := doc.Services[p.Name()]
+			if err := s.applySchedule(p, doc.UserId, entry.Sync); err != nil {
+				fmt.Printf("ERROR: Services: failed to restore schedule for user: %s, service: %s: %v\n", doc.UserId, p.Name(), err)
+			}
+		}
+		fmt.Printf("Services: restored schedules for %d user(s) on %s\n", len(docs), p.Name())
 	}
+}
+
+// applySchedule (re)registers userId's periodic sync job for p's service from
+// the given sync settings, using p.Sync as the job function. Centralizes what
+// each service previously had to wire up itself, so a schedule can never end
+// up pointing at the wrong sync function.
+func (s *Scheduler) applySchedule(p ServiceProvider, userId string, sync ExternalApiSync) error {
+	return s.SchedulePeriodic(p.Name(), userId, sync.SyncIntervalHours, sync.LastSynced, p.Sync)
 }
 
 // SyncUser triggers an on-demand sync for userId on the named service.
@@ -304,15 +324,16 @@ func (s *Scheduler) clearActiveSync(serviceName, userId string) {
 	s.activeSyncs.Delete(syncKey(serviceName, userId))
 }
 
-// RemoveService cleans up a user's service: fires OnCredentialsRemoved, cancels
-// any periodic job, removes the user from the scheduler rotation, and deletes
-// the stored credentials from the database.
+// RemoveService cleans up a user's service: fires OnCredentialsRemoved, clears
+// the active-sync guard, cancels any periodic job, removes the user from the
+// scheduler rotation, and deletes the stored credentials from the database.
 func (s *Scheduler) RemoveService(serviceName, userId string) error {
 	p, ok := s.provider(serviceName)
 	if !ok {
 		return fmt.Errorf("service %q not registered", serviceName)
 	}
 	p.OnCredentialsRemoved(userId)
+	s.clearActiveSync(serviceName, userId)
 	s.CancelPeriodic(serviceName, userId)
 	_ = s.RemoveUser(serviceName, userId)
 	return DeleteServiceInfo(userId, serviceName)
@@ -392,20 +413,32 @@ func (ss *serviceScheduler) nextTask() (Task, bool) {
 	return nil, false
 }
 
-// fireCredentialHook calls the registered provider's OnCredentialsUpdated for
-// serviceName, if any.
+// fireCredentialHook runs the registered provider's service-specific
+// OnCredentialsUpdated (e.g. invalidating a cached session), then
+// centrally reschedules the periodic sync from the newly stored settings.
 func (s *Scheduler) fireCredentialHook(serviceName, userId string, creds ExternalApiKeys) {
-	if p, ok := s.provider(serviceName); ok {
-		p.OnCredentialsUpdated(userId, creds)
+	p, ok := s.provider(serviceName)
+	if !ok {
+		return
 	}
+	p.OnCredentialsUpdated(userId, creds)
+	s.fireSyncSettingsHook(serviceName, userId)
 }
 
-// fireSyncSettingsHook calls the registered provider's OnSyncSettingsUpdated
-// starts process of reregistering any existing service in the schedule with the updated sync schedule.
-// for serviceName, if any.
+// fireSyncSettingsHook reloads userId's stored sync settings for serviceName
+// and reschedules their periodic job accordingly.
 func (s *Scheduler) fireSyncSettingsHook(serviceName, userId string) {
-	if p, ok := s.provider(serviceName); ok {
-		p.OnSyncSettingsUpdated(userId)
+	p, ok := s.provider(serviceName)
+	if !ok {
+		return
+	}
+	sync, err := GetServiceSync(userId, serviceName)
+	if err != nil {
+		fmt.Printf("ERROR: Services: failed to load sync settings for user: %s, service: %s: %v\n", userId, serviceName, err)
+		return
+	}
+	if err := s.applySchedule(p, userId, *sync); err != nil {
+		fmt.Printf("ERROR: Services: failed to apply schedule for user: %s, service: %s: %v\n", userId, serviceName, err)
 	}
 }
 
