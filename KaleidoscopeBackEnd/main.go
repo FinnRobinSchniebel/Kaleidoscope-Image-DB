@@ -146,6 +146,7 @@ func StartAPI() {
 	app.Post("/api/addtag", authutil.AuthSessionToken, AddTag)
 
 	//services
+	app.Get("/api/service", authutil.AuthSessionToken, services.ListServices) //lists all services with if the user has registered with it
 	app.Post("/api/service/:name/register", authutil.AuthSessionToken, services.Register)
 	app.Get("/api/service/:name/key", authutil.AuthSessionToken, services.GetKeys)
 	app.Post("/api/service/:name/sync", authutil.AuthSessionToken, services.SyncService)

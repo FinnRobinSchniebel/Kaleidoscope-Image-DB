@@ -39,6 +39,7 @@ func Register(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).SendString("failed to store credentials")
 	}
 
+	_ = DefaultScheduler.AddUser(service, userID)
 	DefaultScheduler.fireCredentialHook(service, userID, creds)
 
 	return c.SendStatus(fiber.StatusOK)
@@ -154,6 +155,27 @@ func PixivConnect(c *fiber.Ctx) error {
 	if err := AddServiceCredentials(userID, pixivServiceName, creds); err != nil {
 		return c.Status(fiber.StatusInternalServerError).SendString("failed to store credentials")
 	}
+	_ = DefaultScheduler.AddUser(pixivServiceName, userID)
 	DefaultScheduler.fireCredentialHook(pixivServiceName, userID, creds)
 	return c.SendStatus(fiber.StatusOK)
+}
+
+// ListServices reports every registered service integration and whether the
+// caller has connected it. Sourced from the scheduler's in-memory user
+// rotation (kept in sync via AddUser/RemoveUser at connect/disconnect time),
+// not the database, so it always reflects what the scheduler will actually
+// act on.
+func ListServices(c *fiber.Ctx) error {
+	userID := c.Locals("UserID").(string)
+
+	names := DefaultScheduler.RegisteredServiceNames()
+	out := make(fiber.Map, len(names))
+	for _, name := range names {
+		if DefaultScheduler.IsUserRegistered(name, userID) {
+			out[name] = "ok"
+		} else {
+			out[name] = "No"
+		}
+	}
+	return c.JSON(out)
 }

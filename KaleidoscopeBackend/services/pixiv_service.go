@@ -126,6 +126,7 @@ func (p *PixivProvider) RestoreSchedules() {
 		return
 	}
 	for _, doc := range docs {
+		_ = DefaultScheduler.AddUser(pixivServiceName, doc.UserId)
 		entry := doc.Services[pixivServiceName]
 		if err := applyPixivSchedule(doc.UserId, entry.Sync); err != nil {
 			log.Printf("pixiv: restore schedule for %s: %v", doc.UserId, err)

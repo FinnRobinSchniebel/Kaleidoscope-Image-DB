@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// CREATING A SERVICE
+// This is important information on how to design a service (like the pixiv service) and what needs to be implemented for it to work with the schedulers
+// 1. each service must implement the Service provider interface functions
+// 2. Sync must call the done() function when the sync fails or finishes to allow for a new sync to start for the user. Failure to do so will result in the user being unable to sync again until a server restart
+// 3. Rotation membership (AddUser/RemoveUser), periodic scheduling, and the active-sync guard are all managed centrally by the Scheduler (see RestoreAllSchedules, fireCredentialHook, fireSyncSettingsHook, RemoveService), which schedules jobs using the provider's own Sync method. OnCredentialsUpdated/OnCredentialsRemoved only need to handle service-specific state, e.g. invalidating a cached session.
+
 // Task is a unit of work submitted to the scheduler by a service integration.
 type Task func() error
 
@@ -42,14 +48,14 @@ type serviceScheduler struct {
 // ServiceProvider is implemented by every external service integration.
 // Register a provider once at startup via DefaultScheduler.RegisterProvider.
 type ServiceProvider interface {
-	Name() string
-	Config() ServiceConfig
-	TestCredentials(userId string, creds ExternalApiKeys) error
-	OnCredentialsUpdated(userId string, creds ExternalApiKeys)
-	OnCredentialsRemoved(userId string)
-	OnSyncSettingsUpdated(userId string)
-	RestoreSchedules()
-	Sync(userId string, done func()) error
+	Name() string                                               //returns the name of the service
+	Config() ServiceConfig                                      //returns the servie configurations used for the scheduler
+	TestCredentials(userId string, creds ExternalApiKeys) error // This function checks if the credentials are valid and the service can be reached
+	OnCredentialsUpdated(userId string, creds ExternalApiKeys)  //is called whenever a credential is changed and stops all existing or running scheduled items and replaces service specific information with the new info to then restart the periodic service
+	OnCredentialsRemoved(userId string)                         //stops all services using the credentials for that user and any service specific info
+	OnSyncSettingsUpdated(userId string)                        //replaces the sync settings with the new ones and replaces the periodic entry for that user
+	RestoreSchedules()                                          //Used to restore all schedules for all users of that service when a server restart occurs
+	Sync(userId string, done func()) error                      //sharts the sync process of the service. Its return is not tied to the completion of the sync. done MUST be called whenever a sync completes or fails.
 }
 
 // Scheduler coordinates task execution across multiple services and users,
@@ -166,6 +172,32 @@ func (s *Scheduler) AddUser(serviceName, userId string) error {
 		fmt.Printf("Services: Added user [%s] to service: %s", userId, serviceName)
 	}
 	return nil
+}
+
+// IsUserRegistered reports whether userId is currently in serviceName's
+// rotation, i.e. has been added via AddUser (typically at credential connect
+// time) and not since removed via RemoveUser.
+func (s *Scheduler) IsUserRegistered(serviceName, userId string) bool {
+	ss, ok := s.service(serviceName)
+	if !ok {
+		return false
+	}
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	_, exists := ss.byUser[userId]
+	return exists
+}
+
+// RegisteredServiceNames returns the names of every service integration
+// registered via RegisterProvider.
+func (s *Scheduler) RegisteredServiceNames() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	names := make([]string, 0, len(s.providers))
+	for name := range s.providers {
+		names = append(names, name)
+	}
+	return names
 }
 
 // RemoveUser removes a user from a service's rotation and discards their queued tasks.
