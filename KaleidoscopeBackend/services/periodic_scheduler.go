@@ -178,20 +178,18 @@ func (s *Scheduler) firePeriodicDue() {
 		e := heap.Pop(&s.periodicHeap).(*periodicEntry)
 		due = append(due, e)
 	}
+	toRun := make([]*periodicEntry, 0, len(due))
 	for _, e := range due {
 		if e.cancelled {
 			continue
 		}
 		e.nextRun = now.Add(e.interval)
 		heap.Push(&s.periodicHeap, e)
+		toRun = append(toRun, e)
 	}
 	s.periodicMu.Unlock()
 
-	for _, e := range due {
-		if e.cancelled {
-			continue
-		}
-
+	for _, e := range toRun {
 		go e.job()
 	}
 }
