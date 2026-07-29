@@ -42,30 +42,44 @@ func GetPixivSession(userId string) (*PixivSession, error) {
 
 // InvalidatePixivSession removes a user's cached session.
 // Call this after credential changes so the next GetPixivSession re-authenticates.
+// Runs under the same per-user lock openPixivSession holds for its whole
+// build, so a slow in-flight build can't re-Store a stale session after this
+// runs — see Scheduler.WithUserLock.
 func InvalidatePixivSession(userId string) {
-	pixivSessions.Delete(userId)
+	_ = DefaultScheduler.WithUserLock(pixivServiceName, userId, func() error {
+		pixivSessions.Delete(userId)
+		return nil
+	})
 }
 
+// openPixivSession builds a session from stored credentials and caches it.
+// The whole read-credentials/authenticate/store sequence runs under
+// WithUserLock so it can't race a concurrent InvalidatePixivSession: either
+// this runs entirely before the invalidation (and gets cleared by it, correctly)
+// or entirely after (and reflects whatever credentials are current by then).
 func openPixivSession(userId string) (*PixivSession, error) {
-	creds, err := GetServiceCredentials(userId, pixivServiceName)
-	if err != nil {
-		return nil, fmt.Errorf("pixiv credentials not found: %w", err)
-	}
-	if creds.Key1 == "" {
-		return nil, fmt.Errorf("pixiv requires an APP refresh token (Key1)")
-	}
-
-	session := &PixivSession{}
-
-	if creds.Key1 != "" {
-		session.App, err = pixiv.NewApp(creds.Key1)
+	var session *PixivSession
+	err := DefaultScheduler.WithUserLock(pixivServiceName, userId, func() error {
+		creds, err := GetServiceCredentials(userId, pixivServiceName)
 		if err != nil {
-			return nil, fmt.Errorf("pixiv APP API: %w", err)
+			return fmt.Errorf("pixiv credentials not found: %w", err)
 		}
+		if creds.Key1 == "" {
+			return fmt.Errorf("pixiv requires an APP refresh token (Key1)")
+		}
+
+		app, err := pixiv.NewApp(creds.Key1)
+		if err != nil {
+			return fmt.Errorf("pixiv APP API: %w", err)
+		}
+
+		session = &PixivSession{App: app}
+		pixivSessions.Store(userId, session)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	pixivSessions.Store(userId, session)
-
 	return session, nil
 }
 

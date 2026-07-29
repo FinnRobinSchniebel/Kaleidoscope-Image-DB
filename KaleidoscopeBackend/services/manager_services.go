@@ -222,20 +222,56 @@ func (s *Scheduler) RemoveUser(serviceName, userId string) error {
 	return nil
 }
 
-// Enqueue submits a task for a user on the named service.
-// The user is added to the rotation automatically if not already present.
+// Enqueue submits a task for a user on the named service. The user must
+// already be registered (via AddUser, at connect time or restore-at-startup)
+// — this deliberately does not create a rotation entry on demand, so that a
+// task chain continuing after RemoveUser has run (e.g. mid-sync credential
+// removal) fails here instead of silently resurrecting the user into
+// rotation. Callers should treat a failure here as "stop chaining" and route
+// it through their normal done()/error handling.
 func (s *Scheduler) Enqueue(serviceName, userId string, task Task) error {
 	ss, ok := s.service(serviceName)
 	if !ok {
 		return fmt.Errorf("service %q not registered", serviceName)
 	}
 
-	u, _ := ss.ensureUser(userId)
+	ss.mu.Lock()
+	u, exists := ss.byUser[userId]
+	ss.mu.Unlock()
+	if !exists {
+		return fmt.Errorf("user %s is not registered for service %q", userId, serviceName)
+	}
 
 	u.mu.Lock()
 	u.tasks = append(u.tasks, task)
 	u.mu.Unlock()
 	return nil
+}
+
+// WithUserLock runs fn while holding the same per-(service,user) lock that
+// guards userId's task queue on serviceName. Services with their own
+// per-user resource cache (e.g. an auth session) should use this to
+// serialize building/storing that resource against a concurrent credential
+// change, instead of introducing a separate lock — since only one sync ever
+// runs per (service,user) at a time, the only real contention this creates
+// is against exactly the credential-change path it's meant to guard against.
+// Returns an error without calling fn if the user isn't currently registered.
+func (s *Scheduler) WithUserLock(serviceName, userId string, fn func() error) error {
+	ss, ok := s.service(serviceName)
+	if !ok {
+		return fmt.Errorf("service %q not registered", serviceName)
+	}
+
+	ss.mu.Lock()
+	u, exists := ss.byUser[userId]
+	ss.mu.Unlock()
+	if !exists {
+		return fmt.Errorf("user %s is not registered for service %q", userId, serviceName)
+	}
+
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return fn()
 }
 
 // RegisterProvider registers a service via its ServiceProvider interface.
@@ -324,19 +360,20 @@ func (s *Scheduler) clearActiveSync(serviceName, userId string) {
 	s.activeSyncs.Delete(syncKey(serviceName, userId))
 }
 
-// RemoveService cleans up a user's service: fires OnCredentialsRemoved, clears
-// the active-sync guard, cancels any periodic job, removes the user from the
-// scheduler rotation, and deletes the stored credentials from the database.
+// RemoveService cleans up a user's service. The active-sync guard is cleared
+// last, deliberately: clearing it before credentials are removed would let a
+// new SyncUser call slip through while reading now-stale credentials.
 func (s *Scheduler) RemoveService(serviceName, userId string) error {
 	p, ok := s.provider(serviceName)
 	if !ok {
 		return fmt.Errorf("service %q not registered", serviceName)
 	}
 	p.OnCredentialsRemoved(userId)
-	s.clearActiveSync(serviceName, userId)
 	s.CancelPeriodic(serviceName, userId)
 	_ = s.RemoveUser(serviceName, userId)
-	return DeleteServiceInfo(userId, serviceName)
+	err := DeleteServiceInfo(userId, serviceName)
+	s.clearActiveSync(serviceName, userId)
+	return err
 }
 
 // ensureUser returns the userEntry for userId within ss, creating it and
