@@ -77,6 +77,14 @@ type Scheduler struct {
 	// true duration of a run (see runSync), not just until the launching call
 	// returns, since a run's work may continue asynchronously after that.
 	activeSyncs sync.Map
+
+	// registrationLocks serializes AddService against RemoveService for the
+	// same service+user, keyed by syncKey(serviceName, userId), so the two
+	// can't interleave and leave credentials/rotation state inconsistent
+	// (e.g. re-adding a user to rotation after their credentials were just
+	// deleted). Values are *sync.Mutex, created lazily and never removed:
+	// cardinality is bounded by distinct (service, user) pairs ever seen.
+	registrationLocks sync.Map
 }
 
 // DefaultScheduler is the package-level scheduler used by all service integrations.
@@ -335,7 +343,7 @@ func (s *Scheduler) SyncUser(serviceName, userId string) error {
 func (s *Scheduler) runSync(serviceName, userId, kind string, sync SyncFunc) error {
 	key := syncKey(serviceName, userId)
 	if _, alreadyRunning := s.activeSyncs.LoadOrStore(key, struct{}{}); alreadyRunning {
-		return fmt.Errorf("%s sync already in progress for user %s", serviceName, userId)
+		return fmt.Errorf("%w: %s sync for user %s", ErrSyncInProgress, serviceName, userId)
 	}
 	release := func() { s.activeSyncs.Delete(key) }
 
@@ -360,14 +368,51 @@ func (s *Scheduler) clearActiveSync(serviceName, userId string) {
 	s.activeSyncs.Delete(syncKey(serviceName, userId))
 }
 
+// registrationLock returns the mutex serializing AddService/RemoveService
+// for the given service+user, creating it on first use.
+func (s *Scheduler) registrationLock(serviceName, userId string) *sync.Mutex {
+	lock, _ := s.registrationLocks.LoadOrStore(syncKey(serviceName, userId), &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+// AddService validates creds against the service, then stores them and joins
+// the user's rotation/periodic schedule. TestCredentials runs first and
+// outside the registration lock, since it's a pure external check with no
+// shared-state side effects and may be slow: no reason to make a concurrent
+// RemoveService wait on it. This is the only path that should ever call
+// AddServiceCredentials, so bad credentials can never be persisted or acted
+// on by any other caller.
+func (s *Scheduler) AddService(serviceName, userId string, creds ExternalApiKeys) error {
+	if err := s.TestCredentials(serviceName, userId, creds); err != nil {
+		return fmt.Errorf("%w: %v", ErrCredentialTestFailed, err)
+	}
+
+	lock := s.registrationLock(serviceName, userId)
+	lock.Lock()
+	defer lock.Unlock()
+
+	if err := AddServiceCredentials(userId, serviceName, creds); err != nil {
+		return err
+	}
+	_ = s.AddUser(serviceName, userId)
+	s.fireCredentialHook(serviceName, userId, creds)
+	return nil
+}
+
 // RemoveService cleans up a user's service. The active-sync guard is cleared
 // last, deliberately: clearing it before credentials are removed would let a
-// new SyncUser call slip through while reading now-stale credentials.
+// new SyncUser call slip through while reading now-stale credentials. Takes
+// the same registration lock as AddService so the two can't interleave.
 func (s *Scheduler) RemoveService(serviceName, userId string) error {
 	p, ok := s.provider(serviceName)
 	if !ok {
 		return fmt.Errorf("service %q not registered", serviceName)
 	}
+
+	lock := s.registrationLock(serviceName, userId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	p.OnCredentialsRemoved(userId)
 	s.CancelPeriodic(serviceName, userId)
 	_ = s.RemoveUser(serviceName, userId)

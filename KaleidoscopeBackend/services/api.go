@@ -4,6 +4,7 @@ package services
 // any code that should be accessible from anywhere else in the back end should not be in this file and have its own dedicated location.
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/gofiber/fiber/v2"
@@ -31,16 +32,12 @@ func Register(c *fiber.Ctx) error {
 		return fiber.ErrBadRequest
 	}
 
-	if err := DefaultScheduler.TestCredentials(service, userID, creds); err != nil {
-		return c.Status(fiber.StatusServiceUnavailable).SendString(fmt.Sprintf("Failed to Connect to service: %s", err.Error()))
-	}
-
-	if err := AddServiceCredentials(userID, service, creds); err != nil {
+	if err := DefaultScheduler.AddService(service, userID, creds); err != nil {
+		if errors.Is(err, ErrCredentialTestFailed) {
+			return c.Status(fiber.StatusServiceUnavailable).SendString(fmt.Sprintf("failed to connect to service: %s", err.Error()))
+		}
 		return c.Status(fiber.StatusInternalServerError).SendString("failed to store credentials")
 	}
-
-	_ = DefaultScheduler.AddUser(service, userID)
-	DefaultScheduler.fireCredentialHook(service, userID, creds)
 
 	return c.SendStatus(fiber.StatusOK)
 }
@@ -53,7 +50,10 @@ func GetKeys(c *fiber.Ctx) error {
 	}
 	key, err := GetServiceCredentials(userID, service)
 	if err != nil {
-		return err
+		if errors.Is(err, ErrServiceNotConnected) {
+			return c.Status(fiber.StatusNotFound).SendString(err.Error())
+		}
+		return c.Status(fiber.StatusInternalServerError).SendString("failed to retrieve credentials")
 	}
 	return c.JSON(key)
 }
@@ -66,6 +66,9 @@ func SyncService(c *fiber.Ctx) error {
 		return err
 	}
 	if err := DefaultScheduler.SyncUser(service, userID); err != nil {
+		if errors.Is(err, ErrSyncInProgress) {
+			return c.Status(fiber.StatusConflict).SendString(err.Error())
+		}
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 	return c.Status(fiber.StatusAccepted).SendString(service + " sync added to queue")
@@ -78,6 +81,9 @@ func RemoveService(c *fiber.Ctx) error {
 		return err
 	}
 	if err := DefaultScheduler.RemoveService(service, userID); err != nil {
+		if errors.Is(err, ErrServiceNotConnected) {
+			return c.Status(fiber.StatusNotFound).SendString(err.Error())
+		}
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 	return c.SendStatus(fiber.StatusOK)
@@ -118,7 +124,10 @@ func GetServiceSyncInfo(c *fiber.Ctx) error {
 	}
 	syncInfo, err := GetServiceSync(userID, service)
 	if err != nil {
-		return err
+		if errors.Is(err, ErrServiceNotConnected) {
+			return c.Status(fiber.StatusNotFound).SendString(err.Error())
+		}
+		return c.Status(fiber.StatusInternalServerError).SendString("failed to retrieve sync info")
 	}
 	return c.JSON(fiber.Map{
 		"sync_interval_hours": syncInfo.SyncIntervalHours,
@@ -149,14 +158,12 @@ func PixivConnect(c *fiber.Ctx) error {
 		UserName: params.PixivUserID,
 	}
 
-	if err := DefaultScheduler.TestCredentials(pixivServiceName, userID, creds); err != nil {
-		return c.Status(fiber.StatusServiceUnavailable).SendString(fmt.Sprintf("Failed to Connect to service: %s", err.Error()))
-	}
-	if err := AddServiceCredentials(userID, pixivServiceName, creds); err != nil {
+	if err := DefaultScheduler.AddService(pixivServiceName, userID, creds); err != nil {
+		if errors.Is(err, ErrCredentialTestFailed) {
+			return c.Status(fiber.StatusServiceUnavailable).SendString(fmt.Sprintf("failed to connect to service: %s", err.Error()))
+		}
 		return c.Status(fiber.StatusInternalServerError).SendString("failed to store credentials")
 	}
-	_ = DefaultScheduler.AddUser(pixivServiceName, userID)
-	DefaultScheduler.fireCredentialHook(pixivServiceName, userID, creds)
 	return c.SendStatus(fiber.StatusOK)
 }
 

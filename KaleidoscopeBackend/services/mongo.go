@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -106,11 +107,14 @@ func GetServiceEntry(userId string, serviceName string) (*ServiceEntry, error) {
 	filter := bson.M{"user_id": userId}
 	var doc UserServices
 	if err := ServicesDb.FindOne(context.Background(), filter).Decode(&doc); err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, fmt.Errorf("%w: %q", ErrServiceNotConnected, serviceName)
+		}
 		return nil, err
 	}
 	entry, ok := doc.Services[serviceName]
 	if !ok {
-		return nil, fmt.Errorf("service %q not registered for user", serviceName)
+		return nil, fmt.Errorf("%w: %q", ErrServiceNotConnected, serviceName)
 	}
 	return &entry, nil
 }
@@ -146,7 +150,7 @@ func DeleteServiceInfo(userId string, serviceName string) error {
 		return err
 	}
 	if result.MatchedCount == 0 {
-		return fmt.Errorf("no services document found for user")
+		return fmt.Errorf("%w: %q", ErrServiceNotConnected, serviceName)
 	}
 	return nil
 }

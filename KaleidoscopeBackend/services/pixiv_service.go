@@ -96,18 +96,18 @@ func (p *PixivProvider) Config() ServiceConfig {
 
 func (p *PixivProvider) TestCredentials(userId string, creds ExternalApiKeys) error {
 	if creds.Key1 == "" {
-		return fmt.Errorf("Credential Test Failed: pixiv requires a refresh token")
+		return fmt.Errorf("pixiv requires a refresh token")
 	}
 	app, err := pixiv.NewApp(creds.Key1)
 	if err != nil {
-		return fmt.Errorf("Credential Test Failed: %w", err)
+		return err
 	}
 	UID, err := strconv.ParseUint(creds.UserName, 10, 64)
 	if err != nil {
-		return fmt.Errorf("Credential Test Failed: Pixiv User ID could not be parsed into a number.")
+		return fmt.Errorf("pixiv user ID could not be parsed into a number")
 	}
 	if _, _, err := app.UserBookmarksIllust(UID, pixiv.UserBookmarksIllustOptions{}); err != nil {
-		return fmt.Errorf("Credential Test Failed: %w", err)
+		return err
 	}
 	return nil
 }

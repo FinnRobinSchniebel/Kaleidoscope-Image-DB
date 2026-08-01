@@ -46,6 +46,12 @@ type FetchResponse =
   | { status: number; response: any }
 
 
+// capitalize uppercases the first character of an error message for display,
+// since backend error strings follow Go's lowercase convention.
+function capitalize(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
+}
+
 class GoApiError extends Error {
   status: number;
 
@@ -113,13 +119,13 @@ export async function apiSendRequest(request: GORequest): Promise<{ status: numb
   } catch (error) {
     if (verbose) console.log("fetch error")
     if (error instanceof GoApiError) {
-      return { status: error.status, errorString: error.message }
+      return { status: error.status, errorString: capitalize(error.message) }
     }
     if (error instanceof Error) {
-      return { status: 404, errorString: error.message }
+      return { status: 404, errorString: capitalize(error.message) }
     }
 
-    return { status: 300, errorString: "unknown error" }
+    return { status: 300, errorString: "Unknown error" }
   }
 }
 
