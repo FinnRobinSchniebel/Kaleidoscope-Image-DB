@@ -8,19 +8,12 @@ import (
 	zipupload "Kaleidoscopedb/Backend/KaleidoscopeBackend/zip_upload"
 
 	"context"
-	"fmt"
-	"image"
-	"image/gif"
-	"image/png"
 	"log"
-	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -34,7 +27,8 @@ const UserDbName = "Users"
 const SessionDbName = "Sessions"
 const tagDbName = "Tags"
 const servicesDbName = "services"
-const notificationDbName = "notifications"
+
+// const notificationDbName = "notifications"
 const LowResPathAppend = "low/"
 const MaxFileSize = 5 * 1024 * 1024 * 1024
 
@@ -121,7 +115,7 @@ func StartAPI() {
 	//TODO: MarkForDepetion api
 
 	//zip upload
-	app.Post("/api/uploadZip", authutil.AuthSessionToken, UploadZip)
+	app.Post("/api/uploadZip", authutil.AuthSessionToken, zipupload.UploadZip)
 
 	//authentication
 	app.Post("/api/session/register", authutil.RegisterUser)
@@ -134,19 +128,19 @@ func StartAPI() {
 	app.Delete("/api/session", authutil.AuthSessionToken, authutil.InvalidateRefreshToken)
 
 	//ImageRetrieve
-	app.Get("/api/image", authutil.AuthSessionToken, GetImageFromID)
-	app.Post("/api/search", authutil.AuthSessionToken, FilterForImageSets)
-	app.Get("/api/getimagedata", authutil.AuthSessionToken, ImageInfo)
+	app.Get("/api/image", authutil.AuthSessionToken, imageset.GetImageFromID)
+	app.Post("/api/search", authutil.AuthSessionToken, imageset.FilterForImageSets)
+	app.Get("/api/getimagedata", authutil.AuthSessionToken, imageset.GetImageInfo)
 
 	app.Get("/api/thumbnail", authutil.AuthSessionToken, imageset.GetThumbnail)
 
 	//tags
-	app.Get("/api/getAllTags", authutil.AuthSessionToken, TagRetrieve)
-	app.Get("/api/testAutoTag", Testautotag)
-	app.Post("/api/addtag", authutil.AuthSessionToken, AddTag)
+	app.Get("/api/getAllTags", authutil.AuthSessionToken, tagging.TagRetrieve)
+	app.Get("/api/testAutoTag", tagging.Testautotag)
+	app.Post("/api/addtag", authutil.AuthSessionToken, tagging.AddTag)
 
 	//services
-	app.Get("/api/service", authutil.AuthSessionToken, services.ListServices) //lists all services with if the user has registered with it
+	app.Get("/api/service/services", authutil.AuthSessionToken, services.ListServices) //lists all services with if the user has registered with it
 	app.Post("/api/service/:name/register", authutil.AuthSessionToken, services.Register)
 	app.Get("/api/service/:name/key", authutil.AuthSessionToken, services.GetKeys)
 	app.Post("/api/service/:name/sync", authutil.AuthSessionToken, services.SyncService)
@@ -163,299 +157,4 @@ func StartAPI() {
 	if err != nil {
 		log.Fatal(err.Error())
 	}
-}
-
-func UploadZip(c *fiber.Ctx) error {
-
-	//Get the zip
-	fileHeader, err := c.FormFile("zipFile")
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("No File Sent")
-	}
-
-	//create form for array grouping
-	form, err := c.MultipartForm()
-	if err != nil {
-		return fiber.ErrBadRequest
-	}
-	defer form.RemoveAll()
-
-	//Combine all rules for files and zips for easier use
-	var ruleLayers []string
-
-	if v := form.Value["structureZip"]; len(v) > 0 {
-		ruleLayers = append(ruleLayers, v...)
-	}
-
-	if v := form.Value["folders"]; len(v) > 0 {
-		ruleLayers = append(ruleLayers, v...)
-	}
-
-	for i := range ruleLayers {
-		if ruleLayers[i] == "NAN" {
-			ruleLayers[i] = ""
-		}
-	}
-
-	//keep file rules separate and give a default if no instructions are given.
-	fileLayer := "[order]"
-	if v := form.Value["files"]; len(v) > 0 && v[0] != "" {
-		fileLayer = v[0]
-	}
-
-	//grouping index
-	GroupingIndex, err := strconv.Atoi(c.FormValue("GroupingLevel", "0"))
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid grouping index")
-	}
-	userID := c.Locals("UserID").(string)
-	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
-	}
-
-	code, hashHits, skip, errors, err := zipupload.ProcessZip(fileHeader, ruleLayers, fileLayer, GroupingIndex, userID)
-
-	if err != nil {
-		return c.Status(code).SendString(err.Error())
-	}
-
-	return c.Status(code).JSON(
-		fiber.Map{
-			"hash_hits": hashHits,
-			"skipped":   skip,
-			"errors":    errors,
-		},
-	)
-}
-
-/*
-Will take in ONE imagset ID ('image_set_id') and one Index (index) of the image to provide.
-
-	WARNING: this code assumes that the token has already been validated before running the function
-	Returns an array of images in the 'images' field
-*/
-func GetImageFromID(c *fiber.Ctx) error {
-
-	userID := c.Locals("UserID").(string)
-	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
-	}
-
-	var requestParams struct {
-		ImageSetId string `json:"image_set_id" form:"image_set_id" query:"image_set_id"`
-		IndexList  int    `json:"index" form:"index" query:"index"`
-		LowRes     bool   `json:"lowres" form:"lowres" query:"lowres"`
-	}
-
-	err := c.QueryParser(&requestParams)
-
-	log.Println(requestParams)
-
-	if err != nil {
-		return c.Status(http.StatusBadRequest).SendString("could not parse request " + err.Error())
-	}
-	if requestParams.ImageSetId == "" {
-		return c.Status(http.StatusBadRequest).SendString("no image set ID provided")
-	}
-
-	//user is validated in request
-	iset, err := imageset.GetFromID(userID, requestParams.ImageSetId)
-	if err != nil || len(iset) == 0 {
-		return c.Status(http.StatusNotFound).SendString("imageSet could not be found" + err.Error())
-	}
-
-	if requestParams.IndexList >= len(iset[0].Image) || requestParams.IndexList < 0 {
-		if len(iset[0].Image) == 0 {
-			return c.Status(fiber.StatusNotFound).SendString("The imageSet does not contain images. If this was recently uploaded wait for it to be processed")
-		}
-		return c.Status(http.StatusBadRequest).SendString("Index out of bounds")
-	}
-
-	var imageLink string
-
-	var retImage image.Image
-	var retGif *gif.GIF
-
-	if requestParams.LowRes {
-
-		imageLink = iset[0].Image[requestParams.IndexList].LowResName
-		log.Println("res link: " + imageLink)
-		if imageLink == "" || imageLink == " " {
-			retImage, _, _, err = imageset.GenerateLowResFromHigh(iset[0].Path, iset[0].Image[requestParams.IndexList].Name, 720, 0)
-
-			if err != nil {
-				return c.Status(500).SendString("failed to create low res image: " + err.Error())
-			}
-			//todo save image
-			go imageset.AddLowresToSetAndStorage(iset[0].Path, iset[0].Title, retImage, iset[0], requestParams.IndexList)
-
-		} else {
-			retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path, imageLink, true)
-			if err != nil {
-				return fmt.Errorf("could not retrieve low res: %s", err)
-			}
-		}
-
-	} else {
-		retImage, retGif, err = imageset.RetrieveLocalImage(iset[0].Path, iset[0].Image[requestParams.IndexList].Name, false)
-		if err != nil {
-			return fmt.Errorf("could not retrieve image: %s", err)
-		}
-	}
-
-	if retImage != nil {
-		c.Type("png")
-		return png.Encode(c.Response().BodyWriter(), retImage)
-	} else if retGif != nil {
-		c.Type("gif")
-		return gif.EncodeAll(c.Response().BodyWriter(), retGif)
-	}
-
-	return nil
-}
-
-func FilterForImageSets(c *fiber.Ctx) error {
-	var requestParams imageset.SearchParams
-	err := c.BodyParser(&requestParams)
-	if err != nil {
-		return err
-	}
-
-	userID := c.Locals("UserID").(string)
-	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
-	}
-
-	requestParams.User = userID
-
-	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
-
-	result, err := imageset.SearchDBForImages(requestParams)
-	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
-	}
-	res := result
-
-	return c.JSON(res)
-}
-
-func ImageInfo(c *fiber.Ctx) error {
-
-	var requestParams struct {
-		IDs []string `json:"ids" bson:"ids" form:"ids" query:"ids"`
-	}
-	err := c.QueryParser(&requestParams)
-	fmt.Println(requestParams.IDs)
-	if len(requestParams.IDs) == 0 || err != nil {
-		return c.Status(http.StatusBadRequest).SendString("no id given")
-	}
-
-	var objectIDs []bson.ObjectID
-	for _, idStr := range requestParams.IDs {
-		oid, err := bson.ObjectIDFromHex(idStr)
-		if err != nil {
-			return err
-		}
-		objectIDs = append(objectIDs, oid)
-	}
-
-	userID := c.Locals("UserID").(string)
-	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
-	}
-
-	result, err := imageset.GetImageInfoFromDB(objectIDs, userID)
-	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
-	}
-	res := fiber.Map{
-		"imagesets": result,
-	}
-	return c.JSON(res)
-}
-
-// TODO
-func TagRetrieve(c *fiber.Ctx) error {
-
-	var requestParams struct {
-		IDs []string `json:"ids" bson:"ids" form:"ids" query:"ids"`
-	}
-	err := c.QueryParser(&requestParams)
-	fmt.Println(requestParams.IDs)
-	if len(requestParams.IDs) == 0 || err != nil {
-		return c.Status(http.StatusBadRequest).SendString("no id given")
-	}
-
-	var objectIDs []bson.ObjectID
-	for _, idStr := range requestParams.IDs {
-		oid, err := bson.ObjectIDFromHex(idStr)
-		if err != nil {
-			return err
-		}
-		objectIDs = append(objectIDs, oid)
-	}
-
-	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
-
-	// result, err := imageset.GetImageInfoFromDB(objectIDs)
-	// if err != nil {
-	// 	return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
-	// }
-	// res := fiber.Map{
-	// 	"imagesets": result,
-	// }
-	// return c.JSON(res)
-	return nil
-}
-
-/*
-Returns an array of images in the 'images' field
-*/
-func AddTag(c *fiber.Ctx) error {
-
-	var inputs tagging.Tag
-
-	c.BodyParser(&inputs)
-
-	userID := c.Locals("UserID").(string)
-	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
-	}
-
-	var err error
-
-	inputs.User, err = bson.ObjectIDFromHex(userID)
-	if err != nil {
-		return err
-	}
-
-	err = tagging.AddTags(inputs)
-
-	if err != nil {
-		return err
-	}
-	return c.SendStatus(200)
-}
-
-func Testautotag(c *fiber.Ctx) error {
-
-	var items struct {
-		Tags []string `json:"tags" bson:"tags" form:"tags"`
-	}
-
-	err := c.BodyParser(&items)
-	if err != nil {
-		return err
-	}
-	if len(items.Tags) == 0 {
-		return c.Status(http.StatusBadRequest).SendString("no tags given")
-	}
-
-	res, err := tagging.FindAutoTag(items.Tags)
-	if err != nil {
-		return err
-	}
-
-	return c.JSON(res)
-
 }
