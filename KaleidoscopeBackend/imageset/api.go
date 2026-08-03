@@ -62,7 +62,7 @@ func GetThumbnail(c *fiber.Ctx) error {
 		}
 		img, _, _, err := GenerateLowResFromHigh(iset[0].Path, iset[0].Image[0].Name, 256, 256)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to generate thumbnail: %w", err)
 		}
 
 		//save async
@@ -77,7 +77,7 @@ func GetThumbnail(c *fiber.Ctx) error {
 	//thumbnail is always considered low res
 	img, _, err := RetrieveLocalImage(iset[0].Path, iset[0].ThumbNail, true)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to retrieve thumbnail: %w", err)
 	}
 	if img == nil {
 		return c.Status(fiber.StatusInternalServerError).SendString("something went wrong with thumbnail retrieve")
@@ -134,7 +134,7 @@ func PostImageSet(c *fiber.Ctx) error {
 	}
 
 	if err := c.BodyParser(imageSet); err != nil {
-		return err
+		return c.Status(fiber.StatusBadRequest).SendString("could not parse request body: " + err.Error())
 	}
 
 	//A id was sent which is invalid
@@ -146,7 +146,7 @@ func PostImageSet(c *fiber.Ctx) error {
 	// parse images from api request
 	form, err := c.MultipartForm()
 	if err != nil {
-		return err
+		return c.Status(fiber.StatusBadRequest).SendString("could not parse multipart form: " + err.Error())
 	}
 
 	media := form.File["media"]
@@ -276,7 +276,8 @@ func GetImageInfo(c *fiber.Ctx) error {
 	for _, idStr := range requestParams.IDs {
 		oid, err := bson.ObjectIDFromHex(idStr)
 		if err != nil {
-			return err
+			status, msg := imageSetErrorResponse(fmt.Errorf("%w: %q", bson.ErrInvalidHex, idStr))
+			return c.Status(status).SendString(msg)
 		}
 		objectIDs = append(objectIDs, oid)
 	}
@@ -300,7 +301,7 @@ func FilterForImageSets(c *fiber.Ctx) error {
 	var requestParams SearchParams
 	err := c.BodyParser(&requestParams)
 	if err != nil {
-		return err
+		return c.Status(fiber.StatusBadRequest).SendString("could not parse request body: " + err.Error())
 	}
 
 	userID := c.Locals("UserID").(string)
