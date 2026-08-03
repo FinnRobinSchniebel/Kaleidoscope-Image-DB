@@ -74,19 +74,22 @@ func NewSessionToken(c *fiber.Ctx) error {
 // Accepts a single id of a refresh token (Must be admin to do so).
 // If none is given it will try to invalidate the used token
 func InvalidateRefreshToken(c *fiber.Ctx) error {
+	userID := c.Locals("UserID").(string)
 
 	userRefTok := c.Cookies("refresh_token", "")
-	claim, _ := VerifyToken(userRefTok)
+	if userRefTok == "" {
+		return c.Status(http.StatusBadRequest).SendString("no refresh token provided in request")
+	}
+	claim, err := VerifyToken(userRefTok)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString("invalid refresh token")
+	}
 	tokenId := claim.ID
 
 	param := c.Params("id", "")
 
-	if userRefTok == "" {
-		return c.Status(http.StatusBadRequest).SendString("no refresh token provided in request")
-	}
-
 	if param != "" && tokenId != param {
-		bid, err := bson.ObjectIDFromHex(claim.UserID)
+		bid, err := bson.ObjectIDFromHex(userID)
 		if err != nil {
 			return c.Status(http.StatusBadRequest).SendString("Failed to turn user ID into a valid ID")
 		}
@@ -101,12 +104,12 @@ func InvalidateRefreshToken(c *fiber.Ctx) error {
 		tokenId = param
 	}
 
-	err := InvalidateRefreshTokenById(tokenId)
+	err = InvalidateRefreshTokenById(tokenId)
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).SendString("Could not Invalidate token")
 	}
 
-	log.Println("Session token invalidated for user: " + claim.UserID)
+	log.Println("Session token invalidated for user: " + userID)
 
 	return c.Status(200).SendString("session invalidated successfully")
 }

@@ -110,16 +110,23 @@ func LoginUser(c *fiber.Ctx) error {
 // Uses the Refresh_token to invalidate the session and sends a new session token that expires immediately
 // Does not send a new refresh token as any check with the old token will fail anyway.
 func LogoutUser(c *fiber.Ctx) error {
-	userRefTok := c.Cookies("refresh_token", "")
-	claim, _ := VerifyToken(userRefTok)
-	tokenId := claim.ID
+	userID := c.Locals("UserID").(string)
 
-	err := InvalidateRefreshTokenById(tokenId)
+	userRefTok := c.Cookies("refresh_token", "")
+	if userRefTok == "" {
+		return c.Status(http.StatusBadRequest).SendString("no refresh token provided in request")
+	}
+	claim, err := VerifyToken(userRefTok)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString("invalid refresh token")
+	}
+
+	err = InvalidateRefreshTokenById(claim.ID)
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).SendString("Could not Invalidate token")
 	}
 
-	bId, err := bson.ObjectIDFromHex(claim.UserID)
+	bId, err := bson.ObjectIDFromHex(userID)
 	if err != nil {
 		return err
 	}
@@ -137,7 +144,7 @@ func LogoutUser(c *fiber.Ctx) error {
 		"session_token": sessionToken,
 	}
 	//"User Loggedout succesfully"
-	log.Printf("User: %s logged out successfully from session %s", claim.UserID, claim.ID)
+	log.Printf("User: %s logged out successfully from session %s", userID, claim.ID)
 
 	return c.Status(200).JSON(res)
 }

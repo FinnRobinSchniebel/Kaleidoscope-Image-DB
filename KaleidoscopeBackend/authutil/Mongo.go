@@ -70,28 +70,25 @@ func GetRefreshToken(tokenID string) (JWTClaims, bool, error) {
 // find token by 'session_id'
 func InvalidateRefreshTokenById(tokenID string) error {
 
-	var session SessionSettings
-
-	err := SessionDb.FindOne(context.Background(), bson.D{{"session_id", tokenID}}).Decode(&session)
-	if err != nil {
-		return err
-	}
-
 	updateRequest := bson.M{
 		"$set": bson.M{
-			"refresh_token.RefreshToken": session.RefreshToken,
+			"refresh_token.is_revoked": true,
 		},
 	}
 
-	_, err = SessionDb.UpdateOne(context.Background(), bson.D{{"session_id", tokenID}}, updateRequest)
-
+	result, err := SessionDb.UpdateOne(context.Background(), bson.D{{"session_id", tokenID}}, updateRequest)
 	if err != nil {
 		return err
 	}
-	fmt.Println("Session invalidated: " + session.SessionID)
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("could not find session: %s", tokenID)
+	}
+
+	fmt.Println("Session invalidated: " + tokenID)
 
 	return nil
 }
+
 func IsAdmin(id string) bool {
 	var boolResult bson.M
 	mongId, err := bson.ObjectIDFromHex(id)
@@ -108,5 +105,9 @@ func IsAdmin(id string) bool {
 
 	//fmt.Printf("isAdmin: %s\n", boolResult)
 
-	return boolResult["is_admin"].(bool)
+	isAdmin, ok := boolResult["is_admin"].(bool)
+	if !ok {
+		return false
+	}
+	return isAdmin
 }
