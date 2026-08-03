@@ -320,12 +320,12 @@ func fetchAndSavePixivIllust(userId string, illustID uint64, isUpdate bool) erro
 	}
 
 	iset := buildPixivImageSet(illust, userId)
-	_, _, resp := imageset.AddImageSet(iset, media, userId)
-	if resp.ErrorCode >= 400 {
-		return fmt.Errorf("AddImageSet for illust %d: %s", illustID, resp.ErrorString)
+	_, _, err = imageset.AddImageSet(iset, media, userId)
+	if err != nil {
+		return fmt.Errorf("AddImageSet for illust %d: %w", illustID, err)
 	}
 
-	log.Printf("pixiv: saved illust %d (%q) status=%d", illustID, illust.Title, resp.ErrorCode)
+	log.Printf("pixiv: saved illust %d (%q)", illustID, illust.Title)
 	return nil
 }
 

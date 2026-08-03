@@ -49,11 +49,6 @@ type ImageSetMongo struct {
 
 }
 
-type InternalResponse struct {
-	ErrorCode   int
-	ErrorString string
-}
-
 func CleanImagSetForFrontEnd(iSet ...ImageSetMongo) []ImageSetMongo {
 	for index, _ := range iSet {
 		iSet[index].Image = nil

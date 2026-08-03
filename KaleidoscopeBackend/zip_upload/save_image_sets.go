@@ -38,8 +38,8 @@ func SaveImageSets(basePath string, cleanupPath string, fileIsetData []ImageSetF
 
 		hits, iSetDbId, err := imageset.AddImageSet(&fileIsetData[setIndex].Iset, MedSour, user)
 
-		if err.ErrorCode > 299 {
-			log.Print(err.ErrorString)
+		if err != nil {
+			log.Print(err)
 			return
 		}
 		result[iSetDbId] = hits

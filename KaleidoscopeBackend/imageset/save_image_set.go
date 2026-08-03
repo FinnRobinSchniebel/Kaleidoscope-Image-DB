@@ -3,6 +3,7 @@ package imageset
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tagging"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/gif"
@@ -88,8 +89,14 @@ func (m MultipartSource) Remove() bool {
 	return true
 }
 
+// ErrNoMedia is returned by AddImageSet when the request contained no media
+// files. Callers map it to HTTP 400.
+var ErrNoMedia = errors.New("no media attached")
+
 // This function adds the created image set to the DataBase and adds the mediaSource as permanent files to the server.
-func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (CollisionMap, string, InternalResponse) {
+// On success it returns a nil error; a non-empty CollisionMap means the set was
+// saved but duplicate image hashes were detected.
+func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (CollisionMap, string, error) {
 
 	//TODO: Test if image size is to large
 
@@ -117,7 +124,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 
 	//check media count first to avoid empty imagsets in db
 	if len(media) == 0 {
-		return nil, "", InternalResponse{400, "No Media attached"}
+		return nil, "", ErrNoMedia
 	}
 
 	var err error
@@ -129,7 +136,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	imageSet.Path, err = MakeFileDirectoryFromAuthor(userId, imageSet.Authors[0])
 
 	if err != nil {
-		return nil, "", InternalResponse{500, err.Error()}
+		return nil, "", fmt.Errorf("creating author directory: %w", err)
 	}
 
 	imageSet.DateAdded = time.Now()
@@ -140,7 +147,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	CreatedSuccessfully := false
 
 	if err != nil {
-		return nil, "", InternalResponse{500, err.Error()}
+		return nil, "", fmt.Errorf("inserting image set: %w", err)
 	}
 	//In case the creation fails, remove the entry to avoid empty data
 	defer func() {
@@ -168,7 +175,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 		itype, err := getFileTypeFromHeader(media[index])
 		if err != nil {
 
-			return nil, "", InternalResponse{500, err.Error()}
+			return nil, "", fmt.Errorf("reading media type: %w", err)
 		}
 
 		var ihash string
@@ -178,7 +185,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 			var igif *gif.GIF
 			igif, err = FileHeaderToGif(media[index])
 			if err != nil {
-				return nil, "", InternalResponse{500, err.Error()}
+				return nil, "", fmt.Errorf("decoding gif: %w", err)
 			}
 			fileName, ihash, err = SaveGif(igif, imageSet.Path, fileName, imageSet.ID, index)
 
@@ -186,13 +193,13 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 			var inImage image.Image
 			inImage, _, err = FileHeaderToImage(media[index])
 			if err != nil {
-				return nil, "", InternalResponse{500, err.Error()}
+				return nil, "", fmt.Errorf("decoding image: %w", err)
 			}
 			fileName, ihash, err = SaveImage(inImage, imageSet.Path, fileName, imageSet.ID, index, "png")
 		}
 
 		if err != nil {
-			return nil, "", InternalResponse{500, err.Error()}
+			return nil, "", fmt.Errorf("saving media: %w", err)
 		}
 
 		imageSet.Image = append(imageSet.Image, ImageInfo{Name: fileName, ImageHash: ihash, IsImageActive: true})
@@ -202,7 +209,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 		HitResults, err := findOverlappingHashes(ihash, userId)
 
 		if err != nil {
-			return nil, "", InternalResponse{500, err.Error()}
+			return nil, "", fmt.Errorf("checking hash collisions: %w", err)
 		}
 		if len(HitResults) != 0 {
 			fmt.Println("Hash Hit")
@@ -221,24 +228,22 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 
 	if err != nil {
 		fmt.Println("Update Failed")
-		return nil, "", InternalResponse{500, err.Error()}
+		return nil, "", fmt.Errorf("updating image set: %w", err)
 	}
 
 	if result.MatchedCount == 0 {
 		log.Print("COULD NOT UPDATE DB FILE AFTER ADDING INFO")
-		return nil, "", InternalResponse{500, "Error while updating db entry after saving files"}
-		//return c.Status(500).SendString()
+		return nil, "", errors.New("update matched no image set")
 	}
 	CreatedSuccessfully = true
 
 	log.Println("---Upload complete---")
-	//hash conflict detected
+	//non-empty hashHits signals a successful add with duplicate images detected
 	if len(hashHits) != 0 {
-		//return InternalErrorHandle{202, "Error while updating db entry after saving files"}
-		return hashHits, imageSet.ID.Hex(), InternalResponse{202, "Ok, Hash collision detected"}
+		return hashHits, imageSet.ID.Hex(), nil
 	}
 
-	return nil, imageSet.ID.Hex(), InternalResponse{201, "Ok, Added to DB"}
+	return nil, imageSet.ID.Hex(), nil
 }
 
 func CreateThumbnailForNew(path string, existingFileName string, title string, id bson.ObjectID) {

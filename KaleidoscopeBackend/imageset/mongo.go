@@ -15,6 +15,12 @@ import (
 
 var Collection *mongo.Collection
 
+// ErrAccessDenied is returned by GetFromID when a non-admin user requests an
+// image set they do not own. Callers map it to HTTP 403. Invalid-id and
+// not-found failures are reported with bson.ErrInvalidHex and
+// mongo.ErrNoDocuments; test for any of these with errors.Is.
+var ErrAccessDenied = errors.New("access denied")
+
 type SearchParams struct {
 	PageCount  int      `json:"page_count" form:"page_count"`   //number of images to return
 	SkipCount  int      `json:"skip_count" form:"skip_count"`   //What page to return
@@ -84,7 +90,10 @@ func GetFromID(usr string, id ...string) ([]ImageSetMongo, error) {
 	for _, item := range id {
 		ObjId, err := bson.ObjectIDFromHex(item)
 		if err != nil {
-			return nil, err
+			// ObjectIDFromHex returns bson.ErrInvalidHex or a raw hex error
+			// depending on the input; normalize onto ErrInvalidHex so callers
+			// can classify any bad id with errors.Is.
+			return nil, fmt.Errorf("%w: %q", bson.ErrInvalidHex, item)
 		}
 		IdBson = append(IdBson, ObjId)
 	}
@@ -96,22 +105,24 @@ func GetFromID(usr string, id ...string) ([]ImageSetMongo, error) {
 	for _, ObjId := range IdBson {
 		err := Collection.FindOne(context.Background(), bson.D{{"_id", ObjId}}).Decode(&entry)
 		if err != nil {
-			log.Println("Failed to find file!")
-			return nil, err
+			// mongo.ErrNoDocuments stays matchable through the wrap so callers
+			// can tell a missing set (404) from a real DB error (500).
+			log.Printf("failed to query image set %s: %v", ObjId.Hex(), err)
+			return nil, fmt.Errorf("querying image set %s: %w", ObjId.Hex(), err)
 		}
 		//check access
 		if entry.KscopeUserId != usr && entry.KscopeUserId != "" {
 			//if denied  and not admin, error
 			if !authutil.IsAdmin(usr) {
 				log.Printf("User access denied: user %s, accessing %s", usr, ObjId.Hex())
-				return nil, fmt.Errorf("User access denied")
+				return nil, fmt.Errorf("%w: image set %s", ErrAccessDenied, ObjId.Hex())
 			}
 		}
 
 		iSets = append(iSets, entry)
 	}
 	if len(iSets) == 0 {
-		return nil, fmt.Errorf("Unknown error: Item was found but result was empty")
+		return nil, mongo.ErrNoDocuments
 	}
 
 	return iSets, nil

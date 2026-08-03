@@ -8,12 +8,28 @@ import (
 	"image/gif"
 	"image/png"
 	"log"
-	"net/http"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
+
+// imageSetErrorResponse maps a GetFromID failure to the HTTP status and
+// client-safe message describing it. Unrecognized errors map to 500; the
+// underlying error is logged by GetFromID, not returned to the client.
+func imageSetErrorResponse(err error) (int, string) {
+	switch {
+	case errors.Is(err, bson.ErrInvalidHex):
+		return fiber.StatusBadRequest, "invalid image set id"
+	case errors.Is(err, mongo.ErrNoDocuments):
+		return fiber.StatusNotFound, "image set not found"
+	case errors.Is(err, ErrAccessDenied):
+		return fiber.StatusForbidden, ErrAccessDenied.Error()
+	default:
+		return fiber.StatusInternalServerError, "could not retrieve image set"
+	}
+}
 
 func GetThumbnail(c *fiber.Ctx) error {
 
@@ -25,12 +41,13 @@ func GetThumbnail(c *fiber.Ctx) error {
 
 	userID := c.Locals("UserID").(string)
 	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
+		return c.Status(fiber.StatusInternalServerError).SendString("no user ID provided")
 	}
 
 	iset, err := GetFromID(userID, IsetID)
-	if err != nil || len(iset) == 0 {
-		return c.Status(http.StatusNotFound).SendString("imageSet could not be found: " + err.Error())
+	if err != nil {
+		status, msg := imageSetErrorResponse(err)
+		return c.Status(status).SendString(msg)
 	}
 
 	//
@@ -38,10 +55,10 @@ func GetThumbnail(c *fiber.Ctx) error {
 	//if no thumbnail exist create one
 	if iset[0].ThumbNail == "" {
 		if len(iset[0].Image) == 0 {
-			return c.Status(fiber.StatusNotFound).SendString("No Images in Image set at this time. Please wait for uploads to complete. If no Upload is in progress, there might be a bug.")
+			return c.Status(fiber.StatusNotFound).SendString("no images in image set at this time. Please wait for uploads to complete. If no upload is in progress, there might be a bug.")
 		}
 		if iset[0].Image[0].Name == "" {
-			return c.Status(fiber.StatusInternalServerError).SendString("The image set image link is missing. This is not supposed to happen.")
+			return c.Status(fiber.StatusInternalServerError).SendString("the image set image link is missing. This is not supposed to happen.")
 		}
 		img, _, _, err := GenerateLowResFromHigh(iset[0].Path, iset[0].Image[0].Name, 256, 256)
 		if err != nil {
@@ -63,7 +80,7 @@ func GetThumbnail(c *fiber.Ctx) error {
 		return err
 	}
 	if img == nil {
-		return c.Status(fiber.StatusInternalServerError).SendString("Something went wrong with thumbnail retrieve.")
+		return c.Status(fiber.StatusInternalServerError).SendString("something went wrong with thumbnail retrieve")
 	}
 	c.Type("png")
 	return png.Encode(c.Response().BodyWriter(), img)
@@ -81,18 +98,19 @@ func GetImageSetById(c *fiber.Ctx) error {
 		paramid = append(paramid, strings.Split(string(groupedIds), ",")...)
 	}
 	if paramid == nil {
-		return c.Status(400).SendString("Requires an 'ids' param to be sent with the request (eg: ?ids=12345,49325,...)")
+		return c.Status(fiber.StatusBadRequest).SendString("requires an 'ids' param to be sent with the request (eg: ?ids=12345,49325,...)")
 	}
 
 	userID := c.Locals("UserID").(string)
 	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
+		return c.Status(fiber.StatusInternalServerError).SendString("no user ID provided")
 	}
 
 	//check if user can access the images and remove any images that would not be valid
 	iSets, err := GetFromID(userID, paramid...)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("could not get imageset from the request: " + err.Error())
+		status, msg := imageSetErrorResponse(err)
+		return c.Status(status).SendString(msg)
 	}
 
 	//clean response to avoid backend info reaching the front end and create api Json response
@@ -102,12 +120,7 @@ func GetImageSetById(c *fiber.Ctx) error {
 		"image_sets": iSets,
 	}
 
-	if err != nil {
-		log.Println("Could Not fetch Items from DB")
-		return err
-	}
-
-	return c.Status(200).JSON(res)
+	return c.Status(fiber.StatusOK).JSON(res)
 
 }
 
@@ -117,7 +130,7 @@ func PostImageSet(c *fiber.Ctx) error {
 
 	userID := c.Locals("UserID").(string)
 	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
+		return c.Status(fiber.StatusInternalServerError).SendString("no user ID provided")
 	}
 
 	if err := c.BodyParser(imageSet); err != nil {
@@ -127,7 +140,7 @@ func PostImageSet(c *fiber.Ctx) error {
 	//A id was sent which is invalid
 	if imageSet.ID != bson.NilObjectID {
 		//TODO : item sent to wrong api
-		return c.Status(400).SendString("Called API to add while trying to update.")
+		return c.Status(fiber.StatusBadRequest).SendString("called API to add while trying to update")
 	}
 
 	// parse images from api request
@@ -143,9 +156,21 @@ func PostImageSet(c *fiber.Ctx) error {
 		MedSour[i] = MultipartSource{m}
 	}
 
-	hashHits, _, response := AddImageSet(imageSet, MedSour, userID)
+	hashHits, _, err := AddImageSet(imageSet, MedSour, userID)
+	if err != nil {
+		status := fiber.StatusInternalServerError
+		if errors.Is(err, ErrNoMedia) {
+			status = fiber.StatusBadRequest
+		}
+		return c.Status(status).SendString(err.Error())
+	}
 
-	return c.Status(response.ErrorCode).JSON(fiber.Map{"error": response.ErrorString, "hash_hits": hashHits})
+	//non-empty hashHits means the set was added but duplicate images were detected
+	status := fiber.StatusCreated
+	if len(hashHits) != 0 {
+		status = fiber.StatusAccepted
+	}
+	return c.Status(status).JSON(fiber.Map{"hash_hits": hashHits})
 }
 
 // takes in one or multiple "ids" in a coma separated list (no spaces)
@@ -163,12 +188,12 @@ func DeleteImageSets(c *fiber.Ctx) error {
 	log.Println("List of Items to delete:\n" + strings.Join(paramid, ", "))
 
 	if paramid == nil {
-		return c.Status(400).SendString("Requires an 'ids' param to be sent with the request (eg: ?ids=12345,49325,...)")
+		return c.Status(fiber.StatusBadRequest).SendString("requires an 'ids' param to be sent with the request (eg: ?ids=12345,49325,...)")
 	}
 
 	userID := c.Locals("UserID").(string)
 	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
+		return c.Status(fiber.StatusInternalServerError).SendString("no user ID provided")
 	}
 
 	var UnauthorizedImageIDs []bson.ObjectID
@@ -178,10 +203,11 @@ func DeleteImageSets(c *fiber.Ctx) error {
 		//check if user can access the images and remove any images that would not be valid
 		iSets, err := GetFromID(userID, paramid...)
 		if err != nil {
-			return c.Status(http.StatusInternalServerError).SendString("Could not get ID from the Request")
+			status, msg := imageSetErrorResponse(err)
+			return c.Status(status).SendString(msg)
 		}
 		if len(iSets) != len(paramid) {
-			return c.Status(500).SendString("something has gone wrong with getting image sets from the IDs")
+			return c.Status(fiber.StatusInternalServerError).SendString("something has gone wrong with getting image sets from the IDs")
 		}
 
 		for index := range iSets {
@@ -225,14 +251,14 @@ func DeleteImageSets(c *fiber.Ctx) error {
 	}
 
 	if DeletedList != nil && (errList != nil || UnauthorizedImageIDs != nil) {
-		return c.Status(http.StatusPartialContent).JSON(res)
+		return c.Status(fiber.StatusPartialContent).JSON(res)
 	}
 
 	if DeletedList == nil {
-		return c.Status(404).JSON(res)
+		return c.Status(fiber.StatusNotFound).JSON(res)
 	}
 
-	return c.Status(200).JSON(res)
+	return c.Status(fiber.StatusOK).JSON(res)
 }
 
 func GetImageInfo(c *fiber.Ctx) error {
@@ -243,7 +269,7 @@ func GetImageInfo(c *fiber.Ctx) error {
 	err := c.QueryParser(&requestParams)
 	fmt.Println(requestParams.IDs)
 	if len(requestParams.IDs) == 0 || err != nil {
-		return c.Status(http.StatusBadRequest).SendString("no id given")
+		return c.Status(fiber.StatusBadRequest).SendString("no id given")
 	}
 
 	var objectIDs []bson.ObjectID
@@ -257,12 +283,12 @@ func GetImageInfo(c *fiber.Ctx) error {
 
 	userID := c.Locals("UserID").(string)
 	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
+		return c.Status(fiber.StatusInternalServerError).SendString("no user ID provided")
 	}
 
 	result, err := GetImageInfoFromDB(objectIDs, userID)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
+		return c.Status(fiber.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
 	}
 	res := fiber.Map{
 		"imagesets": result,
@@ -279,7 +305,7 @@ func FilterForImageSets(c *fiber.Ctx) error {
 
 	userID := c.Locals("UserID").(string)
 	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
+		return c.Status(fiber.StatusInternalServerError).SendString("no user ID provided")
 	}
 
 	requestParams.User = userID
@@ -288,7 +314,7 @@ func FilterForImageSets(c *fiber.Ctx) error {
 
 	result, err := SearchDBForImages(requestParams)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
+		return c.Status(fiber.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
 	}
 	res := result
 
@@ -305,7 +331,7 @@ func GetImageFromID(c *fiber.Ctx) error {
 
 	userID := c.Locals("UserID").(string)
 	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
+		return c.Status(fiber.StatusInternalServerError).SendString("no user ID provided")
 	}
 
 	var requestParams struct {
@@ -319,23 +345,24 @@ func GetImageFromID(c *fiber.Ctx) error {
 	log.Println(requestParams)
 
 	if err != nil {
-		return c.Status(http.StatusBadRequest).SendString("could not parse request " + err.Error())
+		return c.Status(fiber.StatusBadRequest).SendString("could not parse request " + err.Error())
 	}
 	if requestParams.ImageSetId == "" {
-		return c.Status(http.StatusBadRequest).SendString("no image set ID provided")
+		return c.Status(fiber.StatusBadRequest).SendString("no image set ID provided")
 	}
 
 	//user is validated in request
 	iset, err := GetFromID(userID, requestParams.ImageSetId)
-	if err != nil || len(iset) == 0 {
-		return c.Status(http.StatusNotFound).SendString("imageSet could not be found" + err.Error())
+	if err != nil {
+		status, msg := imageSetErrorResponse(err)
+		return c.Status(status).SendString(msg)
 	}
 
 	if requestParams.IndexList >= len(iset[0].Image) || requestParams.IndexList < 0 {
 		if len(iset[0].Image) == 0 {
-			return c.Status(fiber.StatusNotFound).SendString("The imageSet does not contain images. If this was recently uploaded wait for it to be processed")
+			return c.Status(fiber.StatusNotFound).SendString("the imageSet does not contain images. If this was recently uploaded wait for it to be processed")
 		}
-		return c.Status(http.StatusBadRequest).SendString("Index out of bounds")
+		return c.Status(fiber.StatusBadRequest).SendString("index out of bounds")
 	}
 
 	var imageLink string
@@ -351,7 +378,7 @@ func GetImageFromID(c *fiber.Ctx) error {
 			retImage, _, _, err = GenerateLowResFromHigh(iset[0].Path, iset[0].Image[requestParams.IndexList].Name, 720, 0)
 
 			if err != nil {
-				return c.Status(500).SendString("failed to create low res image: " + err.Error())
+				return c.Status(fiber.StatusInternalServerError).SendString("failed to create low res image: " + err.Error())
 			}
 			//todo save image
 			go AddLowresToSetAndStorage(iset[0].Path, iset[0].Title, retImage, iset[0], requestParams.IndexList)
@@ -359,14 +386,14 @@ func GetImageFromID(c *fiber.Ctx) error {
 		} else {
 			retImage, retGif, err = RetrieveLocalImage(iset[0].Path, imageLink, true)
 			if err != nil {
-				return fmt.Errorf("could not retrieve low res: %s", err)
+				return fmt.Errorf("could not retrieve low res: %w", err)
 			}
 		}
 
 	} else {
 		retImage, retGif, err = RetrieveLocalImage(iset[0].Path, iset[0].Image[requestParams.IndexList].Name, false)
 		if err != nil {
-			return fmt.Errorf("could not retrieve image: %s", err)
+			return fmt.Errorf("could not retrieve image: %w", err)
 		}
 	}
 
