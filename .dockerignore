@@ -8,7 +8,7 @@ node_modules/
 **/.DS_Store
 **/.classpath
 **/.dockerignore
-**/.env
+**/.env*
 **/.git
 **/.gitignore
 **/.project
@@ -29,6 +29,7 @@ node_modules/
 **/obj
 **/secrets.dev.yaml
 **/values.dev.yaml
+secrets/
 LICENSE
 README.md
 

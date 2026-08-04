@@ -8,8 +8,11 @@ import (
 	zipupload "Kaleidoscopedb/Backend/KaleidoscopeBackend/zip_upload"
 
 	"context"
+	"fmt"
 	"log"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -32,18 +35,34 @@ const servicesDbName = "services"
 const LowResPathAppend = "low/"
 const MaxFileSize = 5 * 1024 * 1024 * 1024
 
+// readSecret reads a Docker/Compose file secret mounted at /run/secrets/<name>,
+// trimming surrounding whitespace so a trailing newline from the secret file
+// doesn't silently become part of the value.
+func readSecret(name string) (string, error) {
+	data, err := os.ReadFile("/run/secrets/" + name)
+	if err != nil {
+		return "", fmt.Errorf("reading secret %q: %w", name, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
 func main() {
 	imageset.BackendVolumeLocation = os.Getenv("BACKEND_VOLUME_LOCATION")
-	SecretKey := os.Getenv("JWT_SECRET")
 
+	SecretKey, err := readSecret("jwt_secret")
+	if err != nil {
+		log.Fatal(err)
+	}
 	if minSecretKeySize > len(SecretKey) {
 		log.Fatalf("Secret Key Must be at least %d character is length", minSecretKeySize)
 	}
 
 	authutil.JWTSecret = []byte(SecretKey)
 
-	PasswordPepper := os.Getenv("PASSWORD_PEPPER")
-
+	PasswordPepper, err := readSecret("password_pepper")
+	if err != nil {
+		log.Fatal(err)
+	}
 	if minSecretKeySize > len(PasswordPepper) {
 		log.Fatalf("Password Pepper Must be at least %d character is length", minSecretKeySize)
 	}
@@ -61,14 +80,24 @@ func ConnectDB() {
 	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	//get server URL for connection
-	mongoURI := os.Getenv("MONGO_URI")
-	if mongoURI == "" {
-		log.Fatal("MONGO_URI not set")
+	//build the connection URI from the mongo user/password secret files
+	mongoUser, err := readSecret("mongo_user")
+	if err != nil {
+		log.Fatal(err)
+	}
+	mongoPassword, err := readSecret("mongo_password")
+	if err != nil {
+		log.Fatal(err)
 	}
 
+	mongoURI := (&url.URL{
+		Scheme: "mongodb",
+		User:   url.UserPassword(mongoUser, mongoPassword),
+		Host:   "db:27017",
+	}).String()
+
 	//Connect to the mongoDB and catch errors
-	client, err := mongo.Connect(options.Client().ApplyURI(mongoURI))
+	client, err = mongo.Connect(options.Client().ApplyURI(mongoURI))
 	if err != nil {
 		log.Fatal(err)
 	}
