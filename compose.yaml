@@ -64,13 +64,13 @@ volumes:
 
 secrets:
   mongo_user:
-    file: ./secrets/mongo_user.txt
+    environment: MONGO_USER
   mongo_password:
-    file: ./secrets/mongo_password.txt
+    environment: MONGO_PASSWORD
   jwt_secret:
-    file: ./secrets/jwt_secret.txt
+    environment: JWT_SECRET
   password_pepper:
-    file: ./secrets/password_pepper.txt
+    environment: PASSWORD_PEPPER
 
 
 
