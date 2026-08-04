@@ -22,6 +22,7 @@ services:
       SERVERPORT: ${SERVERPORT}
       BACKEND_VOLUME_LOCATION: ${BACKEND_VOLUME_LOCATION}
       JWT_SECRET: ${JWT_SECRET}
+      PASSWORD_PEPPER: ${PASSWORD_PEPPER}
     volumes:
       - Image_data:${BACKEND_VOLUME_LOCATION}
     depends_on:

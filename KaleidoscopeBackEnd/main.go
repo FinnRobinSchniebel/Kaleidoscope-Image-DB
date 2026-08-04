@@ -42,6 +42,14 @@ func main() {
 
 	authutil.JWTSecret = []byte(SecretKey)
 
+	PasswordPepper := os.Getenv("PASSWORD_PEPPER")
+
+	if minSecretKeySize > len(PasswordPepper) {
+		log.Fatalf("Password Pepper Must be at least %d character is length", minSecretKeySize)
+	}
+
+	authutil.PasswordPepper = []byte(PasswordPepper)
+
 	ConnectDB()
 	defer client.Disconnect(context.Background())
 	StartServices()

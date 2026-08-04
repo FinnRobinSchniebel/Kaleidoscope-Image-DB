@@ -1,6 +1,9 @@
 package authutil
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -13,15 +16,23 @@ type User struct {
 	IsAdmin        bool          `json:"is_admin" bson:"is_admin" form:"is_admin"`
 }
 
+// PasswordPepper is a server-side secret mixed into passwords before hashing, kept outside
+// the database so a leaked user collection alone isn't enough to brute-force passwords.
+var PasswordPepper []byte
+
+func pepperedPassword(password string) []byte {
+	mac := hmac.New(sha256.New, PasswordPepper)
+	mac.Write([]byte(password))
+	return mac.Sum(nil) // fixed 32 bytes, always well under bcrypt's 72-byte input cap
+}
+
 func HashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 10)
+	bytes, err := bcrypt.GenerateFromPassword(pepperedPassword(password), 10)
 	if err != nil {
 		return "", err
 	}
-	return string(bytes), err
+	return string(bytes), nil
 }
 func ComparePassword(password, hash string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	return err == nil
-
+	return bcrypt.CompareHashAndPassword([]byte(hash), pepperedPassword(password)) == nil
 }
