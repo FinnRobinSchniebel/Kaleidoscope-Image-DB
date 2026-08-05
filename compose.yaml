@@ -8,37 +8,71 @@
 # database or a cache. For examples, see the Awesome Compose repository:
 # https://github.com/docker/awesome-compose
 services:
+  # One-shot service that generates the mongo/jwt/pepper secrets into the
+  # secrets_data volume on first run (or leaves them alone if already
+  # present). This lets the stack come up with zero pre-existing .env or
+  # secrets on disk -- e.g. from Docker Desktop's Compose view.
+  init-secrets:
+    image: alpine:3.20
+    entrypoint: ["sh", "/init-secrets.sh"]
+    volumes:
+      - ./init-secrets.sh:/init-secrets.sh:ro
+      - secrets_data:/secrets
+
   backend:
     build:
       context: ./
       dockerfile: ./KaleidoscopeBackend/Dockerfile.backend
       target: final
       args:
-        BACKEND_VOLUME_LOCATION: ${BACKEND_VOLUME_LOCATION}
+        BACKEND_VOLUME_LOCATION: ${BACKEND_VOLUME_LOCATION:-/app/data}
     ports:
-      - ${SERVERPORT}:${SERVERPORT}
+      - "${SERVERPORT:-5000}:${SERVERPORT:-5000}"
     environment:
-      SERVERPORT: ${SERVERPORT}
-      BACKEND_VOLUME_LOCATION: ${BACKEND_VOLUME_LOCATION}
-    secrets:
-      - mongo_user
-      - mongo_password
-      - jwt_secret
-      - password_pepper
+      SERVERPORT: ${SERVERPORT:-5000}
+      BACKEND_VOLUME_LOCATION: ${BACKEND_VOLUME_LOCATION:-/app/data}
     volumes:
-      - Image_data:${BACKEND_VOLUME_LOCATION}
+      - Image_data:${BACKEND_VOLUME_LOCATION:-/app/data}
+      # Mounted per-file (not the whole secrets_data volume) so this service only ever sees the exact secrets it needs 
+      - type: volume
+        source: secrets_data
+        target: /run/secrets/mongo_user
+        volume:
+          subpath: mongo_user
+        read_only: true
+      - type: volume
+        source: secrets_data
+        target: /run/secrets/mongo_password
+        volume:
+          subpath: mongo_password
+        read_only: true
+      - type: volume
+        source: secrets_data
+        target: /run/secrets/jwt_secret
+        volume:
+          subpath: jwt_secret
+        read_only: true
+      - type: volume
+        source: secrets_data
+        target: /run/secrets/password_pepper
+        volume:
+          subpath: password_pepper
+        read_only: true
     depends_on:
-      - db
+      init-secrets:
+        condition: service_completed_successfully
+      db:
+        condition: service_started
+
   frontend:
     build:
       context: ./KaleidoscopeFrontend/
       dockerfile: ./Dockerfile.frontend
       target: final
     environment:
-      BACKEND_URL: ${BACKEND_URL}
-    ports: 
+      BACKEND_URL: ${BACKEND_URL:-http://backend:5000}
+    ports:
       - 3001:3000
-    
     depends_on:
       - backend
     #stdin_open:true
@@ -51,26 +85,34 @@ services:
       MONGO_INITDB_ROOT_USERNAME_FILE: /run/secrets/mongo_user
       MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_password
       MONGO_INITDB_DATABASE: KaleidoDB
-    secrets:
-      - mongo_user
-      - mongo_password
-    ports:
-      - 27017:27017
     volumes:
       - mongo_data:/data/db
+      # db only gets the two secrets it actually uses
+      - type: volume
+        source: secrets_data
+        target: /run/secrets/mongo_user
+        volume:
+          subpath: mongo_user
+        read_only: true
+      - type: volume
+        source: secrets_data
+        target: /run/secrets/mongo_password
+        volume:
+          subpath: mongo_password
+        read_only: true
+    ports:
+      - 27017:27017
+    depends_on:
+      init-secrets:
+        condition: service_completed_successfully
+
+# mongo_data and secrets_data are coupled: Mongo's root credentials are only
+# applied from MONGO_INITDB_ROOT_* on first init and then persisted inside
+# mongo_data. If secrets_data is ever pruned/regenerated without also
+# resetting mongo_data (or vice versa), the backend/db will fail to
+# authenticate. Wipe them together, or pre-seed secrets_data to match
+# existing mongo_data before starting.
 volumes:
   mongo_data:
   Image_data:
-
-secrets:
-  mongo_user:
-    environment: MONGO_USER
-  mongo_password:
-    environment: MONGO_PASSWORD
-  jwt_secret:
-    environment: JWT_SECRET
-  password_pepper:
-    environment: PASSWORD_PEPPER
-
-
-
+  secrets_data:
