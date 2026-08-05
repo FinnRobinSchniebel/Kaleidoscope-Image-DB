@@ -69,6 +69,12 @@ func main() {
 
 	authutil.PasswordPepper = []byte(PasswordPepper)
 
+	if err := authutil.SetCookieSecurityMode(os.Getenv("COOKIE_SECURITY_MODE")); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Cookie security mode: Secure=%t SameSite=%s (set COOKIE_SECURITY_MODE=%s if a TLS-terminating proxy sits in front of this app, or =%s if the frontend is on a different domain)",
+		authutil.CookieSecure, authutil.CookieSameSite, authutil.CookieModeSecure, authutil.CookieModeCrossSite)
+
 	ConnectDB()
 	defer client.Disconnect(context.Background())
 	StartServices()

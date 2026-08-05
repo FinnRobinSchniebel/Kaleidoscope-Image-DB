@@ -31,6 +31,10 @@ services:
     environment:
       SERVERPORT: ${SERVERPORT:-5000}
       BACKEND_VOLUME_LOCATION: ${BACKEND_VOLUME_LOCATION:-/app/data}
+      # insecure (default): no TLS, frontend/backend on the same domain.
+      # secure: TLS in front of both (e.g. a reverse proxy), same domain.
+      # cross-site: frontend/backend on different domains, both over HTTPS.
+      COOKIE_SECURITY_MODE: ${COOKIE_SECURITY_MODE:-insecure}
     volumes:
       - Image_data:${BACKEND_VOLUME_LOCATION:-/app/data}
       # Mounted per-file (not the whole secrets_data volume) so this service only ever sees the exact secrets it needs 

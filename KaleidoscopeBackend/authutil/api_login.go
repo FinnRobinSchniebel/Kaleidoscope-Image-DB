@@ -10,8 +10,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-const CookieSecureOnly = false
-
 func RegisterUser(c *fiber.Ctx) error {
 
 	username := c.FormValue("username")
@@ -96,7 +94,8 @@ func LoginUser(c *fiber.Ctx) error {
 		Value:    RefreshToken,
 		Expires:  time.Now().Add(48 * time.Hour),
 		Path:     "/api/session",
-		Secure:   CookieSecureOnly,
+		Secure:   CookieSecure,
+		SameSite: CookieSameSite,
 		HTTPOnly: true,
 	})
 
@@ -137,7 +136,7 @@ func LogoutUser(c *fiber.Ctx) error {
 		return err
 	}
 
-	c.Cookie(&fiber.Cookie{Name: "refresh_token", Value: "", Path: "/api/session", MaxAge: -1, HTTPOnly: true, Secure: CookieSecureOnly})
+	c.Cookie(&fiber.Cookie{Name: "refresh_token", Value: "", Path: "/api/session", MaxAge: -1, HTTPOnly: true, Secure: CookieSecure, SameSite: CookieSameSite})
 	c.ClearCookie("session_token")
 
 	res := fiber.Map{
