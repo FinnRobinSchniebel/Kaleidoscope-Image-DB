@@ -1,0 +1,4 @@
+{$DOMAIN} {
+	reverse_proxy /api/* backend:{$SERVERPORT}
+	reverse_proxy {$FRONTEND_UPSTREAM}
+}

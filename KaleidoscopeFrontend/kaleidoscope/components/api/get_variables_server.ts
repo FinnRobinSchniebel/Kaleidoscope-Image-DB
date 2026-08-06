@@ -12,7 +12,7 @@ export async function getServerAPI(endpoint : string) {
   var env = process.env.BACKEND_URL
   if (env != undefined){
     console.log(env)
-    return 'http://'+  env + API_BASE + endpoint
+    return env + API_BASE + endpoint
   }
   else{
     console.error("Backend URL:no config value provided: using default")

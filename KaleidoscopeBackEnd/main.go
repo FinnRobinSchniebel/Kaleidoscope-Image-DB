@@ -144,7 +144,7 @@ func StartAPI() {
 
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     "http://localhost:3000",
-		AllowHeaders:     "Origin, Content-Type, Accept, session_token",
+		AllowHeaders:     "Origin, Content-Type, Accept, Session-Token",
 		AllowCredentials: true,
 	}))
 

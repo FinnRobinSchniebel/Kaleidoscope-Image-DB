@@ -86,7 +86,8 @@ func VerifyToken(tokenString string) (*JWTClaims, error) {
 
 }
 func GetSessionTokenFromApiHelper(c *fiber.Ctx) (string, error) {
-	sessionToken := c.Get("session_token", "")
+	//NOTE: for future reference I learned that the reverse proxy will eat any header with an "_" in it. ONLY USE "-" for separation
+	sessionToken := c.Get("Session-Token", "")
 
 	if sessionToken == "" || sessionToken == "Bearer " || !strings.HasPrefix(sessionToken, "Bearer ") {
 		log.Printf("recieved invalid session token: %s", sessionToken)

@@ -1,0 +1,52 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      # Hostname Caddy serves and gets a TLS cert for. "localhost" (the
+      # default) gets Caddy's own internally-signed cert automatically; set
+      # DOMAIN to a real, publicly-resolvable hostname to get a real
+      # Let's Encrypt cert instead -- either way this is fully automatic,
+      # no manual cert handling required.
+      DOMAIN: ${DOMAIN:-localhost}
+      SERVERPORT: ${SERVERPORT:-5000}
+      # Upstream for non-/api/* traffic. Defaults to the frontend container.
+      # For local frontend dev (npm run dev on the host instead of the
+      # frontend container), set FRONTEND_UPSTREAM=host.docker.internal:3000
+      # in .env so the app is still reached through Caddy on a single
+      # origin -- required for the backend's refresh_token cookie to be
+      # sent back on API requests.
+      FRONTEND_UPSTREAM: ${FRONTEND_UPSTREAM:-frontend:3000}
+    extra_hosts:
+      # Lets FRONTEND_UPSTREAM=host.docker.internal:... resolve on Linux too
+      # (Docker Desktop on Windows/Mac already provides this).
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
+
+  backend:
+    environment:
+      # Caddy always terminates TLS in front of the backend in this
+      # topology, so cookies can safely require it by default. Override in
+      # .env if you have a specific reason to keep it at "insecure" here.
+      COOKIE_SECURITY_MODE: ${COOKIE_SECURITY_MODE:-secure}
+
+  frontend:
+    environment:
+      # Browser-facing address for API calls (see apicaller.tsx / getServerAPI
+      # -- these run client-side, not server-to-server, so this must be
+      # reachable from the user's browser, not just the Docker network).
+      # Derived from DOMAIN rather than independently overridable, so the
+      # cert Caddy presents and the URL the browser calls always agree.
+      BACKEND_URL: https://${DOMAIN:-localhost}
+
+volumes:
+  caddy_data:
+  caddy_config:

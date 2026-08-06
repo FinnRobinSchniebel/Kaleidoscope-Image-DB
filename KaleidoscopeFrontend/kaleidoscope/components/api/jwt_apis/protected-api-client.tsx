@@ -107,8 +107,11 @@ export class protectedAPI {
       this.onUnauthorized()
       return ReadyResult;
     }
+
+    //NOTE: for future reference I learned that the reverse proxy will eat any header with an "_" in it. ONLY USE "-" for separation  
+
     //pre-check complete: do api call
-    request.header = { ...request.header, ...{ "session_token": "Bearer " + protectedAPI.token } };
+    request.header = { ...request.header, ...{ "Session-Token": "Bearer " + protectedAPI.token } };
 
     if (verbos) console.log("making api request")
 

@@ -5,6 +5,33 @@ When you're ready, start your application by running:
 
 Your application will be available at http://localhost:3000.
 
+### Reverse proxy
+
+`docker compose up` bundles a Caddy reverse proxy by default (via the
+auto-loaded `compose.override.yaml`), listening on `:80`/`:443` and routing
+`/api/*` to the backend and everything else to the frontend, so both are
+served from a single origin.
+
+If you already run your own reverse proxy in front of this stack, opt out of
+the bundled one instead:
+
+```
+docker compose -f compose.yaml -f compose.external-proxy.yaml up
+```
+
+This drops the `caddy` service, removes the `backend`/`frontend` port
+publishing, and attaches both to an externally-created `proxy_net` network
+(create it first with `docker network create proxy_net`) for your own proxy
+to join.
+
+**Frontend dev outside Docker:** if you run the frontend with `npm run dev`
+on the host instead of the `frontend` container, point Caddy at it by
+setting `FRONTEND_UPSTREAM=host.docker.internal:3000` in `.env` before
+starting compose, and access the app through Caddy (`http://localhost/`)
+rather than hitting the dev server's port directly. This keeps frontend and
+backend on the same origin so the `refresh_token` cookie (SameSite=Lax under
+the default `COOKIE_SECURITY_MODE=insecure`) is sent back on API requests.
+
 ### Cookie security mode
 
 The backend's `refresh_token` cookie is controlled by the `COOKIE_SECURITY_MODE`

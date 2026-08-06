@@ -1,0 +1,15 @@
+services:
+  backend:
+    ports: !reset []
+    networks:
+      - default
+      - proxy_net
+  frontend:
+    ports: !reset []
+    networks:
+      - default
+      - proxy_net
+
+networks:
+  proxy_net:
+    external: true
