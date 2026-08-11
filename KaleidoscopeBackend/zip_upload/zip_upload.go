@@ -153,6 +153,7 @@ func createImageSetsFromParsedZipData(BaseFolderPath string, parsedDataMap map[s
 		//for each Item in the imageSet check its contents for info and text file discription
 		var newISet imageset.ImageSetMongo
 		var Paths []string
+		var description string //accumulated across any .txt files in the group
 
 		for dataIndex := range parsedDataMap[groupingKey] {
 
@@ -162,10 +163,10 @@ func createImageSetsFromParsedZipData(BaseFolderPath string, parsedDataMap map[s
 				if err != nil {
 					errorList = append(errorList, "Could Not read: "+parsedDataMap[groupingKey][dataIndex].Path+" error: "+err.Error())
 				} else {
-					if newISet.Description == "" {
-						newISet.Description = disc
+					if description == "" {
+						description = disc
 					} else {
-						newISet.Description = newISet.Description + "\n\n" + disc
+						description = description + "\n\n" + disc
 					}
 				}
 				continue
@@ -219,6 +220,9 @@ func createImageSetsFromParsedZipData(BaseFolderPath string, parsedDataMap map[s
 				newISet.Sources = append(newISet.Sources, newSource)
 			}
 		}
+
+		imageset.SetImportDescription(&newISet, description)
+
 		Combined := ImageSetFileBundle{Iset: newISet, FilePath: Paths}
 		result = append(result, Combined)
 	}

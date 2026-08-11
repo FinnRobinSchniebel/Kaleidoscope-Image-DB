@@ -33,7 +33,7 @@ func SaveImageSets(basePath string, cleanupPath string, fileIsetData []ImageSetF
 			MedSour[i] = imageset.DiskSource{Path: fullPath}
 		}
 
-		imageset.PrintISet(fileIsetData[setIndex].Iset)
+		imageset.PrintISet(&fileIsetData[setIndex].Iset)
 		log.Print(fileIsetData[setIndex].FilePath)
 
 		hits, iSetDbId, err := imageset.AddImageSet(&fileIsetData[setIndex].Iset, MedSour, user)

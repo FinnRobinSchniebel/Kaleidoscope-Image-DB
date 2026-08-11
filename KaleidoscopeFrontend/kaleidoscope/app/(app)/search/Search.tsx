@@ -8,7 +8,7 @@ import { ReadonlyURLSearchParams, useRouter, useSearchParams } from "next/naviga
 import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { usePathname } from "next/navigation";
 import Cookies from 'js-cookie';
-import { SearchRequest, SetData } from "@/components/api/jwt_apis/search-api";
+import { SearchRequest, SetData } from "@/components/api/search-api";
 import LoadSearchResults from "./LoadSearchResults";
 import { ProtectedProvider } from "@/components/api/jwt_apis/ProtectedProvider";
 import AlertPopup from "@/components/KscopeSharedUI/ImageSet/AlertPopup";

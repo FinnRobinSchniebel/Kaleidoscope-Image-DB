@@ -372,20 +372,21 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string) *imageset.Imag
 		attributed[i] = i
 	}
 
+	var caption string
+	if illust.Caption != nil {
+		caption = *illust.Caption
+	}
+
 	src := imageset.SourceInfo{
 		Name:         pixivServiceName,
 		SourceID:     strconv.FormatUint(illust.ID, 10),
 		Title:        illust.Title,
+		Description:  caption,
 		SourceAuthor: illust.User.Name,
 		AuthorID:     strconv.FormatUint(illust.User.ID, 10),
 		Tags:         tags,
 		Date:         illust.CreateDate,
 		AttributedTo: attributed,
-	}
-
-	var caption string
-	if illust.Caption != nil {
-		caption = *illust.Caption
 	}
 
 	return &imageset.ImageSetMongo{

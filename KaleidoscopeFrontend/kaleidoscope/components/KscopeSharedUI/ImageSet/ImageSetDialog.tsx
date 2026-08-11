@@ -3,7 +3,7 @@ import ImageSetViewer from "./ImageSetViewer";
 import { DialogContent, DialogDescription, DialogHeader } from "@/components/ui/dialog";
 import { DialogTitle } from "@radix-ui/react-dialog";
 import VerticalImageSetCarousel from "./VerticalSetCarousel";
-import { SetData } from "@/components/api/jwt_apis/search-api";
+import { SetData } from "@/components/api/search-api";
 import AlertPopup from "./AlertPopup";
 
 

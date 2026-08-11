@@ -1,5 +1,5 @@
-import { GORequest } from "../apicaller"
-import { protectedAPI } from "./protected-api-client"
+import { GORequest } from "./apicaller"
+import { protectedAPI } from "./jwt_apis/protected-api-client"
 
 
 

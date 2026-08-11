@@ -11,7 +11,7 @@ import { Dialog } from '@/components/ui/dialog';
 
 import ImageSetDialog from '@/components/KscopeSharedUI/ImageSet/ImageSetDialog';
 import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider';
-import { SetData } from '@/components/api/jwt_apis/search-api';
+import { SetData } from '@/components/api/search-api';
 import ImageCard from './ImageCards';
 import { useImageSetsProvider } from '@/components/KscopeSharedUI/ImageSet/ImageSetProvider';
 

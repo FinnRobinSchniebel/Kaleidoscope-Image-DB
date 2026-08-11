@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button'
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
-import { searchAPI, SearchRequest, SetData } from '@/components/api/jwt_apis/search-api'
+import { searchAPI, SearchRequest, SetData } from '@/components/api/search-api'
 import { protectedAPI } from '@/components/api/jwt_apis/protected-api-client'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'

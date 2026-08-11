@@ -1,6 +1,6 @@
 import { GORequest } from "./apicaller"
 import { protectedAPI } from "./jwt_apis/protected-api-client"
-import { SetData } from "./jwt_apis/search-api"
+import { SetData } from "./search-api"
 
 
 

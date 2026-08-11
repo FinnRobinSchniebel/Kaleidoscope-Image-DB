@@ -5,7 +5,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import ImageCard, { LoadingImageCard } from "../../app/(app)/search/ImageCards"
 import { Fragment, Suspense, useEffect } from "react";
 import { Separator } from "@radix-ui/react-separator";
-import { searchAPI, SearchRequest, SetData } from "@/components/api/jwt_apis/search-api";
+import { searchAPI, SearchRequest, SetData } from "@/components/api/search-api";
 import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
 import { useInView } from 'react-intersection-observer';
 import { Tags } from 'lucide-react';

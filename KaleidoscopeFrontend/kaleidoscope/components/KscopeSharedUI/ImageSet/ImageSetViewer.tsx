@@ -1,6 +1,6 @@
 import GetImageSetData, { FullImageSetData } from "@/components/api/getImageSetData-api";
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider";
-import { SetData } from "@/components/api/jwt_apis/search-api";
+import { SetData } from "@/components/api/search-api";
 import { Carousel, CarouselApi, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
 import { JSX, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import ImageSetCarouselImage from "./ImageSetCarouselImage";

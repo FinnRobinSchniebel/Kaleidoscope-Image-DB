@@ -1,6 +1,6 @@
 import ImageSetViewer from "./ImageSetViewer";
 
-import { SetData } from "@/components/api/jwt_apis/search-api";
+import { SetData } from "@/components/api/search-api";
 import { createContext, PointerEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Swiper, SwiperClass, SwiperSlide } from 'swiper/react'
 

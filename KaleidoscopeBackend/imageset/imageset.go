@@ -13,6 +13,7 @@ type SourceInfo struct {
 	Name         string    `json:"name" bson:"name" form:"name"`
 	ID           string    `json:"id" bson:"id" form:"id"`                                  // ID of source itself (created by DB)
 	Title        string    `json:"title" bson:"title" form:"title"`                         // Title of work at source
+	Description  string    `json:"description" bson:"description" form:"description"`       //imported description, preserved even if the set's Description is edited
 	SourceAuthor string    `json:"source_author" bson:"source_author" form:"source_author"` //the authors name at this source
 	AttributedTo []int     `json:"attributed_to" bson:"attributed_to" form:"attributed_to"` //index of images in set that this source belongs to
 	SourceID     string    `json:"source_id" bson:"source_id" form:"source_id"`             // id of art WORK at the source
@@ -59,6 +60,41 @@ func CleanImagSetForFrontEnd(iSet ...ImageSetMongo) []ImageSetMongo {
 	return iSet
 }
 
+// SetImportDescription mirrors description onto the set and onto every
+// current entry in Sources. Use for a set's first import, before it has an
+// existing Description to preserve.
+func SetImportDescription(a *ImageSetMongo, description string) {
+	if description == "" {
+		return
+	}
+	a.Description = description
+	for i := range a.Sources {
+		a.Sources[i].Description = description
+	}
+}
+
+// AppendSource adds source to a set that already has at least one source,
+// appending description to the set's Description after a blank-line gap
+// rather than overwriting it.
+func AppendSource(a *ImageSetMongo, source SourceInfo, description string) {
+	source.Description = description
+	a.Sources = append(a.Sources, source)
+	if description == "" {
+		return
+	}
+	if a.Description == "" {
+		a.Description = description
+	} else {
+		a.Description = a.Description + "\n\n" + description
+	}
+}
+
+// UpdateSourceDescription updates only Sources[i].Description, leaving the
+// set's own Description untouched.
+func UpdateSourceDescription(a *ImageSetMongo, i int, description string) {
+	a.Sources[i].Description = description
+}
+
 // only checks if the base info is the same. It does not check attribution and tags
 func SourceInfoEqual(a, b SourceInfo) bool {
 	if a.Name != b.Name ||
@@ -73,8 +109,8 @@ func SourceInfoEqual(a, b SourceInfo) bool {
 	return true
 }
 
-func PrintISet(a ImageSetMongo) {
-	log.Printf("%s", ImageSetToString(a))
+func PrintISet(a *ImageSetMongo) {
+	log.Printf("%s", ImageSetToString(*a))
 }
 
 func ImageSetToString(a ImageSetMongo) string {
@@ -138,6 +174,7 @@ func SourcesToString(a SourceInfo) string {
 	sb.WriteString(fmt.Sprintf("Source Name: %s\n", a.Name))
 	sb.WriteString(fmt.Sprintf("Source DB ID: %s\n", a.ID))
 	sb.WriteString(fmt.Sprintf("Title At Source: %s\n", a.Title))
+	sb.WriteString(fmt.Sprintf("Description: %s\n", a.Description))
 	sb.WriteString(fmt.Sprintf("Source Author: %s\n", a.SourceAuthor))
 	sb.WriteString(fmt.Sprintf("SourceID: %s\n", a.SourceID))
 	sb.WriteString(fmt.Sprintf("AuthorID: %s\n", a.AuthorID))
