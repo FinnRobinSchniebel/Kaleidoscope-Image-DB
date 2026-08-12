@@ -115,7 +115,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	//derive main tag list suggestions from each source's own tags, merging into
 	//whatever tags were already set without duplicating any
 	for _, src := range imageSet.Sources {
-		for _, t := range tagging.AutoTag(userId, src.Name, src.Tags) {
+		for _, t := range tagging.AutoTag(userId, src.Name, SourceTagNames(src.Tags)) {
 			if !slices.Contains(imageSet.Tags, t) {
 				imageSet.Tags = append(imageSet.Tags, t)
 			}

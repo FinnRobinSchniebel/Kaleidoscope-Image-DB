@@ -9,21 +9,45 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// SourceTag holds a single tag as imported from a source.
+type SourceTag struct {
+	Name string `json:"name" bson:"name" form:"name"`               //effective tag: the source's translation if it has one, else the untranslated tag
+	JP   string `json:"jp,omitempty" bson:"jp,omitempty" form:"jp"` //untranslated Japanese tag; only set when Name is a translation of it
+}
+
+// canonical is the tag's translation-independent identity, used to detect
+// whether two SourceTags refer to the same underlying tag.
+func (t SourceTag) canonical() string {
+	if t.JP != "" {
+		return t.JP
+	}
+	return t.Name
+}
+
+// SourceTagNames returns each tag's effective Name.
+func SourceTagNames(tags []SourceTag) []string {
+	names := make([]string, len(tags))
+	for i, t := range tags {
+		names[i] = t.Name
+	}
+	return names
+}
+
 type SourceInfo struct {
-	Name               string    `json:"name" bson:"name" form:"name"`
-	ID                 string    `json:"id" bson:"id" form:"id"`                                                       // ID of source itself (created by DB)
-	Title              string    `json:"title" bson:"title" form:"title"`                                              // Title of work at source
-	Description        string    `json:"description" bson:"description" form:"description"`                            //imported description, preserved even if the set's Description is edited
-	SourceAuthor       string    `json:"source_author" bson:"source_author" form:"source_author"`                      //the authors name at this source
-	AttributedTo       []int     `json:"attributed_to" bson:"attributed_to" form:"attributed_to"`                      //index of images in set that this source belongs to
-	SourceID           string    `json:"source_id" bson:"source_id" form:"source_id"`                                  // id of art WORK at the source
-	AuthorID           string    `json:"author_id" bson:"author_id" form:"author_id"`                                  //id the author user was assigned
-	Tags               []string  `json:"tags" bson:"tags" form:"tags"`                                                 //tags provided at the source
-	Date               time.Time `json:"date" bson:"date" form:"date"`                                                 //date reported by source; on Pixiv tracks last edit, not original post
-	LastChecked        time.Time `json:"last_checked" bson:"last_checked" form:"last_checked"`                         //last time this source was polled for changes
-	LastImageUpdate    time.Time `json:"last_image_update" bson:"last_image_update" form:"last_image_update"`          //Date value as of the last image hash check
-	PendingImageChange bool      `json:"pending_image_change" bson:"pending_image_change" form:"pending_image_change"` //true once a hash check finds an unresolved image difference
-	SourceMissing      bool      `json:"source_missing" bson:"source_missing" form:"source_missing"`                   //true when the source could not be fetched; existing data is left untouched
+	Name               string      `json:"name" bson:"name" form:"name"`
+	ID                 string      `json:"id" bson:"id" form:"id"`                                                       // ID of source itself (created by DB)
+	Title              string      `json:"title" bson:"title" form:"title"`                                              // Title of work at source
+	Description        string      `json:"description" bson:"description" form:"description"`                            //imported description, preserved even if the set's Description is edited
+	SourceAuthor       string      `json:"source_author" bson:"source_author" form:"source_author"`                      //the authors name at this source
+	AttributedTo       []int       `json:"attributed_to" bson:"attributed_to" form:"attributed_to"`                      //index of images in set that this source belongs to
+	SourceID           string      `json:"source_id" bson:"source_id" form:"source_id"`                                  // id of art WORK at the source
+	AuthorID           string      `json:"author_id" bson:"author_id" form:"author_id"`                                  //id the author user was assigned
+	Tags               []SourceTag `json:"tags" bson:"tags" form:"tags"`                                                 //tags provided at the source
+	Date               time.Time   `json:"date" bson:"date" form:"date"`                                                 //date reported by source; on Pixiv tracks last edit, not original post
+	LastChecked        time.Time   `json:"last_checked" bson:"last_checked" form:"last_checked"`                         //last time this source was polled for changes
+	LastImageUpdate    time.Time   `json:"last_image_update" bson:"last_image_update" form:"last_image_update"`          //Date value as of the last image hash check
+	PendingImageChange bool        `json:"pending_image_change" bson:"pending_image_change" form:"pending_image_change"` //true once a hash check finds an unresolved image difference
+	SourceMissing      bool        `json:"source_missing" bson:"source_missing" form:"source_missing"`                   //true when the source could not be fetched; existing data is left untouched
 }
 
 // info regarding the images location on the DB and current state
@@ -186,7 +210,11 @@ func SourcesToString(a SourceInfo) string {
 
 	sb.WriteString("Tags:\n")
 	for _, tag := range a.Tags {
-		sb.WriteString(fmt.Sprintf("   - %s\n", tag))
+		if tag.JP != "" {
+			sb.WriteString(fmt.Sprintf("   - %s (%s)\n", tag.Name, tag.JP))
+		} else {
+			sb.WriteString(fmt.Sprintf("   - %s\n", tag.Name))
+		}
 	}
 
 	sb.WriteString("AttributedTo (image indexes):\n")

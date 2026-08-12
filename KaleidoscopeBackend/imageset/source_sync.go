@@ -32,7 +32,7 @@ func ApplySourceMetadataUpdate(a *ImageSetMongo, i int, newSrc SourceInfo, check
 
 	if added := newTags(old.Tags, newSrc.Tags); len(added) > 0 {
 		a.Sources[i].Tags = append(a.Sources[i].Tags, added...)
-		for _, t := range tagging.AutoTag(userId, newSrc.Name, added) {
+		for _, t := range tagging.AutoTag(userId, newSrc.Name, SourceTagNames(added)) {
 			if !slices.Contains(a.Tags, t) {
 				a.Tags = append(a.Tags, t)
 			}
@@ -48,15 +48,15 @@ func ApplySourceMetadataUpdate(a *ImageSetMongo, i int, newSrc SourceInfo, check
 	return SaveImageSet(a)
 }
 
-// newTags returns entries in fetched that are not present in stored.
-func newTags(stored, fetched []string) []string {
+// newTags returns entries in fetched whose canonical tag isn't present in stored.
+func newTags(stored, fetched []SourceTag) []SourceTag {
 	existing := make(map[string]struct{}, len(stored))
 	for _, t := range stored {
-		existing[t] = struct{}{}
+		existing[t.canonical()] = struct{}{}
 	}
-	added := make([]string, 0)
+	added := make([]SourceTag, 0)
 	for _, t := range fetched {
-		if _, ok := existing[t]; !ok {
+		if _, ok := existing[t.canonical()]; !ok {
 			added = append(added, t)
 		}
 	}
