@@ -313,59 +313,53 @@ func SearchDBForImages(params SearchParams) (bson.M, error) {
 	return results, nil
 }
 
-// GetISetSourceInfoBySourceIDs returns the sourceInfos of all saved imageSets that have a source named "sourceName" and match a sourceID attained from that source.
-// They are returned in a map keys by their sourceID
-// Only contains items owned by the given user
-func GetISetSourceInfoBySourceIDs(userId string, sourceName string, sourceIDs []string) (map[string]SourceInfo, error) {
+// GetImageSetsBySourceIDs returns the full imageSet document for every saved set
+// that has a source named sourceName whose SourceID is one of sourceIDs, keyed by
+// that SourceID. Full documents (not just the matching SourceInfo) are returned
+// because callers may need to update the set in place. Only contains items owned
+// by the given user.
+func GetImageSetsBySourceIDs(userId string, sourceName string, sourceIDs []string) (map[string]*ImageSetMongo, error) {
 	ctx := context.Background()
 
-	matchCond := bson.M{
-		"name":      sourceName,
-		"source_id": bson.M{"$in": sourceIDs},
+	filter := bson.M{
+		"kscope_userid": userId,
+		"sources": bson.M{"$elemMatch": bson.M{
+			"name":      sourceName,
+			"source_id": bson.M{"$in": sourceIDs},
+		}},
 	}
 
-	pipeline := mongo.Pipeline{
-		// select only documents owned by the user that have at least one matching source
-		{{Key: "$match", Value: bson.M{
-			"kscope_userid": userId,
-			"sources":       bson.M{"$elemMatch": matchCond},
-		}}},
-		// keep only the sources within each document that actually match, so the result never contains a name or ID the caller didn't ask for
-		{{Key: "$project", Value: bson.M{
-			"_id": 0,
-			"sources": bson.M{"$filter": bson.M{
-				"input": "$sources",
-				"as":    "src",
-				"cond": bson.M{"$and": bson.A{
-					bson.M{"$eq": bson.A{"$$src.name", sourceName}},
-					bson.M{"$in": bson.A{"$$src.source_id", sourceIDs}},
-				}},
-			}},
-		}}},
-	}
-
-	cursor, err := Collection.Aggregate(ctx, pipeline)
+	cursor, err := Collection.Find(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
-
 	defer cursor.Close(ctx)
 
-	type partialDoc struct {
-		Sources []SourceInfo `bson:"sources"`
+	var docs []ImageSetMongo
+	if err := cursor.All(ctx, &docs); err != nil {
+		return nil, err
 	}
 
-	result := make(map[string]SourceInfo)
-	for cursor.Next(ctx) {
-		var doc partialDoc
-		if err := cursor.Decode(&doc); err != nil {
-			continue
-		}
-		for _, src := range doc.Sources {
-			result[src.SourceID] = src
+	result := make(map[string]*ImageSetMongo, len(docs))
+	for i := range docs {
+		for _, src := range docs[i].Sources {
+			if src.Name == sourceName {
+				result[src.SourceID] = &docs[i]
+			}
 		}
 	}
-	return result, cursor.Err()
+	return result, nil
+}
+
+// GetImageSetBySourceID is a single-ID convenience wrapper around
+// GetImageSetsBySourceIDs. ok is false if no owned set has a matching source.
+func GetImageSetBySourceID(userId string, sourceName string, sourceID string) (set *ImageSetMongo, ok bool, err error) {
+	sets, err := GetImageSetsBySourceIDs(userId, sourceName, []string{sourceID})
+	if err != nil {
+		return nil, false, err
+	}
+	set, ok = sets[sourceID]
+	return set, ok, nil
 }
 
 /*Provides display info for the image you associated with the image ID*/

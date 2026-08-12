@@ -64,12 +64,18 @@ func SaveImage(imageToSave image.Image, path string, title string, id bson.Objec
 	}
 
 	/** 	get hash 	**/
-	phash := imghash.NewPHash()
-	ihash := phash.Calculate(imageToSave)
+	ihash := HashImage(imageToSave)
 	fmt.Printf("Image Saved\n Hashed to: %v\n", ihash)
 
-	return fileName, ihash.String(), nil
+	return fileName, ihash, nil
 
+}
+
+// HashImage computes the same perceptual hash stored in ImageInfo.ImageHash,
+// so a freshly decoded image can be compared against what was saved.
+func HashImage(img image.Image) string {
+	phash := imghash.NewPHash()
+	return phash.Calculate(img).String()
 }
 
 /*
@@ -106,14 +112,13 @@ func SaveGif(imageToSave *gif.GIF, path string, title string, id bson.ObjectID, 
 	}
 
 	/** 	get hash 	**/
-	phash := imghash.NewPHash()
 	if len(imageToSave.Image) == 0 {
 		return "", "", fmt.Errorf("empty gif")
 	}
-	ihash := phash.Calculate(imageToSave.Image[0])
+	ihash := HashImage(imageToSave.Image[0])
 	fmt.Printf("Image Saved\n Hashed to: %v\n", ihash)
 
-	return fileName, ihash.String(), nil
+	return fileName, ihash, nil
 }
 
 func getFileTypeFromHeader(MediaSource MediaSource) (string, error) {

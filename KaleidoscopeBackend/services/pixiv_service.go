@@ -4,6 +4,9 @@ import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log"
 	"net/http"
@@ -200,7 +203,7 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 			sourceIDs[i] = strconv.FormatUint(il.ID, 10)
 		}
 
-		existing, dbErr := imageset.GetISetSourceInfoBySourceIDs(userId, pixivServiceName, sourceIDs)
+		existing, dbErr := imageset.GetImageSetsBySourceIDs(userId, pixivServiceName, sourceIDs)
 		if dbErr != nil {
 			log.Printf("pixiv sync [%s]: DB lookup failed: %v – treating page as new", userId, dbErr)
 			existing = nil
@@ -208,10 +211,13 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 
 		for _, il := range illusts {
 			idStr := strconv.FormatUint(il.ID, 10)
-			src, exists := existing[idStr]
+			set, exists := existing[idStr]
 			if !exists {
 				enqueueIllustFetch(userId, il.ID, false)
-			} else if illustDiffers(il, src) {
+				continue
+			}
+			src, idx := sourceByID(set, idStr)
+			if idx >= 0 && sourceChanged(il, src) {
 				enqueueIllustFetch(userId, il.ID, true)
 			}
 		}
@@ -240,32 +246,23 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 	return nil
 }
 
-// TODO: add check for edit date
-// TODO check individual tags for changes
-// illustDiffers reports whether the live Pixiv data differs from what is stored.
-func illustDiffers(il pixivmodel.Illust, src imageset.SourceInfo) bool {
-	if il.Title != src.Title || il.User.Name != src.SourceAuthor {
-		return true
-	}
-	if strconv.FormatUint(il.User.ID, 10) != src.AuthorID {
-		return true
-	}
-	if !il.CreateDate.Equal(src.Date) {
-		return true
-	}
-	if len(il.Tags) != len(src.Tags) {
-		return true
-	}
-	storedTags := make(map[string]struct{}, len(src.Tags))
-	for _, t := range src.Tags {
-		storedTags[t] = struct{}{}
-	}
-	for _, t := range il.Tags {
-		if _, ok := storedTags[t.Name]; !ok {
-			return true
+// sourceChanged reports whether the source has moved on since the last sync.
+// Pixiv's App API create_date empirically tracks a work's last edit, not its
+// original post date, so this doubles as the sync's overall change gate:
+// metadata and image checks only run once this is true.
+func sourceChanged(il pixivmodel.Illust, src imageset.SourceInfo) bool {
+	return !il.CreateDate.Equal(src.Date)
+}
+
+// sourceByID returns the pixiv source within set matching sourceID and its index
+// in set.Sources. idx is -1 if no match is found.
+func sourceByID(set *imageset.ImageSetMongo, sourceID string) (src imageset.SourceInfo, idx int) {
+	for i, s := range set.Sources {
+		if s.Name == pixivServiceName && s.SourceID == sourceID {
+			return s, i
 		}
 	}
-	return false
+	return imageset.SourceInfo{}, -1
 }
 
 // ----- Per-illust scheduler tasks ----
@@ -280,8 +277,9 @@ func enqueueIllustFetch(userId string, illustID uint64, isUpdate bool) {
 
 // fetchAndSavePixivIllust is executed by the scheduler.
 // For new items it downloads all pages and saves them via AddImageSet.
-// For changed items it logs the detected change and skips auto-update,
-// since altering existing entries requires user review.
+// For changed items it checks whether the images themselves changed and either
+// applies the metadata update directly or defers to applyPixivSourceUpdate's
+// pending state.
 func fetchAndSavePixivIllust(userId string, illustID uint64, isUpdate bool) error {
 	sess, err := GetPixivSession(userId)
 	if err != nil {
@@ -290,12 +288,15 @@ func fetchAndSavePixivIllust(userId string, illustID uint64, isUpdate bool) erro
 
 	illust, err := sess.App.IllustDetail(illustID)
 	if err != nil {
+		// note: a 404 here means Pixiv could no longer find the work (confirmed for one
+		// known-deleted illust via manual testing), but that isn't yet distinguished from
+		// other failure modes through this error alone - see imageset.SourceMissing. This
+		// still falls through as an ordinary retryable failure until that's settled.
 		return fmt.Errorf("IllustDetail(%d): %w", illustID, err)
 	}
 
 	if isUpdate {
-		log.Printf("pixiv: illust %d (%q) has changed - manual review required to update existing DB entry", illustID, illust.Title)
-		return nil
+		return applyPixivSourceUpdate(userId, illust)
 	}
 
 	// Download all pages to a temporary directory, then pass them to AddImageSet.
@@ -354,14 +355,33 @@ func illustImageURLs(illust *pixivmodel.Illust) []string {
 	return nil
 }
 
+// illustCheckImageURLs returns a smaller preview URL for every page, for use by
+// the hash check: imghash's PHash resizes its input internally, so hashing a
+// preview instead of the full original saves network, disk and memory without
+// changing the result for a genuinely unchanged image. Falls back to
+// illustImageURLs per page wherever a smaller size isn't available.
+func illustCheckImageURLs(illust *pixivmodel.Illust) []string {
+	if illust.PageCount > 1 {
+		urls := make([]string, 0, len(illust.MetaPages))
+		for _, p := range illust.MetaPages {
+			switch {
+			case p.Images.Large != "":
+				urls = append(urls, p.Images.Large)
+			case p.Images.Original != "":
+				urls = append(urls, p.Images.Original)
+			}
+		}
+		return urls
+	}
+	if illust.ImageURLs != nil && illust.ImageURLs.Large != "" {
+		return []string{illust.ImageURLs.Large}
+	}
+	return illustImageURLs(illust)
+}
+
 // buildPixivImageSet constructs the ImageSetMongo metadata from a Pixiv Illust.
 // Image slices and path are left empty; AddImageSet fills those in.
 func buildPixivImageSet(illust *pixivmodel.Illust, userId string) *imageset.ImageSetMongo {
-
-	tags := make([]string, 0, len(illust.Tags))
-	for _, t := range illust.Tags {
-		tags = append(tags, t.Name)
-	}
 
 	pageCount := illust.PageCount
 	if pageCount < 1 {
@@ -372,21 +392,20 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string) *imageset.Imag
 		attributed[i] = i
 	}
 
-	var caption string
-	if illust.Caption != nil {
-		caption = *illust.Caption
-	}
+	caption := pixivIllustCaption(illust)
 
 	src := imageset.SourceInfo{
-		Name:         pixivServiceName,
-		SourceID:     strconv.FormatUint(illust.ID, 10),
-		Title:        illust.Title,
-		Description:  caption,
-		SourceAuthor: illust.User.Name,
-		AuthorID:     strconv.FormatUint(illust.User.ID, 10),
-		Tags:         tags,
-		Date:         illust.CreateDate,
-		AttributedTo: attributed,
+		Name:            pixivServiceName,
+		SourceID:        strconv.FormatUint(illust.ID, 10),
+		Title:           illust.Title,
+		Description:     caption,
+		SourceAuthor:    illust.User.Name,
+		AuthorID:        strconv.FormatUint(illust.User.ID, 10),
+		Tags:            pixivIllustTags(illust),
+		Date:            illust.CreateDate,
+		AttributedTo:    attributed,
+		LastChecked:     time.Now(),
+		LastImageUpdate: illust.CreateDate,
 	}
 
 	return &imageset.ImageSetMongo{
@@ -397,6 +416,134 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string) *imageset.Imag
 		Itype:        string(illust.Type),
 		KscopeUserId: userId,
 	}
+}
+
+// pixivIllustTags returns the illust's tag names.
+func pixivIllustTags(illust *pixivmodel.Illust) []string {
+	tags := make([]string, 0, len(illust.Tags))
+	for _, t := range illust.Tags {
+		tags = append(tags, t.Name)
+	}
+	return tags
+}
+
+// pixivIllustCaption dereferences illust.Caption, defaulting to empty.
+func pixivIllustCaption(illust *pixivmodel.Illust) string {
+	if illust.Caption != nil {
+		return *illust.Caption
+	}
+	return ""
+}
+
+// pixivSourceInfo builds a fresh SourceInfo from illust for a source that already
+// exists in the DB, preserving its DB sub-id and image attribution from old.
+func pixivSourceInfo(illust *pixivmodel.Illust, old imageset.SourceInfo) imageset.SourceInfo {
+	return imageset.SourceInfo{
+		Name:         pixivServiceName,
+		ID:           old.ID,
+		SourceID:     strconv.FormatUint(illust.ID, 10),
+		Title:        illust.Title,
+		Description:  pixivIllustCaption(illust),
+		SourceAuthor: illust.User.Name,
+		AuthorID:     strconv.FormatUint(illust.User.ID, 10),
+		Tags:         pixivIllustTags(illust),
+		Date:         illust.CreateDate,
+		AttributedTo: old.AttributedTo,
+	}
+}
+
+// applyPixivSourceUpdate re-fetches the existing set for illust's source, checks
+// whether its images changed, and either applies the metadata update directly or
+// records a pending state ahead of a not-yet-built approval flow. Title and
+// description are withheld along with images when a change is pending, since they
+// may only make sense together with the new images.
+func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust) error {
+	sourceID := strconv.FormatUint(illust.ID, 10)
+	set, ok, err := imageset.GetImageSetBySourceID(userId, pixivServiceName, sourceID)
+	if err != nil {
+		return fmt.Errorf("look up existing set for illust %d: %w", illust.ID, err)
+	}
+	if !ok {
+		return fmt.Errorf("illust %d: flagged as changed but no existing set found", illust.ID)
+	}
+	_, idx := sourceByID(set, sourceID)
+	if idx < 0 {
+		return fmt.Errorf("illust %d: source vanished from its own set between sync passes", illust.ID)
+	}
+
+	changed, err := imagesChanged(illust, set, idx)
+	if err != nil {
+		return fmt.Errorf("checking images for illust %d: %w", illust.ID, err)
+	}
+
+	checkedAt := time.Now()
+	if changed {
+		log.Printf("pixiv: illust %d (%q) images changed - deferring, manual review required", illust.ID, illust.Title)
+		return imageset.MarkSourcePendingImageChange(set, idx, illust.CreateDate, checkedAt)
+	}
+
+	newSrc := pixivSourceInfo(illust, set.Sources[idx])
+	if err := imageset.ApplySourceMetadataUpdate(set, idx, newSrc, checkedAt, userId); err != nil {
+		return fmt.Errorf("applying metadata update for illust %d: %w", illust.ID, err)
+	}
+	log.Printf("pixiv: updated illust %d (%q)", illust.ID, illust.Title)
+	return nil
+}
+
+// imagesChanged reports whether illust's images likely differ from what's stored
+// for set.Sources[idx]: either the page count changed, or a downloaded page's hash
+// no longer matches. Hashing is the expensive path and only runs once the caller's
+// date gate already found something different, keeping unchanged syncs cheap.
+func imagesChanged(illust *pixivmodel.Illust, set *imageset.ImageSetMongo, idx int) (bool, error) {
+	src := set.Sources[idx]
+	if illust.PageCount != len(src.AttributedTo) {
+		return true, nil
+	}
+	return imageHashesDiffer(illust, set, src.AttributedTo)
+}
+
+// imageHashesDiffer downloads a small preview of each of illust's current pages
+// and compares its perceptual hash against the stored image at the matching
+// attributedTo index. Uses illustCheckImageURLs rather than full resolution, since
+// the hash algorithm resizes its input internally regardless.
+func imageHashesDiffer(illust *pixivmodel.Illust, set *imageset.ImageSetMongo, attributedTo []int) (bool, error) {
+	urls := illustCheckImageURLs(illust)
+	if len(urls) != len(attributedTo) {
+		return true, nil
+	}
+
+	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("pixiv_hashcheck_%d_*", illust.ID))
+	if err != nil {
+		return false, fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	for i, url := range urls {
+		imgIndex := attributedTo[i]
+		if imgIndex < 0 || imgIndex >= len(set.Image) {
+			return true, nil
+		}
+
+		path, err := downloadPixivImage(url, tmpDir)
+		if err != nil {
+			return false, fmt.Errorf("download %s: %w", url, err)
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			return false, fmt.Errorf("open %s: %w", path, err)
+		}
+		img, _, decodeErr := image.Decode(f)
+		f.Close()
+		if decodeErr != nil {
+			return false, fmt.Errorf("decode %s: %w", path, decodeErr)
+		}
+
+		if imageset.HashImage(img) != set.Image[imgIndex].ImageHash {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // downloadPixivImage fetches a single Pixiv image URL into dir and returns the
