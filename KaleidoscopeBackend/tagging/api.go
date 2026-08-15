@@ -48,20 +48,43 @@ func ListSourceTagsHandler(c *fiber.Ctx) error {
 	return c.JSON(results)
 }
 
-// GET /api/autotags?prefix= - {id, name, count} only, no SourceTagDoc
+// GET /api/autotags?prefix=&limit= - {id, name, count} only, no SourceTagDoc
 // resolution. For autocomplete and for resolving ImageSetMongo.AutoTags IDs
-// to names.
+// to names. limit <= 0 means unlimited.
 func ListAutoTagsHandler(c *fiber.Ctx) error {
 	userID, err := userIDFromLocals(c)
 	if err != nil {
 		return c.Status(http.StatusUnauthorized).SendString(err.Error())
 	}
-	results, err := ListAutoTagSummaries(userID)
+	results, err := ListAutoTagSummaries(userID, c.Query("prefix"), c.QueryInt("limit", 0))
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).SendString(err.Error())
 	}
-	if prefix := c.Query("prefix"); prefix != "" {
-		results = filterAutoTagSummariesByPrefix(results, prefix)
+	return c.JSON(results)
+}
+
+// GET /api/autotags/byIds?ids=id1,id2,... - resolves specific AutoTag IDs to
+// {id, name, count}. Missing/unknown IDs are omitted, not an error.
+func AutoTagSummariesByIDHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	raw := strings.Split(c.Query("ids"), ",")
+	ids := make([]bson.ObjectID, 0, len(raw))
+	for _, s := range raw {
+		if s == "" {
+			continue
+		}
+		id, err := bson.ObjectIDFromHex(s)
+		if err != nil {
+			return c.Status(http.StatusBadRequest).SendString("invalid id: " + s)
+		}
+		ids = append(ids, id)
+	}
+	results, err := AutoTagSummariesByID(userID, ids)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
 	}
 	return c.JSON(results)
 }
@@ -87,17 +110,6 @@ func ListAutoTagDetailsHandler(c *fiber.Ctx) error {
 func filterAutoTagsByPrefix(tags []AutoTagWithMatches, prefix string) []AutoTagWithMatches {
 	prefix = strings.ToLower(prefix)
 	filtered := make([]AutoTagWithMatches, 0, len(tags))
-	for _, t := range tags {
-		if strings.HasPrefix(strings.ToLower(t.Name), prefix) {
-			filtered = append(filtered, t)
-		}
-	}
-	return filtered
-}
-
-func filterAutoTagSummariesByPrefix(tags []AutoTagSummary, prefix string) []AutoTagSummary {
-	prefix = strings.ToLower(prefix)
-	filtered := make([]AutoTagSummary, 0, len(tags))
 	for _, t := range tags {
 		if strings.HasPrefix(strings.ToLower(t.Name), prefix) {
 			filtered = append(filtered, t)

@@ -30,7 +30,7 @@ func normalizeTag(tag string) string {
 // sourceTagKey must be used everywhere a SourceTag is written or looked up;
 // it is the doc's _id, so a mismatched key here silently creates a duplicate
 // rather than finding the existing tag. A plain deterministic string rather
-// than a bson.ObjectID, deliberately: unlike AutoTagEntry.ID, nothing ever
+// than a bson.ObjectID, deliberately: unlike AutoTagDoc.ID, nothing ever
 // needs to look this up by anything other than (userID, source, default).
 func sourceTagKey(userID bson.ObjectID, source, tagDefault string) string {
 	return userID.Hex() + "::" + source + "::" + normalizeTag(tagDefault)
@@ -41,9 +41,15 @@ func sourceTagKey(userID bson.ObjectID, source, tagDefault string) string {
 // the incremental recordSourceTagUsage/decrementSourceTagUsage bookkeeping.
 
 func EnsureIndexes(ctx context.Context) error {
-	_, err := SourceTagsDB.Indexes().CreateMany(ctx, []mongo.IndexModel{
+	if _, err := SourceTagsDB.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "tag.default", Value: 1}}},
 		{Keys: bson.D{{Key: "userId", Value: 1}, {Key: "tag.en", Value: 1}}},
+	}); err != nil {
+		return err
+	}
+	_, err := AutoTagsDB.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "name", Value: 1}}},
+		{Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "src_tag_key_match", Value: 1}}},
 	})
 	return err
 }

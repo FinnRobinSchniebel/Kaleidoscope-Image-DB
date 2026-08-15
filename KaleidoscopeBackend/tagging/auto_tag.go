@@ -2,14 +2,13 @@ package tagging
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // AutoTag is the import-time entry point: records source-tag usage, matches
@@ -45,32 +44,34 @@ func AutoTag(userID, sourceName string, sourceTags []imageset.SourceTag, current
 	return newlyAssigned, nil
 }
 
-// matchAutoTags fetches userID's AutoTags and returns every entry whose
-// SrcTagKeyMatch intersects the given source tags' computed keys. No side
-// effects.
+// matchAutoTags returns the IDs of every AutoTag whose SrcTagKeyMatch
+// intersects the given source tags' computed keys, via an indexed query
+// (userId + src_tag_key_match). No side effects.
 func matchAutoTags(userID bson.ObjectID, source string, sourceTags []imageset.SourceTag) ([]bson.ObjectID, error) {
-	var doc UserAutoTags
-	err := AutoTagsDB.FindOne(context.Background(), bson.M{"user_id": userID}).Decode(&doc)
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		return nil, nil
+	keys := make([]string, len(sourceTags))
+	for i, t := range sourceTags {
+		keys[i] = sourceTagKey(userID, source, t.Default)
 	}
+
+	cursor, err := AutoTagsDB.Find(context.Background(),
+		bson.M{"user_id": userID, "src_tag_key_match": bson.M{"$in": keys}},
+		options.Find().SetProjection(bson.M{"_id": 1}),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("fetching auto tags: %w", err)
+		return nil, fmt.Errorf("matching auto tags: %w", err)
+	}
+	defer cursor.Close(context.Background())
+
+	var docs []struct {
+		ID bson.ObjectID `bson:"_id"`
+	}
+	if err := cursor.All(context.Background(), &docs); err != nil {
+		return nil, fmt.Errorf("matching auto tags: %w", err)
 	}
 
-	incoming := make(map[string]bool, len(sourceTags))
-	for _, t := range sourceTags {
-		incoming[sourceTagKey(userID, source, t.Default)] = true
-	}
-
-	var matched []bson.ObjectID
-	for _, e := range doc.Entries {
-		for _, key := range e.SrcTagKeyMatch {
-			if incoming[key] {
-				matched = append(matched, e.ID)
-				break
-			}
-		}
+	matched := make([]bson.ObjectID, len(docs))
+	for i, d := range docs {
+		matched[i] = d.ID
 	}
 	return matched, nil
 }
