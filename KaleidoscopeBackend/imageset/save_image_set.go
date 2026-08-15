@@ -1,7 +1,6 @@
 package imageset
 
 import (
-	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tagging"
 	"context"
 	"errors"
 	"fmt"
@@ -13,11 +12,24 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// AutoTagger avoids an import cycle: tagging needs imageset's types, so this
+// interface is owned here and implemented by tagging.AutoTagFunc in main.go.
+type AutoTagger interface {
+	// AutoTag returns the subset of matched AutoTags not already present in
+	// currentAutoTags, incrementing each returned AutoTag's usage count
+	// exactly once regardless of how many of sourceTags matched it.
+	AutoTag(userID, sourceName string, sourceTags []SourceTag, currentAutoTags []bson.ObjectID) ([]bson.ObjectID, error)
+	// RecordDeletion undoes usage counts, for sources' tags and for autoTags,
+	// recorded when the now-deleted set was created/synced.
+	RecordDeletion(userID string, sources []SourceInfo, autoTags []bson.ObjectID) error
+}
+
+var Tagger AutoTagger
 
 type MediaSource interface {
 	Open() (io.ReadSeekCloser, error)
@@ -112,14 +124,15 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	//add userId (done as seperate step to avoid exploits if changes are made)
 	imageSet.KscopeUserId = userId
 
-	//derive main tag list suggestions from each source's own tags, merging into
-	//whatever tags were already set without duplicating any
+	//derive AutoTag matches from each source's own tags; a set with multiple
+	//sources can have the same AutoTag matched more than once, so AutoTag is
+	//given the running AutoTags list each time to only count it once
 	for _, src := range imageSet.Sources {
-		for _, t := range tagging.AutoTag(userId, src.Name, SourceTagNames(src.Tags)) {
-			if !slices.Contains(imageSet.Tags, t) {
-				imageSet.Tags = append(imageSet.Tags, t)
-			}
+		newTags, err := Tagger.AutoTag(userId, src.Name, src.Tags, imageSet.AutoTags)
+		if err != nil {
+			return nil, "", fmt.Errorf("auto-tagging: %w", err)
 		}
+		imageSet.AutoTags = append(imageSet.AutoTags, newTags...)
 	}
 
 	//check media count first to avoid empty imagsets in db

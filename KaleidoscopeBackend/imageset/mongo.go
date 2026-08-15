@@ -15,6 +15,17 @@ import (
 
 var Collection *mongo.Collection
 
+// EnsureIndexes creates the indexes used to find image sets by owner plus
+// source tag or AutoTag (tagging.applyAutoTagToSets' candidate query).
+// Idempotent, safe to call on every startup.
+func EnsureIndexes(ctx context.Context) error {
+	_, err := Collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "sources.tags.default", Value: 1}}},
+		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "autotags", Value: 1}}},
+	})
+	return err
+}
+
 // ErrAccessDenied is returned by GetFromID when a non-admin user requests an
 // image set they do not own. Callers map it to HTTP 403. Invalid-id and
 // not-found failures are reported with bson.ErrInvalidHex and
@@ -158,6 +169,12 @@ func DeleteImageSetInDB(id bson.ObjectID) error {
 	var errList error
 
 	err = DeleteFilesFromInfoList(entryToDelete.Path, entryToDelete.Image)
+	if err != nil {
+		errList = errors.Join(errList, err)
+	}
+
+	//note: also undoes counts from AddImageSet's rollback path, since they are recorded before insert
+	err = Tagger.RecordDeletion(entryToDelete.KscopeUserId, entryToDelete.Sources, entryToDelete.AutoTags)
 	if err != nil {
 		errList = errors.Join(errList, err)
 	}

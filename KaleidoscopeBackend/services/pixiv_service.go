@@ -418,17 +418,16 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string) *imageset.Imag
 	}
 }
 
-// pixivIllustTags returns the illust's tags, preferring Pixiv's own translation
-// as the effective Name and keeping the untranslated tag as JP when a
-// translation exists.
+// pixivIllustTags returns the illust's tags: Default is always the untranslated
+// Pixiv tag, EN is Pixiv's own translation when it provides one.
 func pixivIllustTags(illust *pixivmodel.Illust) []imageset.SourceTag {
 	tags := make([]imageset.SourceTag, 0, len(illust.Tags))
 	for _, t := range illust.Tags {
+		tag := imageset.SourceTag{Default: t.Name}
 		if t.TranslatedName != nil && *t.TranslatedName != "" {
-			tags = append(tags, imageset.SourceTag{Name: *t.TranslatedName, JP: t.Name})
-		} else {
-			tags = append(tags, imageset.SourceTag{Name: t.Name})
+			tag.EN = *t.TranslatedName
 		}
+		tags = append(tags, tag)
 	}
 	return tags
 }

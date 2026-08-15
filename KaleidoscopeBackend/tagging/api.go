@@ -1,95 +1,152 @@
 package tagging
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-/*
-Returns an array of images in the 'images' field
-*/
-func AddTag(c *fiber.Ctx) error {
-
-	var inputs Tag
-
-	c.BodyParser(&inputs)
-
-	userID := c.Locals("UserID").(string)
+func userIDFromLocals(c *fiber.Ctx) (bson.ObjectID, error) {
+	userID, _ := c.Locals("UserID").(string)
 	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
+		return bson.ObjectID{}, fmt.Errorf("no user id in context")
 	}
-
-	var err error
-
-	inputs.User, err = bson.ObjectIDFromHex(userID)
-	if err != nil {
-		return err
-	}
-
-	err = AddTags(inputs)
-
-	if err != nil {
-		return err
-	}
-	return c.SendStatus(200)
+	return bson.ObjectIDFromHex(userID)
 }
 
-// TODO
-func TagRetrieve(c *fiber.Ctx) error {
-
-	var requestParams struct {
-		IDs []string `json:"ids" bson:"ids" form:"ids" query:"ids"`
+// GET /api/sourcetags/search?source=&lang=&q=
+func SearchSourceTagsHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
 	}
-	err := c.QueryParser(&requestParams)
-	fmt.Println(requestParams.IDs)
-	if len(requestParams.IDs) == 0 || err != nil {
-		return c.Status(http.StatusBadRequest).SendString("no id given")
+	q := c.Query("q")
+	if q == "" {
+		return c.Status(http.StatusBadRequest).SendString("q is required")
 	}
+	results, err := SearchSourceTags(userID, c.Query("source"), c.Query("lang"), q, 20)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	return c.JSON(results)
+}
 
-	var objectIDs []bson.ObjectID
-	for _, idStr := range requestParams.IDs {
-		oid, err := bson.ObjectIDFromHex(idStr)
-		if err != nil {
-			return err
+// GET /api/sourcetags?source=&cursor=&limit=
+func ListSourceTagsHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	results, err := ListSourceTags(userID, c.Query("source"), c.Query("cursor"), c.QueryInt("limit", 50))
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	return c.JSON(results)
+}
+
+// GET /api/autotags?q=
+func ListAutoTagsHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	results, err := ListAutoTags(userID)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	if q := c.Query("q"); q != "" {
+		results = filterAutoTagsByPrefix(results, q)
+	}
+	return c.JSON(results)
+}
+
+func filterAutoTagsByPrefix(tags []AutoTagWithMatches, prefix string) []AutoTagWithMatches {
+	prefix = strings.ToLower(prefix)
+	filtered := make([]AutoTagWithMatches, 0, len(tags))
+	for _, t := range tags {
+		if strings.HasPrefix(strings.ToLower(t.Name), prefix) {
+			filtered = append(filtered, t)
 		}
-		objectIDs = append(objectIDs, oid)
 	}
-
-	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
-
-	// result, err := imageset.GetImageInfoFromDB(objectIDs)
-	// if err != nil {
-	// 	return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
-	// }
-	// res := fiber.Map{
-	// 	"imagesets": result,
-	// }
-	// return c.JSON(res)
-	return nil
+	return filtered
 }
 
-func Testautotag(c *fiber.Ctx) error {
+type createAutoTagRequest struct {
+	Name    string   `json:"name"`
+	Matches []string `json:"matches"`
+}
 
-	var items struct {
-		Tags []string `json:"tags" bson:"tags" form:"tags"`
-	}
-
-	err := c.BodyParser(&items)
+// POST /api/autotags
+func CreateAutoTagHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
 	if err != nil {
-		return err
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
 	}
-	if len(items.Tags) == 0 {
-		return c.Status(http.StatusBadRequest).SendString("no tags given")
+	var body createAutoTagRequest
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(http.StatusBadRequest).SendString(err.Error())
 	}
-
-	res, err := FindAutoTag(items.Tags)
+	if body.Name == "" {
+		return c.Status(http.StatusBadRequest).SendString("name is required")
+	}
+	id, err := CreateAutoTag(userID, body.Name, body.Matches)
 	if err != nil {
-		return err
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
 	}
+	return c.JSON(fiber.Map{"id": id.Hex()})
+}
 
-	return c.JSON(res)
+// updateAutoTagRequest.Matches is nil when omitted from the body (not to be
+// changed) vs a non-nil empty slice when explicitly cleared.
+type updateAutoTagRequest struct {
+	Name    *string  `json:"name"`
+	Matches []string `json:"matches"`
+}
 
+// PATCH /api/autotags/:id
+func UpdateAutoTagHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	autoTagID, err := bson.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(http.StatusBadRequest).SendString("invalid id")
+	}
+	var body updateAutoTagRequest
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(http.StatusBadRequest).SendString(err.Error())
+	}
+	err = UpdateAutoTag(userID, autoTagID, body.Name, body.Matches)
+	if errors.Is(err, ErrAutoTagNotFound) {
+		return c.Status(http.StatusNotFound).SendString(err.Error())
+	}
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	return c.SendStatus(http.StatusOK)
+}
+
+// DELETE /api/autotags/:id
+func DeleteAutoTagHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	autoTagID, err := bson.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(http.StatusBadRequest).SendString("invalid id")
+	}
+	err = DeleteAutoTag(userID, autoTagID)
+	if errors.Is(err, ErrAutoTagNotFound) {
+		return c.Status(http.StatusNotFound).SendString(err.Error())
+	}
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	return c.SendStatus(http.StatusOK)
 }

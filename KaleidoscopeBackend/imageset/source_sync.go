@@ -1,11 +1,9 @@
 package imageset
 
 import (
-	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tagging"
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -32,11 +30,11 @@ func ApplySourceMetadataUpdate(a *ImageSetMongo, i int, newSrc SourceInfo, check
 
 	if added := newTags(old.Tags, newSrc.Tags); len(added) > 0 {
 		a.Sources[i].Tags = append(a.Sources[i].Tags, added...)
-		for _, t := range tagging.AutoTag(userId, newSrc.Name, SourceTagNames(added)) {
-			if !slices.Contains(a.Tags, t) {
-				a.Tags = append(a.Tags, t)
-			}
+		newAutoTags, err := Tagger.AutoTag(userId, newSrc.Name, added, a.AutoTags)
+		if err != nil {
+			return fmt.Errorf("auto-tagging: %w", err)
 		}
+		a.AutoTags = append(a.AutoTags, newAutoTags...)
 	}
 
 	a.Sources[i].Date = newSrc.Date
