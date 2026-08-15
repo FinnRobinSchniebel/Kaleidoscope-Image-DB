@@ -19,10 +19,10 @@ var ErrAutoTagNotFound = errors.New("auto tag not found")
 
 // AutoTagEntry is one element of UserAutoTags.Entries, as stored in Mongo.
 type AutoTagEntry struct {
-	ID      bson.ObjectID `bson:"id" json:"id"`
-	Name    string        `bson:"name" json:"name"`
-	Matches []string      `bson:"matches" json:"matches"` // SourceTagDoc._id refs
-	Count   int           `bson:"count" json:"count"`     // image sets currently carrying this AutoTag
+	ID             bson.ObjectID `bson:"id" json:"id"`
+	Name           string        `bson:"name" json:"name"`
+	SrcTagKeyMatch []string      `bson:"src_tag_key_match" json:"srcTagKeyMatch"` // SourceTagDoc.Key values
+	Count          int           `bson:"count" json:"count"`                      // image sets currently carrying this AutoTag
 }
 
 // UserAutoTags is the AutoTagsDB document shape: one per user.
@@ -32,7 +32,7 @@ type UserAutoTags struct {
 }
 
 // AutoTagWithMatches is ListAutoTags' response shape, never persisted: like
-// AutoTagEntry but with Matches resolved to full SourceTagDocs.
+// AutoTagEntry but with SrcTagKeyMatch resolved to full SourceTagDocs.
 type AutoTagWithMatches struct {
 	ID      bson.ObjectID  `json:"id"`
 	Name    string         `json:"name"`
@@ -40,8 +40,8 @@ type AutoTagWithMatches struct {
 	Count   int            `json:"count"`
 }
 
-func CreateAutoTag(userID bson.ObjectID, name string, matches []string) (bson.ObjectID, error) {
-	entry := AutoTagEntry{ID: bson.NewObjectID(), Name: name, Matches: matches}
+func CreateAutoTag(userID bson.ObjectID, name string, srcTagKeyMatch []string) (bson.ObjectID, error) {
+	entry := AutoTagEntry{ID: bson.NewObjectID(), Name: name, SrcTagKeyMatch: srcTagKeyMatch}
 
 	filter := bson.M{"user_id": userID}
 	update := bson.M{"$push": bson.M{"entries": entry}}
@@ -49,13 +49,13 @@ func CreateAutoTag(userID bson.ObjectID, name string, matches []string) (bson.Ob
 		return bson.ObjectID{}, fmt.Errorf("creating auto tag: %w", err)
 	}
 
-	if err := applyAutoTagToSets(userID, entry.ID, nil, matches); err != nil {
+	if err := applyAutoTagToSets(userID, entry.ID, nil, srcTagKeyMatch); err != nil {
 		return bson.ObjectID{}, fmt.Errorf("applying auto tag to existing sets: %w", err)
 	}
 	return entry.ID, nil
 }
 
-func UpdateAutoTag(userID, autoTagID bson.ObjectID, name *string, matches []string) error {
+func UpdateAutoTag(userID, autoTagID bson.ObjectID, name *string, srcTagKeyMatch []string) error {
 	old, err := findAutoTagEntry(userID, autoTagID)
 	if err != nil {
 		return err
@@ -65,10 +65,10 @@ func UpdateAutoTag(userID, autoTagID bson.ObjectID, name *string, matches []stri
 	if name != nil {
 		set["entries.$.name"] = *name
 	}
-	newMatches := old.Matches
-	if matches != nil {
-		set["entries.$.matches"] = matches
-		newMatches = matches
+	newSrcTagKeyMatch := old.SrcTagKeyMatch
+	if srcTagKeyMatch != nil {
+		set["entries.$.src_tag_key_match"] = srcTagKeyMatch
+		newSrcTagKeyMatch = srcTagKeyMatch
 	}
 	if len(set) > 0 {
 		filter := bson.M{"user_id": userID, "entries.id": autoTagID}
@@ -77,7 +77,7 @@ func UpdateAutoTag(userID, autoTagID bson.ObjectID, name *string, matches []stri
 		}
 	}
 
-	if err := applyAutoTagToSets(userID, autoTagID, old.Matches, newMatches); err != nil {
+	if err := applyAutoTagToSets(userID, autoTagID, old.SrcTagKeyMatch, newSrcTagKeyMatch); err != nil {
 		return fmt.Errorf("applying auto tag to existing sets: %w", err)
 	}
 	return nil
@@ -95,38 +95,60 @@ func DeleteAutoTag(userID, autoTagID bson.ObjectID) error {
 		return fmt.Errorf("deleting auto tag: %w", err)
 	}
 
-	if err := applyAutoTagToSets(userID, autoTagID, old.Matches, nil); err != nil {
+	if err := applyAutoTagToSets(userID, autoTagID, old.SrcTagKeyMatch, nil); err != nil {
 		return fmt.Errorf("removing auto tag from existing sets: %w", err)
 	}
 	return nil
 }
 
-// ListAutoTags returns every AutoTag for userID with its matches resolved to
-// full SourceTagDocs, for the edit-page display.
-func ListAutoTags(userID bson.ObjectID) ([]AutoTagWithMatches, error) {
-	var doc UserAutoTags
-	err := AutoTagsDB.FindOne(context.Background(), bson.M{"user_id": userID}).Decode(&doc)
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		return nil, nil
-	}
+// AutoTagSummary is {id, name, count} with no SourceTagDoc resolution - for
+// autocomplete and for resolving ImageSetMongo.AutoTags IDs to names, where
+// AutoTagWithMatches' resolve step would be pure overhead.
+type AutoTagSummary struct {
+	ID    bson.ObjectID `json:"id"`
+	Name  string        `json:"name"`
+	Count int           `json:"count"`
+}
+
+// ListAutoTagSummaries returns every AutoTag for userID as {id, name,
+// count}, with a single read and no SourceTagDoc resolution.
+func ListAutoTagSummaries(userID bson.ObjectID) ([]AutoTagSummary, error) {
+	doc, err := fetchUserAutoTags(userID)
 	if err != nil {
-		return nil, fmt.Errorf("fetching auto tags: %w", err)
+		return nil, err
 	}
 
-	var allRefs []string
+	results := make([]AutoTagSummary, 0, len(doc.Entries))
 	for _, e := range doc.Entries {
-		allRefs = append(allRefs, e.Matches...)
+		results = append(results, AutoTagSummary{ID: e.ID, Name: e.Name, Count: e.Count})
 	}
-	tagsByID, err := sourceTagsByID(allRefs)
+	return results, nil
+}
+
+// ListAutoTags returns every AutoTag for userID with its SrcTagKeyMatch
+// resolved to full SourceTagDocs, for the edit-page display. Prefer
+// ListAutoTagSummaries wherever the resolved matches aren't actually needed
+// - this runs an extra query per call and returns a much larger payload.
+func ListAutoTags(userID bson.ObjectID) ([]AutoTagWithMatches, error) {
+	doc, err := fetchUserAutoTags(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	var allKeys []string
+	for _, e := range doc.Entries {
+		allKeys = append(allKeys, e.SrcTagKeyMatch...)
+	}
+	tagsByKey, err := sourceTagsByKey(allKeys)
 	if err != nil {
 		return nil, fmt.Errorf("resolving auto tag matches: %w", err)
 	}
 
 	results := make([]AutoTagWithMatches, 0, len(doc.Entries))
 	for _, e := range doc.Entries {
-		matches := make([]SourceTagDoc, 0, len(e.Matches))
-		for _, ref := range e.Matches {
-			if t, ok := tagsByID[ref]; ok {
+		matches := make([]SourceTagDoc, 0, len(e.SrcTagKeyMatch))
+		for _, key := range e.SrcTagKeyMatch {
+			if t, ok := tagsByKey[key]; ok {
 				matches = append(matches, t)
 			}
 		}
@@ -135,14 +157,22 @@ func ListAutoTags(userID bson.ObjectID) ([]AutoTagWithMatches, error) {
 	return results, nil
 }
 
-func findAutoTagEntry(userID, autoTagID bson.ObjectID) (AutoTagEntry, error) {
+func fetchUserAutoTags(userID bson.ObjectID) (UserAutoTags, error) {
 	var doc UserAutoTags
 	err := AutoTagsDB.FindOne(context.Background(), bson.M{"user_id": userID}).Decode(&doc)
 	if errors.Is(err, mongo.ErrNoDocuments) {
-		return AutoTagEntry{}, ErrAutoTagNotFound
+		return UserAutoTags{}, nil
 	}
 	if err != nil {
-		return AutoTagEntry{}, fmt.Errorf("fetching auto tags: %w", err)
+		return UserAutoTags{}, fmt.Errorf("fetching auto tags: %w", err)
+	}
+	return doc, nil
+}
+
+func findAutoTagEntry(userID, autoTagID bson.ObjectID) (AutoTagEntry, error) {
+	doc, err := fetchUserAutoTags(userID)
+	if err != nil {
+		return AutoTagEntry{}, err
 	}
 	for _, e := range doc.Entries {
 		if e.ID == autoTagID {
@@ -187,34 +217,13 @@ func deltasFor(ids []bson.ObjectID, delta int) map[bson.ObjectID]int {
 	return deltas
 }
 
-func sourceTagsByID(ids []string) (map[string]SourceTagDoc, error) {
-	result := make(map[string]SourceTagDoc, len(ids))
-	if len(ids) == 0 {
-		return result, nil
-	}
-	cursor, err := SourceTagsDB.Find(context.Background(), bson.M{"_id": bson.M{"$in": ids}})
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(context.Background())
-
-	var docs []SourceTagDoc
-	if err := cursor.All(context.Background(), &docs); err != nil {
-		return nil, err
-	}
-	for _, d := range docs {
-		result[d.ID] = d
-	}
-	return result, nil
-}
-
 // applyAutoTagToSets re-evaluates autoTagID's membership on every image set
-// that could be affected by the change from oldMatches to newMatches (either
-// list may be nil), and applies the resulting additions/removals in one bulk
-// write.
-func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldMatches, newMatches []string) error {
-	touchedRefs := union(oldMatches, newMatches)
-	touchedTags, err := sourceTagsByID(touchedRefs)
+// that could be affected by the change from oldSrcTagKeyMatch to
+// newSrcTagKeyMatch (either list may be nil), and applies the resulting
+// additions/removals in one bulk write.
+func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldSrcTagKeyMatch, newSrcTagKeyMatch []string) error {
+	touchedKeys := union(oldSrcTagKeyMatch, newSrcTagKeyMatch)
+	touchedTags, err := sourceTagsByKey(touchedKeys)
 	if err != nil {
 		return err
 	}
@@ -241,11 +250,11 @@ func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldMatches, newMatches 
 		return err
 	}
 
-	newMatchSet := toSet(newMatches)
+	newKeySet := toSet(newSrcTagKeyMatch)
 	var models []mongo.WriteModel
 	delta := 0
 	for _, set := range sets {
-		shouldHave := setHasMatch(userID, set.Sources, newMatchSet)
+		shouldHave := setHasMatch(userID, set.Sources, newKeySet)
 		hasIt := slices.Contains(set.AutoTags, autoTagID)
 		if shouldHave == hasIt {
 			continue
@@ -270,10 +279,10 @@ func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldMatches, newMatches 
 	return adjustAutoTagCounts(userID, map[bson.ObjectID]int{autoTagID: delta})
 }
 
-func setHasMatch(userID bson.ObjectID, sources []imageset.SourceInfo, matchSet map[string]bool) bool {
+func setHasMatch(userID bson.ObjectID, sources []imageset.SourceInfo, srcTagKeySet map[string]bool) bool {
 	for _, src := range sources {
 		for _, t := range src.Tags {
-			if matchSet[sourceTagID(userID, src.Name, t.Default)] {
+			if srcTagKeySet[sourceTagKey(userID, src.Name, t.Default)] {
 				return true
 			}
 		}

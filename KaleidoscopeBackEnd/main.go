@@ -193,6 +193,7 @@ func StartAPI() {
 
 	//auto tags
 	app.Get("/api/autotags", authutil.AuthSessionToken, tagging.ListAutoTagsHandler)
+	app.Get("/api/autotags/details", authutil.AuthSessionToken, tagging.ListAutoTagDetailsHandler)
 	app.Post("/api/autotags", authutil.AuthSessionToken, tagging.CreateAutoTagHandler)
 	app.Patch("/api/autotags/:id", authutil.AuthSessionToken, tagging.UpdateAutoTagHandler)
 	app.Delete("/api/autotags/:id", authutil.AuthSessionToken, tagging.DeleteAutoTagHandler)

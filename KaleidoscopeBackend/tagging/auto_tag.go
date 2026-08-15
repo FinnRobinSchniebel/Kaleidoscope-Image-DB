@@ -24,6 +24,7 @@ func AutoTag(userID, sourceName string, sourceTags []imageset.SourceTag, current
 	if err != nil {
 		return nil, fmt.Errorf("parsing user id: %w", err)
 	}
+	//source tag increment
 	if err := recordSourceTagUsage(uid, sourceName, sourceTags); err != nil {
 		return nil, fmt.Errorf("recording source tag usage: %w", err)
 	}
@@ -45,7 +46,8 @@ func AutoTag(userID, sourceName string, sourceTags []imageset.SourceTag, current
 }
 
 // matchAutoTags fetches userID's AutoTags and returns every entry whose
-// Matches intersects the given source tags' computed IDs. No side effects.
+// SrcTagKeyMatch intersects the given source tags' computed keys. No side
+// effects.
 func matchAutoTags(userID bson.ObjectID, source string, sourceTags []imageset.SourceTag) ([]bson.ObjectID, error) {
 	var doc UserAutoTags
 	err := AutoTagsDB.FindOne(context.Background(), bson.M{"user_id": userID}).Decode(&doc)
@@ -58,13 +60,13 @@ func matchAutoTags(userID bson.ObjectID, source string, sourceTags []imageset.So
 
 	incoming := make(map[string]bool, len(sourceTags))
 	for _, t := range sourceTags {
-		incoming[sourceTagID(userID, source, t.Default)] = true
+		incoming[sourceTagKey(userID, source, t.Default)] = true
 	}
 
 	var matched []bson.ObjectID
 	for _, e := range doc.Entries {
-		for _, ref := range e.Matches {
-			if incoming[ref] {
+		for _, key := range e.SrcTagKeyMatch {
+			if incoming[key] {
 				matched = append(matched, e.ID)
 				break
 			}
@@ -86,8 +88,7 @@ func RecordDeletion(userID string, sources []imageset.SourceInfo, autoTags []bso
 	return decrementAutoTagCounts(uid, autoTags)
 }
 
-// AutoTagFunc implements imageset.AutoTagger by delegating to this package's
-// free functions.
+// AutoTagFunc implements imageset.AutoTagger by delegating to this package's free functions.
 type AutoTagFunc struct{}
 
 func (AutoTagFunc) AutoTag(userID, sourceName string, sourceTags []imageset.SourceTag, currentAutoTags []bson.ObjectID) ([]bson.ObjectID, error) {

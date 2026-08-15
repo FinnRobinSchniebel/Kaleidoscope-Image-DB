@@ -16,7 +16,7 @@ import (
 var SourceTagsDB *mongo.Collection
 
 type SourceTagDoc struct {
-	ID     string             `bson:"_id" json:"id"`
+	Key    string             `bson:"_id" json:"key"`
 	UserID bson.ObjectID      `bson:"userId" json:"userId"`
 	Source string             `bson:"source" json:"source"`
 	Tag    imageset.SourceTag `bson:"tag" json:"tag"`
@@ -27,10 +27,12 @@ func normalizeTag(tag string) string {
 	return strings.ToLower(strings.TrimSpace(tag))
 }
 
-// sourceTagID must be used everywhere a SourceTag is written or looked up;
+// sourceTagKey must be used everywhere a SourceTag is written or looked up;
 // it is the doc's _id, so a mismatched key here silently creates a duplicate
-// rather than finding the existing tag.
-func sourceTagID(userID bson.ObjectID, source, tagDefault string) string {
+// rather than finding the existing tag. A plain deterministic string rather
+// than a bson.ObjectID, deliberately: unlike AutoTagEntry.ID, nothing ever
+// needs to look this up by anything other than (userID, source, default).
+func sourceTagKey(userID bson.ObjectID, source, tagDefault string) string {
 	return userID.Hex() + "::" + source + "::" + normalizeTag(tagDefault)
 }
 
@@ -54,7 +56,7 @@ func recordSourceTagUsage(userID bson.ObjectID, source string, sourceTags []imag
 	models := make([]mongo.WriteModel, 0, len(sourceTags))
 	for _, t := range sourceTags {
 		models = append(models, mongo.NewUpdateOneModel().
-			SetFilter(bson.M{"_id": sourceTagID(userID, source, t.Default)}).
+			SetFilter(bson.M{"_id": sourceTagKey(userID, source, t.Default)}).
 			SetUpdate(bson.M{
 				"$inc":         bson.M{"count": 1},
 				"$setOnInsert": bson.M{"userId": userID, "source": source, "tag": t},
@@ -78,7 +80,7 @@ func decrementSourceTagUsage(userID bson.ObjectID, sources []imageset.SourceInfo
 				}}}}}}},
 			}
 			models = append(models, mongo.NewUpdateOneModel().
-				SetFilter(bson.M{"_id": sourceTagID(userID, src.Name, t.Default)}).
+				SetFilter(bson.M{"_id": sourceTagKey(userID, src.Name, t.Default)}).
 				SetUpdate(pipeline))
 		}
 	}
@@ -124,6 +126,29 @@ func SearchSourceTags(userID bson.ObjectID, source, lang, prefix string, limit i
 		results = results[:limit]
 	}
 	return results, nil
+}
+
+// sourceTagsByKey looks up SourceTagDocs by _id (their Key), keyed by the
+// same Key in the result map.
+func sourceTagsByKey(keys []string) (map[string]SourceTagDoc, error) {
+	result := make(map[string]SourceTagDoc, len(keys))
+	if len(keys) == 0 {
+		return result, nil
+	}
+	cursor, err := SourceTagsDB.Find(context.Background(), bson.M{"_id": bson.M{"$in": keys}})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(context.Background())
+
+	var docs []SourceTagDoc
+	if err := cursor.All(context.Background(), &docs); err != nil {
+		return nil, err
+	}
+	for _, d := range docs {
+		result[d.Key] = d
+	}
+	return result, nil
 }
 
 // ListSourceTags keyset-paginates tags ordered by tag.default; cursor is the
