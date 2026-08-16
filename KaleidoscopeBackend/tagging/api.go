@@ -35,13 +35,15 @@ func SearchSourceTagsHandler(c *fiber.Ctx) error {
 	return c.JSON(results)
 }
 
-// GET /api/sourcetags?source=&cursor=&limit=
+// GET /api/sourcetags?source=&cursor=&limit= - limit<=0 (including omitted)
+// returns everything matching. TODO: give this a bounded default and real
+// paging once a UI consumes the cursor param.
 func ListSourceTagsHandler(c *fiber.Ctx) error {
 	userID, err := userIDFromLocals(c)
 	if err != nil {
 		return c.Status(http.StatusUnauthorized).SendString(err.Error())
 	}
-	results, err := ListSourceTags(userID, c.Query("source"), c.Query("cursor"), c.QueryInt("limit", 50))
+	results, err := ListSourceTags(userID, c.Query("source"), c.Query("cursor"), c.QueryInt("limit", 0))
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).SendString(err.Error())
 	}
@@ -137,6 +139,9 @@ func CreateAutoTagHandler(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).SendString("name is required")
 	}
 	id, err := CreateAutoTag(userID, body.Name, body.SrcTagKeyMatch)
+	if errors.Is(err, ErrAutoTagNameExists) {
+		return c.Status(http.StatusConflict).SendString(err.Error())
+	}
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).SendString(err.Error())
 	}
@@ -167,6 +172,9 @@ func UpdateAutoTagHandler(c *fiber.Ctx) error {
 	err = UpdateAutoTag(userID, autoTagID, body.Name, body.SrcTagKeyMatch)
 	if errors.Is(err, ErrAutoTagNotFound) {
 		return c.Status(http.StatusNotFound).SendString(err.Error())
+	}
+	if errors.Is(err, ErrAutoTagNameExists) {
+		return c.Status(http.StatusConflict).SendString(err.Error())
 	}
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).SendString(err.Error())

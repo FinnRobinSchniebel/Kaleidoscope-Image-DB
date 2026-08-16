@@ -116,6 +116,9 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	imageSet.Image = nil
 
 	imageSet.KscopeUserId = ""
+	imageSet.AutoTags = nil
+	imageSet.Tags = nil
+	imageSet.TagRuleOverrides = nil
 
 	//set the author in case of none given to avoid issues with file path creation
 	if len(imageSet.Authors) == 0 || (imageSet.Authors[0] == "") {
@@ -123,17 +126,6 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	}
 	//add userId (done as seperate step to avoid exploits if changes are made)
 	imageSet.KscopeUserId = userId
-
-	//derive AutoTag matches from each source's own tags; a set with multiple
-	//sources can have the same AutoTag matched more than once, so AutoTag is
-	//given the running AutoTags list each time to only count it once
-	for _, src := range imageSet.Sources {
-		newTags, err := Tagger.AutoTag(userId, src.Name, src.Tags, imageSet.AutoTags)
-		if err != nil {
-			return nil, "", fmt.Errorf("auto-tagging: %w", err)
-		}
-		imageSet.AutoTags = append(imageSet.AutoTags, newTags...)
-	}
 
 	//check media count first to avoid empty imagsets in db
 	if len(media) == 0 {
@@ -174,6 +166,17 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	}()
 
 	imageSet.ID = insertResult.InsertedID.(bson.ObjectID)
+
+	//derive AutoTag matches from each source's own tags; a set with multiple
+	//sources can have the same AutoTag matched more than once, so AutoTag is
+	//given the running AutoTags list each time to only count it once
+	for _, src := range imageSet.Sources {
+		newTags, err := Tagger.AutoTag(userId, src.Name, src.Tags, imageSet.AutoTags)
+		if err != nil {
+			return nil, "", fmt.Errorf("auto-tagging: %w", err)
+		}
+		imageSet.AutoTags = append(imageSet.AutoTags, newTags...)
+	}
 
 	hashHits := make(CollisionMap)
 

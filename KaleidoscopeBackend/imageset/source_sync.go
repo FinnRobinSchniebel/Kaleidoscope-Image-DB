@@ -48,6 +48,7 @@ func ApplySourceMetadataUpdate(a *ImageSetMongo, i int, newSrc SourceInfo, check
 
 // newTags returns entries in fetched whose canonical tag isn't present in stored.
 func newTags(stored, fetched []SourceTag) []SourceTag {
+
 	existing := make(map[string]struct{}, len(stored))
 	for _, t := range stored {
 		existing[t.canonical()] = struct{}{}

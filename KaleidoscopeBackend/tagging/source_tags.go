@@ -3,7 +3,6 @@ package tagging
 import (
 	"context"
 	"regexp"
-	"sort"
 	"strings"
 
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
@@ -24,7 +23,7 @@ type SourceTagDoc struct {
 }
 
 func normalizeTag(tag string) string {
-	return strings.ToLower(strings.TrimSpace(tag))
+	return imageset.NormalizeTagText(tag)
 }
 
 // sourceTagKey must be used everywhere a SourceTag is written or looked up;
@@ -48,21 +47,31 @@ func EnsureIndexes(ctx context.Context) error {
 		return err
 	}
 	_, err := AutoTagsDB.Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "name", Value: 1}}},
+		{
+			Keys:    bson.D{{Key: "user_id", Value: 1}, {Key: "name", Value: 1}},
+			Options: options.Index().SetUnique(true).SetCollation(&options.Collation{Locale: "en", Strength: 2}),
+		},
 		{Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "src_tag_key_match", Value: 1}}},
 	})
 	return err
 }
 
-// recordSourceTagUsage upserts one SourceTagDoc per tag, incrementing Count.
+// recordSourceTagUsage upserts one SourceTagDoc per unique tag, incrementing
+// Count once each even if sourceTags repeats the same tag.
 func recordSourceTagUsage(userID bson.ObjectID, source string, sourceTags []imageset.SourceTag) error {
 	if len(sourceTags) == 0 {
 		return nil
 	}
+	seen := make(map[string]struct{}, len(sourceTags))
 	models := make([]mongo.WriteModel, 0, len(sourceTags))
 	for _, t := range sourceTags {
+		key := sourceTagKey(userID, source, t.Default)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
 		models = append(models, mongo.NewUpdateOneModel().
-			SetFilter(bson.M{"_id": sourceTagKey(userID, source, t.Default)}).
+			SetFilter(bson.M{"_id": key}).
 			SetUpdate(bson.M{
 				"$inc":         bson.M{"count": 1},
 				"$setOnInsert": bson.M{"userId": userID, "source": source, "tag": t},
@@ -116,7 +125,12 @@ func SearchSourceTags(userID bson.ObjectID, source, lang, prefix string, limit i
 		filter["source"] = source
 	}
 
-	cursor, err := SourceTagsDB.Find(context.Background(), filter)
+	opts := options.Find().SetSort(bson.D{{Key: "count", Value: -1}})
+	if limit > 0 {
+		opts.SetLimit(int64(limit))
+	}
+
+	cursor, err := SourceTagsDB.Find(context.Background(), filter, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -126,22 +140,20 @@ func SearchSourceTags(userID bson.ObjectID, source, lang, prefix string, limit i
 	if err := cursor.All(context.Background(), &results); err != nil {
 		return nil, err
 	}
-
-	sort.Slice(results, func(i, j int) bool { return results[i].Count > results[j].Count })
-	if len(results) > limit {
-		results = results[:limit]
-	}
 	return results, nil
 }
 
 // sourceTagsByKey looks up SourceTagDocs by _id (their Key), keyed by the
-// same Key in the result map.
-func sourceTagsByKey(keys []string) (map[string]SourceTagDoc, error) {
+// same Key in the result map. Scoped to userID even though the key already
+// encodes its owner, so a key string of unknown provenance (e.g. a client-
+// supplied AutoTag.SrcTagKeyMatch entry) can never resolve another user's
+// SourceTagDoc - it simply comes back absent, same as an unknown key.
+func sourceTagsByKey(userID bson.ObjectID, keys []string) (map[string]SourceTagDoc, error) {
 	result := make(map[string]SourceTagDoc, len(keys))
 	if len(keys) == 0 {
 		return result, nil
 	}
-	cursor, err := SourceTagsDB.Find(context.Background(), bson.M{"_id": bson.M{"$in": keys}})
+	cursor, err := SourceTagsDB.Find(context.Background(), bson.M{"_id": bson.M{"$in": keys}, "userId": userID})
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +180,10 @@ func ListSourceTags(userID bson.ObjectID, source, cursor string, limit int) ([]S
 		filter["tag.default"] = bson.M{"$gt": cursor}
 	}
 
-	opts := options.Find().SetSort(bson.D{{Key: "tag.default", Value: 1}}).SetLimit(int64(limit))
+	opts := options.Find().SetSort(bson.D{{Key: "tag.default", Value: 1}})
+	if limit > 0 {
+		opts.SetLimit(int64(limit))
+	}
 	findCursor, err := SourceTagsDB.Find(context.Background(), filter, opts)
 	if err != nil {
 		return nil, err

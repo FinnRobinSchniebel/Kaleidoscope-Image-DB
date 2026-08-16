@@ -20,7 +20,13 @@ type SourceTag struct {
 // canonical is the tag's translation-independent identity, used to detect
 // whether two SourceTags refer to the same underlying tag.
 func (t SourceTag) canonical() string {
-	return t.Default
+	return NormalizeTagText(t.Default)
+}
+
+// NormalizeTagText is the shared tag-identity transform (lowercase, trimmed)
+// so casing/whitespace differences don't produce distinct identities.
+func NormalizeTagText(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 type SourceInfo struct {

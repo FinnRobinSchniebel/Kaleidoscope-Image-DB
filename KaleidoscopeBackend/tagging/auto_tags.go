@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
@@ -19,6 +18,7 @@ import (
 var AutoTagsDB *mongo.Collection
 
 var ErrAutoTagNotFound = errors.New("auto tag not found")
+var ErrAutoTagNameExists = errors.New("auto tag name already exists")
 
 // AutoTagDoc is one AutoTag, one document per tag (mirrors SourceTagDoc).
 type AutoTagDoc struct {
@@ -50,6 +50,9 @@ type AutoTagSummary struct {
 func CreateAutoTag(userID bson.ObjectID, name string, srcTagKeyMatch []string) (bson.ObjectID, error) {
 	doc := AutoTagDoc{ID: bson.NewObjectID(), UserID: userID, Name: name, SrcTagKeyMatch: srcTagKeyMatch}
 	if _, err := AutoTagsDB.InsertOne(context.Background(), doc); err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return bson.ObjectID{}, ErrAutoTagNameExists
+		}
 		return bson.ObjectID{}, fmt.Errorf("creating auto tag: %w", err)
 	}
 
@@ -81,6 +84,9 @@ func UpdateAutoTag(userID, autoTagID bson.ObjectID, name *string, srcTagKeyMatch
 	}
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return ErrAutoTagNotFound
+	}
+	if mongo.IsDuplicateKeyError(err) {
+		return ErrAutoTagNameExists
 	}
 	if err != nil {
 		return fmt.Errorf("updating auto tag: %w", err)
@@ -122,7 +128,10 @@ func ListAutoTagSummaries(userID bson.ObjectID, prefix string, limit int) ([]Aut
 	if prefix != "" {
 		filter["name"] = bson.M{"$regex": "^" + regexp.QuoteMeta(strings.TrimSpace(prefix)), "$options": "i"}
 	}
-	opts := options.Find().SetProjection(bson.M{"name": 1, "count": 1})
+	opts := options.Find().SetProjection(bson.M{"name": 1, "count": 1}).SetSort(bson.D{{Key: "count", Value: -1}})
+	if limit > 0 {
+		opts.SetLimit(int64(limit))
+	}
 
 	cursor, err := AutoTagsDB.Find(context.Background(), filter, opts)
 	if err != nil {
@@ -133,11 +142,6 @@ func ListAutoTagSummaries(userID bson.ObjectID, prefix string, limit int) ([]Aut
 	var results []AutoTagSummary
 	if err := cursor.All(context.Background(), &results); err != nil {
 		return nil, fmt.Errorf("listing auto tags: %w", err)
-	}
-
-	sort.Slice(results, func(i, j int) bool { return results[i].Count > results[j].Count })
-	if limit > 0 && len(results) > limit {
-		results = results[:limit]
 	}
 	return results, nil
 }
@@ -184,7 +188,7 @@ func ListAutoTags(userID bson.ObjectID) ([]AutoTagWithMatches, error) {
 	for _, d := range docs {
 		allKeys = append(allKeys, d.SrcTagKeyMatch...)
 	}
-	tagsByKey, err := sourceTagsByKey(allKeys)
+	tagsByKey, err := sourceTagsByKey(userID, allKeys)
 	if err != nil {
 		return nil, fmt.Errorf("resolving auto tag matches: %w", err)
 	}
@@ -243,21 +247,21 @@ func deltasFor(ids []bson.ObjectID, delta int) map[bson.ObjectID]int {
 // additions/removals in one bulk write.
 func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldSrcTagKeyMatch, newSrcTagKeyMatch []string) error {
 	touchedKeys := union(oldSrcTagKeyMatch, newSrcTagKeyMatch)
-	touchedTags, err := sourceTagsByKey(touchedKeys)
+	touchedTags, err := sourceTagsByKey(userID, touchedKeys)
 	if err != nil {
 		return err
 	}
-	candidateDefaults := make([]string, 0, len(touchedTags))
+
+	// case/whitespace-insensitive: normalizeTag treats those as the same tag
+	orClauses := bson.A{bson.M{"autotags": autoTagID}}
 	for _, t := range touchedTags {
-		candidateDefaults = append(candidateDefaults, t.Tag.Default)
+		pattern := "^" + regexp.QuoteMeta(strings.TrimSpace(t.Tag.Default)) + "$"
+		orClauses = append(orClauses, bson.M{"sources.tags.default": bson.M{"$regex": pattern, "$options": "i"}})
 	}
 
 	filter := bson.M{
 		"kscope_userid": userID.Hex(),
-		"$or": bson.A{
-			bson.M{"autotags": autoTagID},
-			bson.M{"sources.tags.default": bson.M{"$in": candidateDefaults}},
-		},
+		"$or":           orClauses,
 	}
 	cursor, err := imageset.Collection.Find(context.Background(), filter)
 	if err != nil {
