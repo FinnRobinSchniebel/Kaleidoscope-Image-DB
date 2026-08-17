@@ -2,6 +2,7 @@ package tagging
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -141,6 +142,90 @@ func SearchSourceTags(userID bson.ObjectID, source, lang, prefix string, limit i
 		return nil, err
 	}
 	return results, nil
+}
+
+// reconcileTranslation resolves one language's value against what's
+// already known, and reports whether fetched should be pushed as an
+// update. Adding a second language field later means one more call to
+// this plus one more field copy in ReconcileTranslations - this decision
+// logic itself doesn't change.
+func reconcileTranslation(fetched, known string) (resolved string, needsUpdate bool) {
+	switch {
+	case fetched == "":
+		return known, false
+	case fetched == known:
+		return fetched, false
+	default:
+		return fetched, true
+	}
+}
+
+// ReconcileTranslations resolves every fetched tag's EN against the
+// sourcetags system's current record: pulls in an already-known
+// translation the source didn't send, or - when the source's value
+// differs - pushes it to SourceTagsDB and every image set carrying the
+// tag (this sync's own set included, no exclusion needed). Returns
+// fetched with EN replaced by the resolved value, safe to store directly.
+// Never touches Count or AutoTags.
+func ReconcileTranslations(userID, sourceName string, fetched []imageset.SourceTag) ([]imageset.SourceTag, error) {
+	if len(fetched) == 0 {
+		return fetched, nil
+	}
+	uid, err := bson.ObjectIDFromHex(userID)
+	if err != nil {
+		return nil, fmt.Errorf("parsing user id: %w", err)
+	}
+
+	keys := make([]string, len(fetched))
+	for i, t := range fetched {
+		keys[i] = sourceTagKey(uid, sourceName, t.Default)
+	}
+	known, err := sourceTagsByKey(uid, keys)
+	if err != nil {
+		return nil, fmt.Errorf("looking up known translations: %w", err)
+	}
+
+	resolved := make([]imageset.SourceTag, len(fetched))
+	var toUpdate []imageset.SourceTag
+	for i, t := range fetched {
+		resolvedEN, needsUpdate := reconcileTranslation(t.EN, known[keys[i]].Tag.EN)
+		resolved[i] = t
+		resolved[i].EN = resolvedEN
+		if needsUpdate {
+			toUpdate = append(toUpdate, resolved[i])
+		}
+	}
+
+	if len(toUpdate) > 0 {
+		if err := updateSourceTagTranslation(uid, sourceName, toUpdate); err != nil {
+			return nil, fmt.Errorf("updating source tag translation: %w", err)
+		}
+		if err := imageset.UpdateTagTranslations(userID, sourceName, toUpdate); err != nil {
+			return nil, fmt.Errorf("propagating source tag translation: %w", err)
+		}
+	}
+	return resolved, nil
+}
+
+// updateSourceTagTranslation sets tag.en where it differs from the given value; never touches Count.
+func updateSourceTagTranslation(userID bson.ObjectID, source string, sourceTags []imageset.SourceTag) error {
+	seen := make(map[string]struct{}, len(sourceTags))
+	models := make([]mongo.WriteModel, 0, len(sourceTags))
+	for _, t := range sourceTags {
+		key := sourceTagKey(userID, source, t.Default)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		models = append(models, mongo.NewUpdateOneModel().
+			SetFilter(bson.M{"_id": key, "tag.en": bson.M{"$ne": t.EN}}).
+			SetUpdate(bson.M{"$set": bson.M{"tag.en": t.EN}}))
+	}
+	if len(models) == 0 {
+		return nil
+	}
+	_, err := SourceTagsDB.BulkWrite(context.Background(), models)
+	return err
 }
 
 // sourceTagsByKey looks up SourceTagDocs by _id (their Key), keyed by the

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -23,6 +24,45 @@ func EnsureIndexes(ctx context.Context) error {
 		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "sources.tags.default", Value: 1}}},
 		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "autotags", Value: 1}}},
 	})
+	return err
+}
+
+// UpdateImageSet overwrites the stored document with a's current contents.
+func UpdateImageSet(a *ImageSetMongo) error {
+	result, err := Collection.UpdateByID(context.Background(), a.ID, bson.M{"$set": a})
+	if err != nil {
+		return fmt.Errorf("updating image set: %w", err)
+	}
+	if result.MatchedCount == 0 {
+		return errors.New("update matched no image set")
+	}
+	return nil
+}
+
+// UpdateTagTranslations applies EN to every image set (userID's own) with a
+// source named sourceName carrying a tag matching each entry's Default
+// (case/whitespace-insensitive, same identity NormalizeTagText defines),
+// wherever the stored EN currently differs. One BulkWrite for the batch.
+func UpdateTagTranslations(userID, sourceName string, tags []SourceTag) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	models := make([]mongo.WriteModel, 0, len(tags))
+	for _, t := range tags {
+		pattern := "^" + regexp.QuoteMeta(strings.TrimSpace(t.Default)) + "$"
+		matchesTag := bson.M{"default": bson.M{"$regex": pattern, "$options": "i"}, "en": bson.M{"$ne": t.EN}}
+		filter := bson.M{
+			"kscope_userid": userID,
+			"sources":       bson.M{"$elemMatch": bson.M{"name": sourceName, "tags": bson.M{"$elemMatch": matchesTag}}},
+		}
+		update := bson.M{"$set": bson.M{"sources.$[src].tags.$[tag].en": t.EN}}
+		arrayFilters := []any{
+			bson.M{"src.name": sourceName},
+			bson.M{"tag.default": bson.M{"$regex": pattern, "$options": "i"}, "tag.en": bson.M{"$ne": t.EN}},
+		}
+		models = append(models, mongo.NewUpdateManyModel().SetFilter(filter).SetUpdate(update).SetArrayFilters(arrayFilters))
+	}
+	_, err := Collection.BulkWrite(context.Background(), models)
 	return err
 }
 

@@ -1,12 +1,8 @@
 package imageset
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"time"
-
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // ApplySourceMetadataUpdate updates source i's title, description and tags from
@@ -28,7 +24,25 @@ func ApplySourceMetadataUpdate(a *ImageSetMongo, i int, newSrc SourceInfo, check
 		UpdateSourceDescription(a, i, newSrc.Description)
 	}
 
-	if added := newTags(old.Tags, newSrc.Tags); len(added) > 0 {
+	reconciled, err := Tagger.ReconcileTranslations(userId, newSrc.Name, newSrc.Tags)
+	if err != nil {
+		return fmt.Errorf("reconciling translations: %w", err)
+	}
+
+	existingIdx := make(map[string]int, len(old.Tags))
+	for idx, t := range old.Tags {
+		existingIdx[t.canonical()] = idx
+	}
+	var added []SourceTag
+	for _, t := range reconciled {
+		if idx, ok := existingIdx[t.canonical()]; ok {
+			a.Sources[i].Tags[idx].EN = t.EN
+		} else {
+			added = append(added, t)
+		}
+	}
+
+	if len(added) > 0 {
 		a.Sources[i].Tags = append(a.Sources[i].Tags, added...)
 		newAutoTags, err := Tagger.AutoTag(userId, newSrc.Name, added, a.AutoTags)
 		if err != nil {
@@ -43,23 +57,7 @@ func ApplySourceMetadataUpdate(a *ImageSetMongo, i int, newSrc SourceInfo, check
 	a.Sources[i].PendingImageChange = false
 	a.Sources[i].SourceMissing = false
 
-	return SaveImageSet(a)
-}
-
-// newTags returns entries in fetched whose canonical tag isn't present in stored.
-func newTags(stored, fetched []SourceTag) []SourceTag {
-
-	existing := make(map[string]struct{}, len(stored))
-	for _, t := range stored {
-		existing[t.canonical()] = struct{}{}
-	}
-	added := make([]SourceTag, 0)
-	for _, t := range fetched {
-		if _, ok := existing[t.canonical()]; !ok {
-			added = append(added, t)
-		}
-	}
-	return added
+	return UpdateImageSet(a)
 }
 
 // MarkSourcePendingImageChange records that source i's images no longer match
@@ -72,7 +70,7 @@ func MarkSourcePendingImageChange(a *ImageSetMongo, i int, sourceDate, checkedAt
 	a.Sources[i].LastImageUpdate = sourceDate
 	a.Sources[i].Date = sourceDate
 	a.Sources[i].LastChecked = checkedAt
-	return SaveImageSet(a)
+	return UpdateImageSet(a)
 }
 
 // MarkSourceMissing records that source i could no longer be fetched. Any prior
@@ -82,17 +80,5 @@ func MarkSourceMissing(a *ImageSetMongo, i int, checkedAt time.Time) error {
 	a.Sources[i].SourceMissing = true
 	a.Sources[i].PendingImageChange = false
 	a.Sources[i].LastChecked = checkedAt
-	return SaveImageSet(a)
-}
-
-// SaveImageSet overwrites the stored document with a's current contents.
-func SaveImageSet(a *ImageSetMongo) error {
-	result, err := Collection.UpdateByID(context.Background(), a.ID, bson.M{"$set": a})
-	if err != nil {
-		return fmt.Errorf("updating image set: %w", err)
-	}
-	if result.MatchedCount == 0 {
-		return errors.New("update matched no image set")
-	}
-	return nil
+	return UpdateImageSet(a)
 }

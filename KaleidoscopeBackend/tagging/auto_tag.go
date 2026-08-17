@@ -99,3 +99,7 @@ func (AutoTagFunc) AutoTag(userID, sourceName string, sourceTags []imageset.Sour
 func (AutoTagFunc) RecordDeletion(userID string, sources []imageset.SourceInfo, autoTags []bson.ObjectID) error {
 	return RecordDeletion(userID, sources, autoTags)
 }
+
+func (AutoTagFunc) ReconcileTranslations(userID, sourceName string, sourceTags []imageset.SourceTag) ([]imageset.SourceTag, error) {
+	return ReconcileTranslations(userID, sourceName, sourceTags)
+}

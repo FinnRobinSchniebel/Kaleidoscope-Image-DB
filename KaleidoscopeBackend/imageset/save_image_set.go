@@ -27,6 +27,8 @@ type AutoTagger interface {
 	// RecordDeletion undoes usage counts, for sources' tags and for autoTags,
 	// recorded when the now-deleted set was created/synced.
 	RecordDeletion(userID string, sources []SourceInfo, autoTags []bson.ObjectID) error
+	// ReconcileTranslations resolves fetched tags' EN against the sourcetags system and propagates any update; never touches Count or AutoTags.
+	ReconcileTranslations(userID, sourceName string, sourceTags []SourceTag) ([]SourceTag, error)
 }
 
 var Tagger AutoTagger
@@ -170,8 +172,14 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	//derive AutoTag matches from each source's own tags; a set with multiple
 	//sources can have the same AutoTag matched more than once, so AutoTag is
 	//given the running AutoTags list each time to only count it once
-	for _, src := range imageSet.Sources {
-		newTags, err := Tagger.AutoTag(userId, src.Name, src.Tags, imageSet.AutoTags)
+	for idx, src := range imageSet.Sources {
+		reconciled, err := Tagger.ReconcileTranslations(userId, src.Name, src.Tags)
+		if err != nil {
+			return nil, "", fmt.Errorf("reconciling translations: %w", err)
+		}
+		imageSet.Sources[idx].Tags = reconciled
+
+		newTags, err := Tagger.AutoTag(userId, src.Name, reconciled, imageSet.AutoTags)
 		if err != nil {
 			return nil, "", fmt.Errorf("auto-tagging: %w", err)
 		}
