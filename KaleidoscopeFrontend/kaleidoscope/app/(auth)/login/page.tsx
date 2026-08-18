@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-import { use, useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { LoginUser, NewSessionToken, TestLogin } from "@/components/api/authapi"
 import LoginAlert from "./loginalert"
 import { redirect, useSearchParams } from "next/navigation";
@@ -16,12 +16,9 @@ import Link from "next/link";
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-export default function Login() {
+function LoginForm() {
 
   const router = useRouter()
-  const params = useSearchParams()
-
-
   const searchParams = useSearchParams()
 
   const [username, setUsername] = useState('');
@@ -119,4 +116,12 @@ export default function Login() {
       </CardFooter>
     </Card>
   );
+}
+
+export default function Login() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  )
 }

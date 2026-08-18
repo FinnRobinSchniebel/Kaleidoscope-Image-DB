@@ -18,13 +18,10 @@ import { Button } from '@/components/ui/button'
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
-import { searchAPI, SearchRequest, SetData } from '@/components/api/search-api'
-import { protectedAPI } from '@/components/api/jwt_apis/protected-api-client'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { Form, FormField } from '@/components/ui/form'
 import { PopDownGroup } from './SearchDropdown'
-import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider'
 
 
 export interface SearchInfo {
@@ -43,7 +40,6 @@ type Props = {
 export default function SearchBar(props: Props) {
 
   //const url = usePathname()
-  const protectedAPI = useProtected()
   const searchParams = useSearchParams()
   const router = useRouter()
 
@@ -67,18 +63,7 @@ export default function SearchBar(props: Props) {
   const SearchCaller = async () => {
     const SearchValues = form.getValues();
 
-
-    //get form data for equest
-    const request: SearchRequest = {
-      pageCount: 12,
-      pageNumber: 0,
-      protectedApiRef: protectedAPI
-    }
-
-    //fetch data
-    //var result = await searchAPI(request)
-
-    //pass search results to parent 
+    //pass search results to parent
     props.setSearchquery(SearchValues)    
 
     //set session storage to hold results
