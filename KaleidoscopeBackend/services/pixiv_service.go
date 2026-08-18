@@ -71,7 +71,7 @@ func openPixivSession(userId string) (*PixivSession, error) {
 			return fmt.Errorf("pixiv requires an APP refresh token (Key1)")
 		}
 
-		app, err := pixiv.NewApp(creds.Key1)
+		app, err := newPixivApp(creds.Key1)
 		if err != nil {
 			return fmt.Errorf("pixiv APP API: %w", err)
 		}
@@ -84,6 +84,17 @@ func openPixivSession(userId string) (*PixivSession, error) {
 		return nil, err
 	}
 	return session, nil
+}
+
+// newPixivApp builds an App API client with the project's Accept-Language
+// header set, so Pixiv returns translated tag names (Tag.TranslatedName).
+func newPixivApp(refreshToken string) (*pixiv.AppPixivAPI, error) {
+	app, err := pixiv.NewApp(refreshToken)
+	if err != nil {
+		return nil, err
+	}
+	app.SetAcceptLanguage(pixivAcceptLanguage)
+	return app, nil
 }
 
 // ---- ServiceProvider implementation ----
@@ -101,7 +112,7 @@ func (p *PixivProvider) TestCredentials(userId string, creds ExternalApiKeys) er
 	if creds.Key1 == "" {
 		return fmt.Errorf("pixiv requires a refresh token")
 	}
-	app, err := pixiv.NewApp(creds.Key1)
+	app, err := newPixivApp(creds.Key1)
 	if err != nil {
 		return err
 	}
