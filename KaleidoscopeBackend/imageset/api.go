@@ -15,10 +15,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
-// imageSetErrorResponse maps a GetFromID failure to the HTTP status and
+// ImageSetErrorResponse maps a GetFromID failure to the HTTP status and
 // client-safe message describing it. Unrecognized errors map to 500; the
 // underlying error is logged by GetFromID, not returned to the client.
-func imageSetErrorResponse(err error) (int, string) {
+func ImageSetErrorResponse(err error) (int, string) {
 	switch {
 	case errors.Is(err, bson.ErrInvalidHex):
 		return fiber.StatusBadRequest, "invalid image set id"
@@ -46,7 +46,7 @@ func GetThumbnail(c *fiber.Ctx) error {
 
 	iset, err := GetFromID(userID, IsetID)
 	if err != nil {
-		status, msg := imageSetErrorResponse(err)
+		status, msg := ImageSetErrorResponse(err)
 		return c.Status(status).SendString(msg)
 	}
 
@@ -109,7 +109,7 @@ func GetImageSetById(c *fiber.Ctx) error {
 	//check if user can access the images and remove any images that would not be valid
 	iSets, err := GetFromID(userID, paramid...)
 	if err != nil {
-		status, msg := imageSetErrorResponse(err)
+		status, msg := ImageSetErrorResponse(err)
 		return c.Status(status).SendString(msg)
 	}
 
@@ -203,7 +203,7 @@ func DeleteImageSets(c *fiber.Ctx) error {
 		//check if user can access the images and remove any images that would not be valid
 		iSets, err := GetFromID(userID, paramid...)
 		if err != nil {
-			status, msg := imageSetErrorResponse(err)
+			status, msg := ImageSetErrorResponse(err)
 			return c.Status(status).SendString(msg)
 		}
 		if len(iSets) != len(paramid) {
@@ -276,7 +276,7 @@ func GetImageInfo(c *fiber.Ctx) error {
 	for _, idStr := range requestParams.IDs {
 		oid, err := bson.ObjectIDFromHex(idStr)
 		if err != nil {
-			status, msg := imageSetErrorResponse(fmt.Errorf("%w: %q", bson.ErrInvalidHex, idStr))
+			status, msg := ImageSetErrorResponse(fmt.Errorf("%w: %q", bson.ErrInvalidHex, idStr))
 			return c.Status(status).SendString(msg)
 		}
 		objectIDs = append(objectIDs, oid)
@@ -355,7 +355,7 @@ func GetImageFromID(c *fiber.Ctx) error {
 	//user is validated in request
 	iset, err := GetFromID(userID, requestParams.ImageSetId)
 	if err != nil {
-		status, msg := imageSetErrorResponse(err)
+		status, msg := ImageSetErrorResponse(err)
 		return c.Status(status).SendString(msg)
 	}
 

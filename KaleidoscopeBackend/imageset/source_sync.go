@@ -24,31 +24,8 @@ func ApplySourceMetadataUpdate(a *ImageSetMongo, i int, newSrc SourceInfo, check
 		UpdateSourceDescription(a, i, newSrc.Description)
 	}
 
-	reconciled, err := Tagger.ReconcileTranslations(userId, newSrc.Name, newSrc.Tags)
-	if err != nil {
-		return fmt.Errorf("reconciling translations: %w", err)
-	}
-
-	existingIdx := make(map[string]int, len(old.Tags))
-	for idx, t := range old.Tags {
-		existingIdx[t.canonical()] = idx
-	}
-	var added []SourceTag
-	for _, t := range reconciled {
-		if idx, ok := existingIdx[t.canonical()]; ok {
-			a.Sources[i].Tags[idx].EN = t.EN
-		} else {
-			added = append(added, t)
-		}
-	}
-
-	if len(added) > 0 {
-		a.Sources[i].Tags = append(a.Sources[i].Tags, added...)
-		newAutoTags, err := Tagger.AutoTag(userId, newSrc.Name, added, a.AutoTags)
-		if err != nil {
-			return fmt.Errorf("auto-tagging: %w", err)
-		}
-		a.AutoTags = append(a.AutoTags, newAutoTags...)
+	if err := Tagger.ProcessSourceTags(userId, a, i, newSrc.Tags); err != nil {
+		return fmt.Errorf("processing source tags: %w", err)
 	}
 
 	a.Sources[i].Date = newSrc.Date

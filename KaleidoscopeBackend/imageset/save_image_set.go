@@ -20,15 +20,14 @@ import (
 // AutoTagger avoids an import cycle: tagging needs imageset's types, so this
 // interface is owned here and implemented by tagging.AutoTagFunc in main.go.
 type AutoTagger interface {
-	// AutoTag returns the subset of matched AutoTags not already present in
-	// currentAutoTags, incrementing each returned AutoTag's usage count
-	// exactly once regardless of how many of sourceTags matched it.
-	AutoTag(userID, sourceName string, sourceTags []SourceTag, currentAutoTags []bson.ObjectID) ([]bson.ObjectID, error)
+	// ProcessSourceTags mutates set in place: merges fetched into
+	// Sources[sourceIdx].Tags, and updates AutoTags/Tags for tags new to
+	// the set. Leave Sources[sourceIdx].Tags empty first if sourceIdx has
+	// never been recorded before, so every fetched tag counts as new.
+	ProcessSourceTags(userID string, set *ImageSetMongo, sourceIdx int, fetched []SourceTag) error
 	// RecordDeletion undoes usage counts, for sources' tags and for autoTags,
 	// recorded when the now-deleted set was created/synced.
 	RecordDeletion(userID string, sources []SourceInfo, autoTags []bson.ObjectID) error
-	// ReconcileTranslations resolves fetched tags' EN against the sourcetags system and propagates any update; never touches Count or AutoTags.
-	ReconcileTranslations(userID, sourceName string, sourceTags []SourceTag) ([]SourceTag, error)
 }
 
 var Tagger AutoTagger
@@ -169,21 +168,12 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 
 	imageSet.ID = insertResult.InsertedID.(bson.ObjectID)
 
-	//derive AutoTag matches from each source's own tags; a set with multiple
-	//sources can have the same AutoTag matched more than once, so AutoTag is
-	//given the running AutoTags list each time to only count it once
 	for idx, src := range imageSet.Sources {
-		reconciled, err := Tagger.ReconcileTranslations(userId, src.Name, src.Tags)
-		if err != nil {
-			return nil, "", fmt.Errorf("reconciling translations: %w", err)
+		fetched := src.Tags
+		imageSet.Sources[idx].Tags = nil // nothing recorded for this source yet - every fetched tag is new
+		if err := Tagger.ProcessSourceTags(userId, imageSet, idx, fetched); err != nil {
+			return nil, "", fmt.Errorf("processing source tags: %w", err)
 		}
-		imageSet.Sources[idx].Tags = reconciled
-
-		newTags, err := Tagger.AutoTag(userId, src.Name, reconciled, imageSet.AutoTags)
-		if err != nil {
-			return nil, "", fmt.Errorf("auto-tagging: %w", err)
-		}
-		imageSet.AutoTags = append(imageSet.AutoTags, newTags...)
 	}
 
 	hashHits := make(CollisionMap)

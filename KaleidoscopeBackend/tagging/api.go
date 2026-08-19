@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
+
 	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -200,4 +202,39 @@ func DeleteAutoTagHandler(c *fiber.Ctx) error {
 		return c.Status(http.StatusInternalServerError).SendString(err.Error())
 	}
 	return c.SendStatus(http.StatusOK)
+}
+
+type setTagOverridesRequest struct {
+	IDs       []string `json:"ids"`
+	Overrides []string `json:"overrides"`
+}
+
+// PATCH /api/imagesets/tagoverrides
+func SetTagOverridesHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	var body setTagOverridesRequest
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(http.StatusBadRequest).SendString(err.Error())
+	}
+	if len(body.IDs) == 0 {
+		return c.Status(http.StatusBadRequest).SendString("ids is required")
+	}
+	if len(body.Overrides) == 0 {
+		return c.Status(http.StatusBadRequest).SendString("overrides is required")
+	}
+	for _, entry := range body.Overrides {
+		if _, _, ok := ParseTagRuleOverrideEntry(entry); !ok {
+			return c.Status(http.StatusBadRequest).SendString("invalid override entry: " + entry)
+		}
+	}
+
+	updated, err := SetTagOverrides(userID.Hex(), body.IDs, body.Overrides)
+	if err != nil {
+		status, msg := imageset.ImageSetErrorResponse(err)
+		return c.Status(status).SendString(msg)
+	}
+	return c.JSON(fiber.Map{"updated": updated})
 }

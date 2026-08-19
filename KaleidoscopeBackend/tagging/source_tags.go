@@ -160,27 +160,19 @@ func reconcileTranslation(fetched, known string) (resolved string, needsUpdate b
 	}
 }
 
-// ReconcileTranslations resolves every fetched tag's EN against the
-// sourcetags system's current record: pulls in an already-known
-// translation the source didn't send, or - when the source's value
-// differs - pushes it to SourceTagsDB and every image set carrying the
-// tag (this sync's own set included, no exclusion needed). Returns
-// fetched with EN replaced by the resolved value, safe to store directly.
-// Never touches Count or AutoTags.
-func ReconcileTranslations(userID, sourceName string, fetched []imageset.SourceTag) ([]imageset.SourceTag, error) {
+// reconcileTranslations pushes a changed EN to SourceTagsDB and every
+// image set carrying the tag. Returns fetched with EN replaced by the
+// resolved value.
+func reconcileTranslations(userID bson.ObjectID, sourceName string, fetched []imageset.SourceTag) ([]imageset.SourceTag, error) {
 	if len(fetched) == 0 {
 		return fetched, nil
-	}
-	uid, err := bson.ObjectIDFromHex(userID)
-	if err != nil {
-		return nil, fmt.Errorf("parsing user id: %w", err)
 	}
 
 	keys := make([]string, len(fetched))
 	for i, t := range fetched {
-		keys[i] = sourceTagKey(uid, sourceName, t.Default)
+		keys[i] = sourceTagKey(userID, sourceName, t.Default)
 	}
-	known, err := sourceTagsByKey(uid, keys)
+	known, err := sourceTagsByKey(userID, keys)
 	if err != nil {
 		return nil, fmt.Errorf("looking up known translations: %w", err)
 	}
@@ -197,14 +189,44 @@ func ReconcileTranslations(userID, sourceName string, fetched []imageset.SourceT
 	}
 
 	if len(toUpdate) > 0 {
-		if err := updateSourceTagTranslation(uid, sourceName, toUpdate); err != nil {
+		if err := updateSourceTagTranslation(userID, sourceName, toUpdate); err != nil {
 			return nil, fmt.Errorf("updating source tag translation: %w", err)
 		}
-		if err := imageset.UpdateTagTranslations(userID, sourceName, toUpdate); err != nil {
+		if err := imageset.UpdateTagTranslations(userID.Hex(), sourceName, toUpdate); err != nil {
 			return nil, fmt.Errorf("propagating source tag translation: %w", err)
 		}
 	}
 	return resolved, nil
+}
+
+// reconcileSourceTags merges fetched's reconciled translations into
+// src.Tags and records usage for tags new to src.Tags as it stood before
+// the call. Returns just the newly-added tags.
+func reconcileSourceTags(userID bson.ObjectID, src *imageset.SourceInfo, fetched []imageset.SourceTag) (added []imageset.SourceTag, err error) {
+	reconciled, err := reconcileTranslations(userID, src.Name, fetched)
+	if err != nil {
+		return nil, fmt.Errorf("reconciling translations: %w", err)
+	}
+
+	existingIdx := make(map[string]int, len(src.Tags))
+	for idx, t := range src.Tags {
+		existingIdx[imageset.NormalizeTagText(t.Default)] = idx
+	}
+	for _, t := range reconciled {
+		if idx, ok := existingIdx[imageset.NormalizeTagText(t.Default)]; ok {
+			src.Tags[idx].EN = t.EN
+		} else {
+			added = append(added, t)
+		}
+	}
+
+	if len(added) > 0 {
+		src.Tags = append(src.Tags, added...)
+		if err := recordSourceTagUsage(userID, src.Name, added); err != nil {
+			return nil, fmt.Errorf("recording source tag usage: %w", err)
+		}
+	}
+	return added, nil
 }
 
 // updateSourceTagTranslation sets tag.en where it differs from the given value; never touches Count.

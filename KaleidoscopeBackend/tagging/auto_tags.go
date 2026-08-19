@@ -284,15 +284,19 @@ func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldSrcTagKeyMatch, newS
 			continue
 		}
 		op := "$pull"
+		newAutoTags := slices.Clone(set.AutoTags)
 		if shouldHave {
 			op = "$addToSet"
+			newAutoTags = append(newAutoTags, autoTagID)
 			delta++
 		} else {
+			newAutoTags = slices.DeleteFunc(newAutoTags, func(id bson.ObjectID) bool { return id == autoTagID })
 			delta--
 		}
+		tags := ApplyTagRuleOverrides(newAutoTags, set.TagRuleOverrides)
 		models = append(models, mongo.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": set.ID}).
-			SetUpdate(bson.M{op: bson.M{"autotags": autoTagID}}))
+			SetUpdate(bson.M{op: bson.M{"autotags": autoTagID}, "$set": bson.M{"tags": tags}}))
 	}
 	if len(models) == 0 {
 		return nil
