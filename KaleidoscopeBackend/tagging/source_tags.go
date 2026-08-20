@@ -47,14 +47,7 @@ func EnsureIndexes(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	_, err := AutoTagsDB.Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{
-			Keys:    bson.D{{Key: "user_id", Value: 1}, {Key: "name", Value: 1}},
-			Options: options.Index().SetUnique(true).SetCollation(&options.Collation{Locale: "en", Strength: 2}),
-		},
-		{Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "src_tag_key_match", Value: 1}}},
-	})
-	return err
+	return ensureAutoTagIndexes(ctx)
 }
 
 // recordSourceTagUsage upserts one SourceTagDoc per unique tag, incrementing

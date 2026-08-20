@@ -28,6 +28,10 @@ type AutoTagger interface {
 	// RecordDeletion undoes usage counts, for sources' tags and for autoTags,
 	// recorded when the now-deleted set was created/synced.
 	RecordDeletion(userID string, sources []SourceInfo, autoTags []bson.ObjectID) error
+	// RecomputeSystemTags reconciles set's computed tags (e.g. Lost Media,
+	// Untracked) against its current Sources, mutating AutoTags/Tags in
+	// place. Does not persist set - callers own the eventual save.
+	RecomputeSystemTags(userID string, set *ImageSetMongo) error
 }
 
 var Tagger AutoTagger

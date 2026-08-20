@@ -53,9 +53,32 @@ func MarkSourcePendingImageChange(a *ImageSetMongo, i int, sourceDate, checkedAt
 // MarkSourceMissing records that source i could no longer be fetched. Any prior
 // PendingImageChange is cleared along with it: there's no source left to update
 // the images from, so an unresolved change can no longer be completed.
+// See MarkSourceRecovered for the opposite transition.
 func MarkSourceMissing(a *ImageSetMongo, i int, checkedAt time.Time) error {
+	wasMissing := a.Sources[i].SourceMissing
 	a.Sources[i].SourceMissing = true
 	a.Sources[i].PendingImageChange = false
 	a.Sources[i].LastChecked = checkedAt
+	if !wasMissing {
+		if err := Tagger.RecomputeSystemTags(a.KscopeUserId, a); err != nil {
+			return fmt.Errorf("computing system tags: %w", err)
+		}
+	}
+	return UpdateImageSet(a)
+}
+
+// MarkSourceRecovered records that source i is reachable again with nothing
+// else to report - no metadata change, no image change (those cases go
+// through ApplySourceMetadataUpdate / MarkSourcePendingImageChange instead,
+// which already clear SourceMissing themselves).
+func MarkSourceRecovered(a *ImageSetMongo, i int, checkedAt time.Time) error {
+	wasMissing := a.Sources[i].SourceMissing
+	a.Sources[i].SourceMissing = false
+	a.Sources[i].LastChecked = checkedAt
+	if wasMissing {
+		if err := Tagger.RecomputeSystemTags(a.KscopeUserId, a); err != nil {
+			return fmt.Errorf("computing system tags: %w", err)
+		}
+	}
 	return UpdateImageSet(a)
 }

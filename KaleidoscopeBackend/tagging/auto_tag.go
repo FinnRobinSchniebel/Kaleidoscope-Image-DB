@@ -31,9 +31,9 @@ func findAutoTags(userID bson.ObjectID, source string, sourceTags []imageset.Sou
 	return newlyAssigned, nil
 }
 
-// applyAutoTags matches newTags, appends new AutoTag ids to set.AutoTags,
+// autoTag matches newTags, appends new AutoTag ids to set.AutoTags,
 // and rebuilds set.Tags.
-func applyAutoTags(userID bson.ObjectID, set *imageset.ImageSetMongo, sourceName string, newTags []imageset.SourceTag) error {
+func autoTag(userID bson.ObjectID, set *imageset.ImageSetMongo, sourceName string, newTags []imageset.SourceTag) error {
 	newIDs, err := findAutoTags(userID, sourceName, newTags, set.AutoTags)
 	if err != nil {
 		return err
@@ -47,6 +47,10 @@ func applyAutoTags(userID bson.ObjectID, set *imageset.ImageSetMongo, sourceName
 }
 
 // ProcessSourceTags is the imageset.AutoTagger.ProcessSourceTags implementation.
+// It also recomputes system-computed tags (Lost Media, Untracked - see
+// system_tags.go) against set's current Sources on every call, not just
+// when fetched contains something new, so callers never need a separate
+// call to keep those in sync after a source-tag fetch.
 func ProcessSourceTags(userID string, set *imageset.ImageSetMongo, sourceIdx int, fetched []imageset.SourceTag) error {
 	uid, err := bson.ObjectIDFromHex(userID)
 	if err != nil {
@@ -57,10 +61,12 @@ func ProcessSourceTags(userID string, set *imageset.ImageSetMongo, sourceIdx int
 	if err != nil {
 		return err
 	}
-	if len(added) == 0 {
-		return nil
+	if len(added) > 0 {
+		if err := autoTag(uid, set, src.Name, added); err != nil {
+			return err
+		}
 	}
-	return applyAutoTags(uid, set, src.Name, added)
+	return RecomputeSystemTags(userID, set)
 }
 
 // matchAutoTags returns the IDs of every AutoTag whose SrcTagKeyMatch
@@ -117,4 +123,8 @@ func (AutoTagFunc) ProcessSourceTags(userID string, set *imageset.ImageSetMongo,
 
 func (AutoTagFunc) RecordDeletion(userID string, sources []imageset.SourceInfo, autoTags []bson.ObjectID) error {
 	return RecordDeletion(userID, sources, autoTags)
+}
+
+func (AutoTagFunc) RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
+	return RecomputeSystemTags(userID, set)
 }
