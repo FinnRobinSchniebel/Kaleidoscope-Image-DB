@@ -93,8 +93,9 @@ func ensureSystemAutoTags(userID bson.ObjectID, names []string) (map[string]bson
 
 // RecomputeSystemTags reconciles set's Lost Media/Untracked membership
 // against its current Sources, mutating set.AutoTags/set.Tags in place and
-// adjusting stored counts. Like ProcessSourceTags, it does not persist set -
-// callers already own the eventual UpdateImageSet/insert.
+// adjusting stored counts, then refreshes Untagged's Count. Like
+// ProcessSourceTags, it does not persist set - callers already own the
+// eventual UpdateImageSet/insert.
 func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 	uid, err := bson.ObjectIDFromHex(userID)
 	if err != nil {
@@ -126,11 +127,13 @@ func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 			deltas[id]--
 		}
 	}
-	if !changed {
-		return nil
+	if changed {
+		buildTags(set)
+		if err := adjustAutoTagCounts(uid, deltas); err != nil {
+			return err
+		}
 	}
-	buildTags(set)
-	return adjustAutoTagCounts(uid, deltas)
+	return refreshUntaggedCount(uid)
 }
 
 // RecomputeUntrackedForService re-evaluates the Untracked system tag on
@@ -192,5 +195,35 @@ func RecomputeUntrackedForService(userID, serviceName string) error {
 	if _, err := imageset.Collection.BulkWrite(context.Background(), models); err != nil {
 		return fmt.Errorf("updating untracked tag for service %q: %w", serviceName, err)
 	}
-	return adjustAutoTagCounts(uid, map[bson.ObjectID]int{untrackedID: delta})
+	if err := adjustAutoTagCounts(uid, map[bson.ObjectID]int{untrackedID: delta}); err != nil {
+		return err
+	}
+	return refreshUntaggedCount(uid)
+}
+
+// ResolveTagSearch strips the reserved Untagged id from tags, reporting whether it was present.
+func ResolveTagSearch(userID string, tags []string) ([]string, bool, error) {
+	if len(tags) == 0 {
+		return tags, false, nil
+	}
+	uid, err := bson.ObjectIDFromHex(userID)
+	if err != nil {
+		return nil, false, fmt.Errorf("parsing user id: %w", err)
+	}
+	ids, err := ensureSystemAutoTags(uid, []string{untaggedTagName})
+	if err != nil {
+		return nil, false, err
+	}
+	untaggedID := ids[untaggedTagName].Hex()
+
+	remaining := make([]string, 0, len(tags))
+	matchEmpty := false
+	for _, t := range tags {
+		if t == untaggedID {
+			matchEmpty = true
+			continue
+		}
+		remaining = append(remaining, t)
+	}
+	return remaining, matchEmpty, nil
 }

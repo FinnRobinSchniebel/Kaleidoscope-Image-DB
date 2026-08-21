@@ -73,15 +73,16 @@ func UpdateTagTranslations(userID, sourceName string, tags []SourceTag) error {
 var ErrAccessDenied = errors.New("access denied")
 
 type SearchParams struct {
-	PageCount  int      `json:"page_count" form:"page_count"`   //number of images to return
-	SkipCount  int      `json:"skip_count" form:"skip_count"`   //What page to return
-	RandomSeed string   `json:"random_seed" form:"random_seed"` //if sorting is random, this value is passed for consistent page returns
-	Tags       []string `json:"tags" bson:"tags" form:"tags"`
-	Author     []string `json:"author"`
-	FromDate   string   `json:"fromDate"`
-	ToDate     string   `json:"toDate"`
-	Title      string   `json:"title"`
-	User       string
+	PageCount      int      `json:"page_count" form:"page_count"`   //number of images to return
+	SkipCount      int      `json:"skip_count" form:"skip_count"`   //What page to return
+	RandomSeed     string   `json:"random_seed" form:"random_seed"` //if sorting is random, this value is passed for consistent page returns
+	Tags           []string `json:"tags" bson:"tags" form:"tags"`
+	MatchEmptyTags bool     `json:"-" form:"-"`
+	Author         []string `json:"author"`
+	FromDate       string   `json:"fromDate"`
+	ToDate         string   `json:"toDate"`
+	Title          string   `json:"title"`
+	User           string
 
 	//TODO: type, image count,
 }
@@ -237,7 +238,14 @@ func DeleteImageSetInDB(id bson.ObjectID) error {
 func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
 	pipeline := mongo.Pipeline{}
 
-	searchTags := bson.D{{Key: "tags", Value: bson.D{{Key: "$all", Value: params.Tags}}}}
+	tagsCond := bson.D{}
+	if params.MatchEmptyTags {
+		tagsCond = append(tagsCond, bson.E{Key: "$in", Value: bson.A{bson.A{}, nil}})
+	}
+	if len(params.Tags) > 0 {
+		tagsCond = append(tagsCond, bson.E{Key: "$all", Value: params.Tags})
+	}
+	searchTags := bson.D{{Key: "tags", Value: tagsCond}}
 	searchTitles := bson.D{{Key: "title", Value: bson.D{{"$regex", params.Title}, {"$options", "i"}}}}
 	searchAuthor := bson.D{{"author", bson.D{{"$all", params.Author}}}}
 	multiSearchParam := bson.A{}
@@ -254,7 +262,7 @@ func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
 	pipeline = append(pipeline, FilterUser)
 
 	//add tag matches
-	if len(params.Tags) > 0 {
+	if len(tagsCond) > 0 {
 		multiSearchParam = append(multiSearchParam, searchTags)
 	}
 	//add title matches
@@ -266,7 +274,7 @@ func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
 		multiSearchParam = append(multiSearchParam, searchAuthor)
 	}
 
-	if len(params.Tags) > 0 || params.Title != "" || len(params.Author) > 0 {
+	if len(tagsCond) > 0 || params.Title != "" || len(params.Author) > 0 {
 		pipeline = append(pipeline, bson.D{
 			{Key: "$match", Value: bson.D{
 				{

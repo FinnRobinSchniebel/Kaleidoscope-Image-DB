@@ -311,7 +311,10 @@ func FilterForImageSets(c *fiber.Ctx) error {
 
 	requestParams.User = userID
 
-	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
+	requestParams.Tags, requestParams.MatchEmptyTags, err = Tagger.ResolveTagSearch(userID, requestParams.Tags)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString("resolving tag search: " + err.Error())
+	}
 
 	result, err := SearchDBForImages(requestParams)
 	if err != nil {

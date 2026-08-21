@@ -1,6 +1,7 @@
 package tagging
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -68,5 +69,12 @@ func SetTagOverrides(userId string, ids []string, overrides []string) ([]string,
 		}
 		updated = append(updated, sets[i].ID.Hex())
 	}
-	return updated, nil
+	if len(updated) == 0 {
+		return updated, nil
+	}
+	uid, err := bson.ObjectIDFromHex(userId)
+	if err != nil {
+		return updated, fmt.Errorf("parsing user id: %w", err)
+	}
+	return updated, refreshUntaggedCount(uid)
 }

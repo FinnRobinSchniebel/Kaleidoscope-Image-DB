@@ -57,12 +57,12 @@ type ImageInfo struct {
 type ImageSetMongo struct {
 	ID               bson.ObjectID   `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
 	Title            string          `json:"title" bson:"title,omitempty" form:"title"`
-	Tags             []string        `json:"tags" bson:"tags,omitempty" form:"tags"`
+	Tags             []string        `json:"tags" bson:"tags" form:"tags"`
 	Sources          []SourceInfo    `json:"sources" bson:"sources,omitempty" form:"sources"`
 	Authors          []string        `json:"authors" bson:"authors,omitempty" form:"authors"`
 	Path             string          `json:"path" bson:"path,omitempty" form:"path"`
 	Image            []ImageInfo     `json:"images,omitempty" bson:"images,omitempty" form:"images"`
-	AutoTags         []bson.ObjectID `json:"autotags" bson:"autotags,omitempty" form:"autotags"`
+	AutoTags         []bson.ObjectID `json:"autotags" bson:"autotags" form:"autotags"`
 	TagRuleOverrides []string        `json:"tag_rule_overrides" bson:"tag_rule_overrides,omitempty" form:"tag_rule_overrides"`
 	Itype            string          `json:"type" bson:"type,omitempty" form:"type"`
 	Description      string          `json:"description" bson:"description,omitempty" form:"description"`

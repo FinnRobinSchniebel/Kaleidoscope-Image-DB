@@ -29,9 +29,10 @@ var ErrSystemAutoTagImmutable = errors.New("system auto tags cannot be edited or
 const (
 	lostMediaTagName = "Lost Media"
 	untrackedTagName = "Untracked"
+	untaggedTagName  = "Untagged"
 )
 
-var systemAutoTagNames = []string{lostMediaTagName, untrackedTagName}
+var systemAutoTagNames = []string{lostMediaTagName, untrackedTagName, untaggedTagName}
 
 // AutoTagDoc is one AutoTag, one document per tag (mirrors SourceTagDoc).
 type AutoTagDoc struct {
@@ -337,6 +338,27 @@ func adjustAutoTagCounts(userID bson.ObjectID, deltas map[bson.ObjectID]int) err
 	return err
 }
 
+// refreshUntaggedCount recomputes and stores Untagged's Count for userID.
+func refreshUntaggedCount(userID bson.ObjectID) error {
+	n, err := imageset.Collection.CountDocuments(context.Background(), bson.M{
+		"kscope_userid": userID.Hex(),
+		"$or": bson.A{
+			bson.M{"tags": nil},
+			bson.M{"tags": bson.M{"$size": 0}},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("counting untagged image sets: %w", err)
+	}
+	ids, err := ensureSystemAutoTags(userID, []string{untaggedTagName})
+	if err != nil {
+		return err
+	}
+	_, err = AutoTagsDB.UpdateByID(context.Background(), ids[untaggedTagName],
+		bson.M{"$set": bson.M{"count": int(n)}})
+	return err
+}
+
 func incrementAutoTagCounts(userID bson.ObjectID, autoTagIDs []bson.ObjectID) error {
 	return adjustAutoTagCounts(userID, deltasFor(autoTagIDs, 1))
 }
@@ -421,7 +443,10 @@ func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldSrcTagKeyMatch, newS
 	if _, err := imageset.Collection.BulkWrite(context.Background(), models); err != nil {
 		return err
 	}
-	return adjustAutoTagCounts(userID, map[bson.ObjectID]int{autoTagID: delta})
+	if err := adjustAutoTagCounts(userID, map[bson.ObjectID]int{autoTagID: delta}); err != nil {
+		return err
+	}
+	return refreshUntaggedCount(userID)
 }
 
 func setHasMatch(userID bson.ObjectID, sources []imageset.SourceInfo, srcTagKeySet map[string]bool) bool {

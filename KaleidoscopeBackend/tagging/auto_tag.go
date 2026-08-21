@@ -128,3 +128,7 @@ func (AutoTagFunc) RecordDeletion(userID string, sources []imageset.SourceInfo, 
 func (AutoTagFunc) RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 	return RecomputeSystemTags(userID, set)
 }
+
+func (AutoTagFunc) ResolveTagSearch(userID string, tags []string) ([]string, bool, error) {
+	return ResolveTagSearch(userID, tags)
+}

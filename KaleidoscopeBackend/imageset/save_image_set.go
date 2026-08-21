@@ -32,6 +32,8 @@ type AutoTagger interface {
 	// Untracked) against its current Sources, mutating AutoTags/Tags in
 	// place. Does not persist set - callers own the eventual save.
 	RecomputeSystemTags(userID string, set *ImageSetMongo) error
+	// ResolveTagSearch strips the reserved Untagged id from tags, reporting whether it was present.
+	ResolveTagSearch(userID string, tags []string) (remaining []string, matchEmpty bool, err error)
 }
 
 var Tagger AutoTagger
