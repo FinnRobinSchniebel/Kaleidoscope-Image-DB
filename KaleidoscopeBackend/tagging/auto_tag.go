@@ -11,8 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-// findAutoTags returns AutoTags matched by sourceTags that aren't already
-// in currentAutoTags, incrementing each returned AutoTag's count once.
+// findAutoTags returns AutoTags matched by sourceTags that aren't already in currentAutoTags.
 func findAutoTags(userID bson.ObjectID, source string, sourceTags []imageset.SourceTag, currentAutoTags []bson.ObjectID) ([]bson.ObjectID, error) {
 	matched, err := matchAutoTags(userID, source, sourceTags)
 	if err != nil {
@@ -25,14 +24,10 @@ func findAutoTags(userID bson.ObjectID, source string, sourceTags []imageset.Sou
 			newlyAssigned = append(newlyAssigned, id)
 		}
 	}
-	if err := incrementAutoTagCounts(userID, newlyAssigned); err != nil {
-		return nil, fmt.Errorf("recording auto tag usage: %w", err)
-	}
 	return newlyAssigned, nil
 }
 
-// autoTag matches newTags, appends new AutoTag ids to set.AutoTags,
-// and rebuilds set.Tags.
+// autoTag matches newTags, appends new AutoTag ids to set.AutoTags, and rebuilds set.Tags.
 func autoTag(userID bson.ObjectID, set *imageset.ImageSetMongo, sourceName string, newTags []imageset.SourceTag) error {
 	newIDs, err := findAutoTags(userID, sourceName, newTags, set.AutoTags)
 	if err != nil {
@@ -42,8 +37,7 @@ func autoTag(userID bson.ObjectID, set *imageset.ImageSetMongo, sourceName strin
 		return nil
 	}
 	set.AutoTags = append(set.AutoTags, newIDs...)
-	buildTags(set)
-	return nil
+	return rebuildTagsAndAdjustCounts(userID, set)
 }
 
 // ProcessSourceTags is the imageset.AutoTagger.ProcessSourceTags implementation.
@@ -102,8 +96,8 @@ func matchAutoTags(userID bson.ObjectID, source string, sourceTags []imageset.So
 }
 
 // RecordDeletion undoes the usage counts recorded for a deleted image set:
-// source tags from sources, and AutoTags from autoTags.
-func RecordDeletion(userID string, sources []imageset.SourceInfo, autoTags []bson.ObjectID) error {
+// source tags from sources, and AutoTags from tags.
+func RecordDeletion(userID string, sources []imageset.SourceInfo, tags []string) error {
 	uid, err := bson.ObjectIDFromHex(userID)
 	if err != nil {
 		return fmt.Errorf("parsing user id: %w", err)
@@ -111,7 +105,7 @@ func RecordDeletion(userID string, sources []imageset.SourceInfo, autoTags []bso
 	if err := decrementSourceTagUsage(uid, sources); err != nil {
 		return err
 	}
-	return decrementAutoTagCounts(uid, autoTags)
+	return adjustAutoTagCounts(uid, tagCountDeltas(tags, nil))
 }
 
 // AutoTagFunc implements imageset.AutoTagger by delegating to this package's free functions.
@@ -121,8 +115,8 @@ func (AutoTagFunc) ProcessSourceTags(userID string, set *imageset.ImageSetMongo,
 	return ProcessSourceTags(userID, set, sourceIdx, fetched)
 }
 
-func (AutoTagFunc) RecordDeletion(userID string, sources []imageset.SourceInfo, autoTags []bson.ObjectID) error {
-	return RecordDeletion(userID, sources, autoTags)
+func (AutoTagFunc) RecordDeletion(userID string, sources []imageset.SourceInfo, tags []string) error {
+	return RecordDeletion(userID, sources, tags)
 }
 
 func (AutoTagFunc) RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {

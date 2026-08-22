@@ -111,7 +111,6 @@ func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 		return err
 	}
 
-	deltas := make(map[bson.ObjectID]int, len(ids))
 	changed := false
 	for name, id := range ids {
 		has := slices.Contains(set.AutoTags, id)
@@ -121,15 +120,12 @@ func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 		changed = true
 		if want[name] {
 			set.AutoTags = append(set.AutoTags, id)
-			deltas[id]++
 		} else {
 			set.AutoTags = slices.DeleteFunc(set.AutoTags, func(x bson.ObjectID) bool { return x == id })
-			deltas[id]--
 		}
 	}
 	if changed {
-		buildTags(set)
-		if err := adjustAutoTagCounts(uid, deltas); err != nil {
+		if err := rebuildTagsAndAdjustCounts(uid, set); err != nil {
 			return err
 		}
 	}
@@ -167,7 +163,7 @@ func RecomputeUntrackedForService(userID, serviceName string) error {
 	untrackedID := ids[untrackedTagName]
 
 	var models []mongo.WriteModel
-	delta := 0
+	combinedDeltas := make(map[bson.ObjectID]int)
 	for _, set := range sets {
 		want := isUntracked(userID, set.Sources)
 		has := slices.Contains(set.AutoTags, untrackedID)
@@ -179,12 +175,18 @@ func RecomputeUntrackedForService(userID, serviceName string) error {
 		if want {
 			op = "$addToSet"
 			newAutoTags = append(newAutoTags, untrackedID)
-			delta++
 		} else {
 			newAutoTags = slices.DeleteFunc(newAutoTags, func(id bson.ObjectID) bool { return id == untrackedID })
-			delta--
 		}
+		// TODO: tags is computed from this set's state as of the Find above, so a
+		// concurrent write to this set's autotags/tag_rule_overrides between that
+		// Find and this BulkWrite can get overwritten with a stale value here,
+		// unlike the atomic $addToSet/$pull alongside it. Narrow window, self-heals
+		// on the next relevant write; low priority, see read-modify-write-race-review
+		// skill. count (also derived from this snapshot, via $inc) does not self-heal
+		// the same way.
 		tags := ApplyTagRuleOverrides(newAutoTags, set.TagRuleOverrides)
+		addDeltas(combinedDeltas, tagCountDeltas(set.Tags, tags))
 		models = append(models, mongo.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": set.ID}).
 			SetUpdate(bson.M{op: bson.M{"autotags": untrackedID}, "$set": bson.M{"tags": tags}}))
@@ -195,7 +197,7 @@ func RecomputeUntrackedForService(userID, serviceName string) error {
 	if _, err := imageset.Collection.BulkWrite(context.Background(), models); err != nil {
 		return fmt.Errorf("updating untracked tag for service %q: %w", serviceName, err)
 	}
-	if err := adjustAutoTagCounts(uid, map[bson.ObjectID]int{untrackedID: delta}); err != nil {
+	if err := adjustAutoTagCounts(uid, combinedDeltas); err != nil {
 		return err
 	}
 	return refreshUntaggedCount(uid)

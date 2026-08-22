@@ -215,7 +215,7 @@ func DeleteImageSetInDB(id bson.ObjectID) error {
 	}
 
 	//note: also undoes counts from AddImageSet's rollback path, since they are recorded before insert
-	err = Tagger.RecordDeletion(entryToDelete.KscopeUserId, entryToDelete.Sources, entryToDelete.AutoTags)
+	err = Tagger.RecordDeletion(entryToDelete.KscopeUserId, entryToDelete.Sources, entryToDelete.Tags)
 	if err != nil {
 		errList = errors.Join(errList, err)
 	}

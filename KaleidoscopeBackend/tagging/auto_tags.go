@@ -359,20 +359,35 @@ func refreshUntaggedCount(userID bson.ObjectID) error {
 	return err
 }
 
-func incrementAutoTagCounts(userID bson.ObjectID, autoTagIDs []bson.ObjectID) error {
-	return adjustAutoTagCounts(userID, deltasFor(autoTagIDs, 1))
-}
-
-func decrementAutoTagCounts(userID bson.ObjectID, autoTagIDs []bson.ObjectID) error {
-	return adjustAutoTagCounts(userID, deltasFor(autoTagIDs, -1))
-}
-
-func deltasFor(ids []bson.ObjectID, delta int) map[bson.ObjectID]int {
-	deltas := make(map[bson.ObjectID]int, len(ids))
-	for _, id := range ids {
-		deltas[id] += delta
+// tagCountDeltas returns +1 for each id present only in newTags and -1 for
+// each present only in oldTags. Entries that fail to parse as a
+// bson.ObjectID are skipped.
+func tagCountDeltas(oldTags, newTags []string) map[bson.ObjectID]int {
+	oldSet, newSet := toSet(oldTags), toSet(newTags)
+	deltas := make(map[bson.ObjectID]int)
+	for id := range oldSet {
+		if newSet[id] {
+			continue
+		}
+		if oid, err := bson.ObjectIDFromHex(id); err == nil {
+			deltas[oid]--
+		}
+	}
+	for id := range newSet {
+		if oldSet[id] {
+			continue
+		}
+		if oid, err := bson.ObjectIDFromHex(id); err == nil {
+			deltas[oid]++
+		}
 	}
 	return deltas
+}
+
+func addDeltas(dst, src map[bson.ObjectID]int) {
+	for id, d := range src {
+		dst[id] += d
+	}
 }
 
 // applyAutoTagToSets re-evaluates autoTagID's membership on every image set
@@ -410,7 +425,7 @@ func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldSrcTagKeyMatch, newS
 
 	newKeySet := toSet(newSrcTagKeyMatch)
 	var models []mongo.WriteModel
-	delta := 0
+	combinedDeltas := make(map[bson.ObjectID]int)
 	for _, set := range sets {
 		shouldHave := setHasMatch(userID, set.Sources, newKeySet)
 		hasIt := slices.Contains(set.AutoTags, autoTagID)
@@ -422,17 +437,18 @@ func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldSrcTagKeyMatch, newS
 		if shouldHave {
 			op = "$addToSet"
 			newAutoTags = append(newAutoTags, autoTagID)
-			delta++
 		} else {
 			newAutoTags = slices.DeleteFunc(newAutoTags, func(id bson.ObjectID) bool { return id == autoTagID })
-			delta--
 		}
 		// TODO: tags is computed from this set's state as of the Find above, so a
 		// concurrent write to this set's autotags/tag_rule_overrides between that
 		// Find and this BulkWrite can get overwritten with a stale value here,
 		// unlike the atomic $addToSet/$pull alongside it. Narrow window, self-heals
-		// on the next relevant write; low priority, see read-modify-write-race-review skill.
+		// on the next relevant write; low priority, see read-modify-write-race-review
+		// skill. count (also derived from this snapshot, via $inc) does not self-heal
+		// the same way.
 		tags := ApplyTagRuleOverrides(newAutoTags, set.TagRuleOverrides)
+		addDeltas(combinedDeltas, tagCountDeltas(set.Tags, tags))
 		models = append(models, mongo.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": set.ID}).
 			SetUpdate(bson.M{op: bson.M{"autotags": autoTagID}, "$set": bson.M{"tags": tags}}))
@@ -443,7 +459,7 @@ func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldSrcTagKeyMatch, newS
 	if _, err := imageset.Collection.BulkWrite(context.Background(), models); err != nil {
 		return err
 	}
-	if err := adjustAutoTagCounts(userID, map[bson.ObjectID]int{autoTagID: delta}); err != nil {
+	if err := adjustAutoTagCounts(userID, combinedDeltas); err != nil {
 		return err
 	}
 	return refreshUntaggedCount(userID)

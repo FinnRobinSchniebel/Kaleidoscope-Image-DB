@@ -25,9 +25,9 @@ type AutoTagger interface {
 	// the set. Leave Sources[sourceIdx].Tags empty first if sourceIdx has
 	// never been recorded before, so every fetched tag counts as new.
 	ProcessSourceTags(userID string, set *ImageSetMongo, sourceIdx int, fetched []SourceTag) error
-	// RecordDeletion undoes usage counts, for sources' tags and for autoTags,
-	// recorded when the now-deleted set was created/synced.
-	RecordDeletion(userID string, sources []SourceInfo, autoTags []bson.ObjectID) error
+	// RecordDeletion undoes usage counts recorded when the now-deleted set
+	// was created or synced: source tags from sources, AutoTags from tags.
+	RecordDeletion(userID string, sources []SourceInfo, tags []string) error
 	// RecomputeSystemTags reconciles set's computed tags (e.g. Lost Media,
 	// Untracked) against its current Sources, mutating AutoTags/Tags in
 	// place. Does not persist set - callers own the eventual save.

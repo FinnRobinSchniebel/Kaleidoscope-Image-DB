@@ -53,9 +53,21 @@ func buildTags(set *imageset.ImageSetMongo) {
 	set.Tags = ApplyTagRuleOverrides(set.AutoTags, set.TagRuleOverrides)
 }
 
+// rebuildTagsAndAdjustCounts recomputes set.Tags (see buildTags) and
+// applies the resulting per-tag count delta. Does not persist set.
+func rebuildTagsAndAdjustCounts(userID bson.ObjectID, set *imageset.ImageSetMongo) error {
+	old := set.Tags
+	buildTags(set)
+	return adjustAutoTagCounts(userID, tagCountDeltas(old, set.Tags))
+}
+
 // SetTagOverrides replaces TagRuleOverrides on every set in ids (owner or
 // admin only, see GetFromID) and rebuilds Tags. Stops at the first error.
 func SetTagOverrides(userId string, ids []string, overrides []string) ([]string, error) {
+	uid, err := bson.ObjectIDFromHex(userId)
+	if err != nil {
+		return nil, fmt.Errorf("parsing user id: %w", err)
+	}
 	sets, err := imageset.GetFromID(userId, ids...)
 	if err != nil {
 		return nil, err
@@ -63,7 +75,9 @@ func SetTagOverrides(userId string, ids []string, overrides []string) ([]string,
 	updated := make([]string, 0, len(sets))
 	for i := range sets {
 		sets[i].TagRuleOverrides = overrides
-		buildTags(&sets[i])
+		if err := rebuildTagsAndAdjustCounts(uid, &sets[i]); err != nil {
+			return updated, err
+		}
 		if err := imageset.UpdateImageSet(&sets[i]); err != nil {
 			return updated, err
 		}
@@ -71,10 +85,6 @@ func SetTagOverrides(userId string, ids []string, overrides []string) ([]string,
 	}
 	if len(updated) == 0 {
 		return updated, nil
-	}
-	uid, err := bson.ObjectIDFromHex(userId)
-	if err != nil {
-		return updated, fmt.Errorf("parsing user id: %w", err)
 	}
 	return updated, refreshUntaggedCount(uid)
 }
