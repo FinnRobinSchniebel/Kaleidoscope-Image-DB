@@ -3,16 +3,25 @@ import { protectedAPI } from "./jwt_apis/protected-api-client"
 
 
 
-export interface SearchRequest {
+export interface SearchFilter {
+  words: string[]
+  tags: string[]
+  titles: string[]
+  authors: string[]
+  sources: string[]
+  searchTags: boolean
+  searchTitles: boolean
+  searchAuthors: boolean
+  searchSources: boolean
+  fromDate?: string
+  toDate?: string
+}
+
+export interface SearchRequest extends SearchFilter {
   protectedApiRef: protectedAPI
-  tags?: string[]
-  authors?: string[]
-  titles?: string
   pageCount: number
   skipCount: number
   randomSeed?: string
-  fromDate?: string
-  toDate?: string
 }
 
 export interface SetData {
@@ -32,12 +41,17 @@ const verbose = false
 export async function searchAPI(request: SearchRequest): Promise<{ status: number, errorString?: string, imageSets?: SetData[], count?: number }> {
 
   const body = {
-    "tags": request.tags || [],
-    "author": request.authors || [],
-    "title": request.titles || "",
+    "words": request.words,
+    "tags": request.tags,
+    "titles": request.titles,
+    "authors": request.authors,
+    "sources": request.sources,
+    "searchTags": request.searchTags,
+    "searchTitles": request.searchTitles,
+    "searchAuthors": request.searchAuthors,
+    "searchSources": request.searchSources,
     "skip_count": request.skipCount,
     "page_count": request.pageCount,
-    //TODO: from date and to Date
     "random_seed": request.randomSeed || "",
     "fromDate": request.fromDate || "",
     "toDate": request.toDate || ""
@@ -53,12 +67,12 @@ export async function searchAPI(request: SearchRequest): Promise<{ status: numbe
   const {status, errorString, response} = await request.protectedApiRef.CallProtectedAPI(newRequest)
   if (status != 200){
     if(verbose) console.log("error " + errorString)
-    return {status, errorString} 
+    return {status, errorString}
   }
 
 
 
-  return {status, imageSets: response.imagesets, count: response.totalCount} 
+  return {status, imageSets: response.imagesets, count: response.totalCount}
 
 
 }

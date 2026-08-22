@@ -8,6 +8,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -17,12 +18,17 @@ import (
 var Collection *mongo.Collection
 
 // EnsureIndexes creates the indexes used to find image sets by owner plus
-// source tag or AutoTag (tagging.applyAutoTagToSets' candidate query).
-// Idempotent, safe to call on every startup.
+// source tag or AutoTag (tagging.applyAutoTagToSets' candidate query), and
+// the indexes search's own pipeline relies on: the default newest-first
+// sort (with an _id tie-breaker for determinism), and tags/authors
+// membership lookups. Idempotent, safe to call on every startup.
 func EnsureIndexes(ctx context.Context) error {
 	_, err := Collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "sources.tags.default", Value: 1}}},
 		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "autotags", Value: 1}}},
+		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "date_added", Value: -1}, {Key: "_id", Value: -1}}},
+		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "tags", Value: 1}}},
+		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "authors", Value: 1}}},
 	})
 	return err
 }
@@ -73,16 +79,28 @@ func UpdateTagTranslations(userID, sourceName string, tags []SourceTag) error {
 var ErrAccessDenied = errors.New("access denied")
 
 type SearchParams struct {
-	PageCount      int      `json:"page_count" form:"page_count"`   //number of images to return
-	SkipCount      int      `json:"skip_count" form:"skip_count"`   //What page to return
-	RandomSeed     string   `json:"random_seed" form:"random_seed"` //if sorting is random, this value is passed for consistent page returns
-	Tags           []string `json:"tags" bson:"tags" form:"tags"`
-	MatchEmptyTags bool     `json:"-" form:"-"`
-	Author         []string `json:"author"`
-	FromDate       string   `json:"fromDate"`
-	ToDate         string   `json:"toDate"`
-	Title          string   `json:"title"`
-	User           string
+	PageCount  int    `json:"page_count"`  //number of images to return
+	SkipCount  int    `json:"skip_count"`  //What page to return
+	RandomSeed string `json:"random_seed"` //still unused - no random-order sort exists yet
+
+	Words   []string `json:"words"`   //bare terms with no recognized prefix
+	Tags    []string `json:"tags"`    //from tag: prefix - names/partial names, resolved to AutoTag ids per term
+	Titles  []string `json:"titles"`  //from title: prefix
+	Authors []string `json:"authors"` //from author: prefix
+	Sources []string `json:"sources"` //from source: prefix
+
+	SearchTags    bool `json:"searchTags"`    //gates bare-word-vs-tag matching only, never explicit tag: terms
+	SearchTitles  bool `json:"searchTitles"`
+	SearchAuthors bool `json:"searchAuthors"`
+	SearchSources bool `json:"searchSources"`
+
+	FromDate string `json:"fromDate"`
+	ToDate   string `json:"toDate"`
+
+	FromDateParsed *time.Time `json:"-"` //set by FilterForImageSets after validating FromDate
+	ToDateParsed   *time.Time `json:"-"`
+
+	User string `json:"-"`
 
 	//TODO: type, image count,
 }
@@ -234,63 +252,149 @@ func DeleteImageSetInDB(id bson.ObjectID) error {
 	return nil
 }
 
+// ParseSearchDate parses a fromDate/toDate search param: RFC3339 or a plain
+// YYYY-MM-DD date (interpreted as UTC midnight).
+func ParseSearchDate(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("invalid date %q: expected RFC3339 or YYYY-MM-DD", s)
+}
+
+// buildTagCondition resolves term to AutoTag ids via Tagger.ResolveTagTerm
+// and returns the condition matching sets whose Tags satisfies it: contains
+// any resolved id, or has an empty Tags array if the reserved Untagged tag
+// matched by name. A term matching nothing returns a condition that can
+// never match, so it correctly excludes every result rather than being
+// silently ignored.
+func buildTagCondition(userID, term string) (bson.M, error) {
+	ids, matchEmpty, err := Tagger.ResolveTagTerm(userID, term)
+	if err != nil {
+		return nil, fmt.Errorf("resolving tag term %q: %w", term, err)
+	}
+	var or bson.A
+	if len(ids) > 0 {
+		or = append(or, bson.M{"tags": bson.M{"$in": ids}})
+	}
+	if matchEmpty {
+		or = append(or, bson.M{"tags": nil}, bson.M{"tags": bson.M{"$size": 0}})
+	}
+	switch len(or) {
+	case 0:
+		return bson.M{"tags": bson.M{"$in": bson.A{}}}, nil
+	case 1:
+		return or[0].(bson.M), nil
+	default:
+		return bson.M{"$or": or}, nil
+	}
+}
+
+func titleCondition(term string) bson.M {
+	return bson.M{"title": bson.M{"$regex": regexp.QuoteMeta(term), "$options": "i"}}
+}
+
+func authorCondition(term string) bson.M {
+	return bson.M{"authors": bson.M{"$regex": regexp.QuoteMeta(term), "$options": "i"}}
+}
+
+func sourceCondition(term string) bson.M {
+	return bson.M{"sources.name": bson.M{"$regex": regexp.QuoteMeta(term), "$options": "i"}}
+}
+
 /*This function builds the pipeline use by the SearchDBForImages function to query the DB*/
-func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
+func FilterSearchPipeline(params SearchParams) (mongo.Pipeline, error) {
 	pipeline := mongo.Pipeline{}
 
-	tagsCond := bson.D{}
-	if params.MatchEmptyTags {
-		tagsCond = append(tagsCond, bson.E{Key: "$in", Value: bson.A{bson.A{}, nil}})
-	}
-	if len(params.Tags) > 0 {
-		tagsCond = append(tagsCond, bson.E{Key: "$all", Value: params.Tags})
-	}
-	searchTags := bson.D{{Key: "tags", Value: tagsCond}}
-	searchTitles := bson.D{{Key: "title", Value: bson.D{{"$regex", params.Title}, {"$options", "i"}}}}
-	searchAuthor := bson.D{{"author", bson.D{{"$all", params.Author}}}}
-	multiSearchParam := bson.A{}
-
-	//Make sure the user can only find unowned and their own uploads
-	FilterUser := bson.D{
+	//Make sure the user can only find unowned and their own uploads. This is
+	//the leading stage, and the common prefix of every index this pipeline
+	//relies on, so every query - filtered or not - gets at least this much
+	//index support.
+	pipeline = append(pipeline, bson.D{
 		{Key: "$match", Value: bson.M{
 			"kscope_userid": bson.M{
 				"$in": []string{"", params.User},
 			},
 		}},
+	})
+
+	//Each entry below becomes its own AND'd clause - every additional term
+	//narrows the result set further. A bare word becomes one AND'd clause
+	//that is itself an OR across whichever categories are checkbox-enabled.
+	var andClauses bson.A
+
+	for _, term := range params.Tags {
+		if term == "" {
+			continue
+		}
+		cond, err := buildTagCondition(params.User, term)
+		if err != nil {
+			return nil, err
+		}
+		andClauses = append(andClauses, cond)
+	}
+	for _, term := range params.Titles {
+		if term != "" {
+			andClauses = append(andClauses, titleCondition(term))
+		}
+	}
+	for _, term := range params.Authors {
+		if term != "" {
+			andClauses = append(andClauses, authorCondition(term))
+		}
+	}
+	for _, term := range params.Sources {
+		if term != "" {
+			andClauses = append(andClauses, sourceCondition(term))
+		}
+	}
+	for _, word := range params.Words {
+		if word == "" {
+			continue
+		}
+		var or bson.A
+		if params.SearchTags {
+			cond, err := buildTagCondition(params.User, word)
+			if err != nil {
+				return nil, err
+			}
+			or = append(or, cond)
+		}
+		if params.SearchTitles {
+			or = append(or, titleCondition(word))
+		}
+		if params.SearchAuthors {
+			or = append(or, authorCondition(word))
+		}
+		if params.SearchSources {
+			or = append(or, sourceCondition(word))
+		}
+		switch len(or) {
+		case 0:
+			//no enabled category to check this word against - unsatisfiable,
+			//not ignored, so the search doesn't silently fall back to unfiltered
+			andClauses = append(andClauses, bson.M{"_id": bson.M{"$in": bson.A{}}})
+		case 1:
+			andClauses = append(andClauses, or[0])
+		default:
+			andClauses = append(andClauses, bson.M{"$or": or})
+		}
 	}
 
-	pipeline = append(pipeline, FilterUser)
-
-	//add tag matches
-	if len(tagsCond) > 0 {
-		multiSearchParam = append(multiSearchParam, searchTags)
-	}
-	//add title matches
-	if params.Title != "" {
-		multiSearchParam = append(multiSearchParam, searchTitles)
-	}
-	//add tag matches
-	if len(params.Author) > 0 {
-		multiSearchParam = append(multiSearchParam, searchAuthor)
+	//only appended when there's something to filter on, so a search with no
+	//terms at all falls through to the unfiltered, newest-first listing
+	if len(andClauses) > 0 {
+		pipeline = append(pipeline, bson.D{{Key: "$match", Value: bson.M{"$and": andClauses}}})
 	}
 
-	if len(tagsCond) > 0 || params.Title != "" || len(params.Author) > 0 {
-		pipeline = append(pipeline, bson.D{
-			{Key: "$match", Value: bson.D{
-				{
-					Key: "$or", Value: multiSearchParam,
-				},
-			}},
-		})
-	}
-
-	// date will be used later (it will be the date the image was added to db)
 	dateMatch := bson.D{}
-	if params.FromDate != "" {
-		dateMatch = append(dateMatch, bson.E{"$gte", params.FromDate})
+	if params.FromDateParsed != nil {
+		dateMatch = append(dateMatch, bson.E{Key: "$gte", Value: *params.FromDateParsed})
 	}
-	if params.ToDate != "" {
-		dateMatch = append(dateMatch, bson.E{"$lte", params.ToDate})
+	if params.ToDateParsed != nil {
+		dateMatch = append(dateMatch, bson.E{Key: "$lte", Value: *params.ToDateParsed})
 	}
 	if len(dateMatch) > 0 {
 		pipeline = append(pipeline, bson.D{
@@ -299,6 +403,19 @@ func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
 			}},
 		})
 	}
+
+	//Newest first, with an _id tie-breaker for full determinism when
+	//multiple sets share a date_added (e.g. a batch zip import) - this is
+	//what makes $skip/$limit pagination below consistent page-to-page,
+	//since without a stable sort MongoDB doesn't guarantee document order.
+	//Sitting directly after the indexed kscope_userid match with nothing
+	//blocking index use in between, this can be served off the
+	//{kscope_userid, date_added, _id} index without a separate in-memory
+	//sort when no other filter clause forces a different index choice.
+	pipeline = append(pipeline, bson.D{{Key: "$sort", Value: bson.D{
+		{Key: "date_added", Value: -1},
+		{Key: "_id", Value: -1},
+	}}})
 
 	//This section determines what values get returned from the documents
 	project := bson.M{"$project": bson.D{
@@ -350,14 +467,15 @@ func FilterSearchPipeline(params SearchParams) mongo.Pipeline {
 		}}},
 	)
 
-	return pipeline
+	return pipeline, nil
 }
 
 /*Provides image ID's and tags for images that match the query*/
 func SearchDBForImages(params SearchParams) (bson.M, error) {
-	fmt.Printf("test %d, %d \n", params.SkipCount, params.PageCount)
-
-	pipeline := FilterSearchPipeline(params)
+	pipeline, err := FilterSearchPipeline(params)
+	if err != nil {
+		return nil, err
+	}
 
 	cursor, err := Collection.Aggregate(context.Background(), pipeline)
 	if err != nil {

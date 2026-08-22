@@ -8,11 +8,12 @@ import { ReadonlyURLSearchParams, useRouter, useSearchParams } from "next/naviga
 import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { usePathname } from "next/navigation";
 import Cookies from 'js-cookie';
-import { SearchRequest, SetData } from "@/components/api/search-api";
+import { SearchFilter, SearchRequest, SetData } from "@/components/api/search-api";
 import LoadSearchResults from "./LoadSearchResults";
 import { ProtectedProvider } from "@/components/api/jwt_apis/ProtectedProvider";
 import AlertPopup from "@/components/KscopeSharedUI/ImageSet/AlertPopup";
 import { ImageSetsProvider } from "@/components/KscopeSharedUI/ImageSet/ImageSetProvider";
+import { parseSearchQuery } from "./parseSearchQuery";
 
 
 interface Props {
@@ -31,6 +32,7 @@ export default function Search(props: Props) {
 
 
   const [UserSearch, setUserSearch] = useState<SearchInfo>()
+  const [searchFilter, setSearchFilter] = useState<SearchFilter>()
   const setSearch = useCallback((query: SearchInfo) => {
     if (JSON.stringify(query) != JSON.stringify(UserSearch)) {
       console.log("newSearch")
@@ -38,6 +40,14 @@ export default function Search(props: Props) {
 
       setUserSearch(query)
 
+      const parsed = parseSearchQuery(query.Search)
+      setSearchFilter({
+        ...parsed,
+        searchTags: query.tagsCheck,
+        searchTitles: query.titleCheck,
+        searchAuthors: query.authorCheck,
+        searchSources: query.sourceCheck,
+      })
 
       const newparams = new URLSearchParams(params.toString())
 
@@ -70,7 +80,7 @@ export default function Search(props: Props) {
 
   return (
     <ProtectedProvider token={props.token}>
-      <ImageSetsProvider>
+      <ImageSetsProvider filter={searchFilter}>
         <SearchBar setSearchquery={setSearch} />
         <LoadSearchResults />
       </ImageSetsProvider>

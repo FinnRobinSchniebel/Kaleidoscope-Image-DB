@@ -259,6 +259,38 @@ func ListAutoTagSummaries(userID bson.ObjectID, prefix string, limit int) ([]Aut
 	return results, nil
 }
 
+// SearchAutoTagIDsByName returns the ids of every AutoTag for userID whose
+// Name contains term as a case-insensitive substring. Unlike
+// ListAutoTagSummaries' prefix match, this is unanchored, so it can't use
+// the {user_id, name} index - accepted the same way ListAutoTags' unindexed
+// scan is, since it's bounded by one user's AutoTag count, not the
+// collection.
+func SearchAutoTagIDsByName(userID bson.ObjectID, term string) ([]bson.ObjectID, error) {
+	filter := bson.M{
+		"user_id": userID,
+		"name":    bson.M{"$regex": regexp.QuoteMeta(strings.TrimSpace(term)), "$options": "i"},
+	}
+	opts := options.Find().SetProjection(bson.M{"_id": 1})
+
+	cursor, err := AutoTagsDB.Find(context.Background(), filter, opts)
+	if err != nil {
+		return nil, fmt.Errorf("searching auto tags by name: %w", err)
+	}
+	defer cursor.Close(context.Background())
+
+	var docs []struct {
+		ID bson.ObjectID `bson:"_id"`
+	}
+	if err := cursor.All(context.Background(), &docs); err != nil {
+		return nil, fmt.Errorf("searching auto tags by name: %w", err)
+	}
+	ids := make([]bson.ObjectID, len(docs))
+	for i, d := range docs {
+		ids[i] = d.ID
+	}
+	return ids, nil
+}
+
 // AutoTagSummariesByID resolves specific AutoTag IDs to {id, name, count}.
 // IDs that don't exist (or belong to another user) are silently omitted.
 func AutoTagSummariesByID(userID bson.ObjectID, ids []bson.ObjectID) ([]AutoTagSummary, error) {

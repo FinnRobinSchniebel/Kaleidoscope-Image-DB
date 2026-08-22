@@ -1,7 +1,7 @@
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider"
-import { SetData } from "@/components/api/search-api"
+import { SearchFilter, SetData } from "@/components/api/search-api"
 import { searchPageCountResults, SearchSkipResults } from "@/components/api/searchResults"
-import { createContext, useCallback, useContext, useRef, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
 
 interface ImageSetsContextType {
   imageSets: SetData[]
@@ -12,34 +12,55 @@ interface ImageSetsContextType {
 
 const ImageSetsContext = createContext<ImageSetsContextType | null>(null)
 
-export function ImageSetsProvider({ children }: { children: React.ReactNode }) {
+interface ImageSetsProviderProps {
+  children: React.ReactNode
+  filter?: SearchFilter
+}
+
+export function ImageSetsProvider({ children, filter }: ImageSetsProviderProps) {
 
   const protectedAPI = useProtected()
 
   const [imageSets, setImageSets] = useState<SetData[]>([])
-  const [isEmpty, setIsEmpty] = useState(false)
 
   const pageRef = useRef(0)
   const loadingRef = useRef(false)
+  const isEmptyRef = useRef(false)
+  const filterRef = useRef<SearchFilter | undefined>(filter)
+  filterRef.current = filter
+  //bumped by reset() so a fetch already in flight when a reset happens
+  //can recognize its result is stale and discard it instead of appending
+  //onto (or racing with) the freshly-reset list
+  const searchIdRef = useRef(0)
 
   //Loads the next set of images when reaching the bottom of the list
   const loadNextPage = useCallback(async (): Promise<boolean> => {
 
-    if (isEmpty || loadingRef.current) return false
+    if (isEmptyRef.current) return false
+    //another call is already in flight - not exhausted, just busy, so the
+    //caller (e.g. the scroll loop) should retry rather than give up
+    if (loadingRef.current) return true
 
     loadingRef.current = true
 
+    const searchId = searchIdRef.current
     const page = pageRef.current++   // reserve page immediately
 
     try {
 
       const res = await searchPageCountResults({
         protected: protectedAPI,
-        page
+        page,
+        filter: filterRef.current
       })
 
+      //a reset() happened while this fetch was in flight (e.g. the filter
+      //changed) - this page no longer belongs to the current list, and the
+      //reset's own loadNextPage() call already started a fresh page 0
+      if (searchId !== searchIdRef.current) return true
+
       if (res.imageSets.length === 0) {
-        setIsEmpty(true)
+        isEmptyRef.current = true
         return false
       }
 
@@ -51,7 +72,7 @@ export function ImageSetsProvider({ children }: { children: React.ReactNode }) {
       loadingRef.current = false
     }
 
-  }, [isEmpty, protectedAPI])
+  }, [protectedAPI])
 
   const removeSet = useCallback(async (id: string): Promise<void> => {
     var setLength = imageSets.length
@@ -59,7 +80,8 @@ export function ImageSetsProvider({ children }: { children: React.ReactNode }) {
     const res = await SearchSkipResults({
       api: protectedAPI,
       skipNumber: skip,
-      LoadNumber: 1
+      LoadNumber: 1,
+      filter: filterRef.current
     })
 
     setImageSets(prev => {
@@ -70,10 +92,19 @@ export function ImageSetsProvider({ children }: { children: React.ReactNode }) {
   }, [protectedAPI])
 
   function reset() {
+    searchIdRef.current++
     pageRef.current = 0
+    isEmptyRef.current = false
     setImageSets([])
-    setIsEmpty(false)
   }
+
+  //Restart pagination from page 0 whenever the active search filter changes,
+  //so a new query doesn't just append onto results loaded under the old one.
+  useEffect(() => {
+    reset()
+    loadNextPage()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, loadNextPage])
 
   return (
     <ImageSetsContext.Provider

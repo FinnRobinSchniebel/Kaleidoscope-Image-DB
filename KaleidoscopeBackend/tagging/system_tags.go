@@ -203,29 +203,38 @@ func RecomputeUntrackedForService(userID, serviceName string) error {
 	return refreshUntaggedCount(uid)
 }
 
-// ResolveTagSearch strips the reserved Untagged id from tags, reporting whether it was present.
-func ResolveTagSearch(userID string, tags []string) ([]string, bool, error) {
-	if len(tags) == 0 {
-		return tags, false, nil
-	}
+// ResolveTagTerm resolves term (a tag name or partial name from a search
+// query) to the ids of every AutoTag whose Name contains it. If the
+// reserved Untagged AutoTag matches by name, its id is excluded from ids
+// and matchEmpty is set instead, since its id never appears literally in
+// any set's Tags.
+func ResolveTagTerm(userID string, term string) ([]string, bool, error) {
 	uid, err := bson.ObjectIDFromHex(userID)
 	if err != nil {
 		return nil, false, fmt.Errorf("parsing user id: %w", err)
 	}
+	matched, err := SearchAutoTagIDsByName(uid, term)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(matched) == 0 {
+		return nil, false, nil
+	}
+
 	ids, err := ensureSystemAutoTags(uid, []string{untaggedTagName})
 	if err != nil {
 		return nil, false, err
 	}
-	untaggedID := ids[untaggedTagName].Hex()
+	untaggedID := ids[untaggedTagName]
 
-	remaining := make([]string, 0, len(tags))
+	remaining := make([]string, 0, len(matched))
 	matchEmpty := false
-	for _, t := range tags {
-		if t == untaggedID {
+	for _, id := range matched {
+		if id == untaggedID {
 			matchEmpty = true
 			continue
 		}
-		remaining = append(remaining, t)
+		remaining = append(remaining, id.Hex())
 	}
 	return remaining, matchEmpty, nil
 }

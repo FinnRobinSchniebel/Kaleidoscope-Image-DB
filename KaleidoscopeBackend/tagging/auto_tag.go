@@ -123,6 +123,6 @@ func (AutoTagFunc) RecomputeSystemTags(userID string, set *imageset.ImageSetMong
 	return RecomputeSystemTags(userID, set)
 }
 
-func (AutoTagFunc) ResolveTagSearch(userID string, tags []string) ([]string, bool, error) {
-	return ResolveTagSearch(userID, tags)
+func (AutoTagFunc) ResolveTagTerm(userID string, term string) ([]string, bool, error) {
+	return ResolveTagTerm(userID, term)
 }

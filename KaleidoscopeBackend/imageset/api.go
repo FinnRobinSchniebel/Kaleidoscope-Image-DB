@@ -311,9 +311,26 @@ func FilterForImageSets(c *fiber.Ctx) error {
 
 	requestParams.User = userID
 
-	requestParams.Tags, requestParams.MatchEmptyTags, err = Tagger.ResolveTagSearch(userID, requestParams.Tags)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString("resolving tag search: " + err.Error())
+	if requestParams.FromDate != "" {
+		t, err := ParseSearchDate(requestParams.FromDate)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).SendString("invalid fromDate: " + err.Error())
+		}
+		requestParams.FromDateParsed = &t
+	}
+	if requestParams.ToDate != "" {
+		t, err := ParseSearchDate(requestParams.ToDate)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).SendString("invalid toDate: " + err.Error())
+		}
+		requestParams.ToDateParsed = &t
+	}
+
+	if requestParams.PageCount <= 0 {
+		requestParams.PageCount = 8
+	}
+	if requestParams.SkipCount < 0 {
+		requestParams.SkipCount = 0
 	}
 
 	result, err := SearchDBForImages(requestParams)
