@@ -1,15 +1,9 @@
 'use client'
 
-import { MenuButtonProps } from "@/components/KscopeSharedUI/account/IconButtonsMenu";
-
-
-
-import { useState } from "react";
-
-import AlertPopup from "@/components/KscopeSharedUI/ImageSet/AlertPopup";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
+import TaggingManager from "./TaggingManager";
 
 
 
@@ -20,9 +14,6 @@ interface Props {
 
 
 export default function page({ }: Props) {
-
-
-  
 
   return (
     <>
@@ -36,10 +27,9 @@ export default function page({ }: Props) {
             Back To Account
           </Link>
         </Button>
-        
+        <TaggingManager/>
+
       </div>
-     
-      
 
     </>
   )
