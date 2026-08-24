@@ -228,7 +228,8 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 				continue
 			}
 			src, idx := sourceByID(set, idStr)
-			if idx >= 0 && sourceChanged(il, src) {
+
+			if idx >= 0 && (sourceChanged(il, src) || src.LastChecked.IsZero()) {
 				enqueueIllustFetch(userId, il.ID, true)
 			}
 		}
