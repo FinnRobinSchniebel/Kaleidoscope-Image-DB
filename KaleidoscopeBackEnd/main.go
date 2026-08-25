@@ -192,6 +192,7 @@ func StartAPI() {
 	//source tags (imported tags, read-only from the frontend)
 	app.Get("/api/sourcetags/search", authutil.AuthSessionToken, tagging.SearchSourceTagsHandler)
 	app.Get("/api/sourcetags", authutil.AuthSessionToken, tagging.ListSourceTagsHandler)
+	app.Post("/api/sourcetags/regather", authutil.AuthSessionToken, tagging.RegatherSourceTagsHandler)
 
 	//auto tags
 	app.Get("/api/autotags", authutil.AuthSessionToken, tagging.ListAutoTagsHandler)

@@ -52,6 +52,20 @@ func ListSourceTagsHandler(c *fiber.Ctx) error {
 	return c.JSON(results)
 }
 
+// POST /api/sourcetags/regather - recomputes the caller's own SourceTags
+// from scratch. Synchronous.
+func RegatherSourceTagsHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	summary, err := RegatherSourceTags(userID)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	return c.JSON(summary)
+}
+
 // GET /api/autotags?prefix=&limit= - {id, name, count} only, no SourceTagDoc
 // resolution. For autocomplete and for resolving ImageSetMongo.AutoTags IDs
 // to names. limit <= 0 means unlimited.

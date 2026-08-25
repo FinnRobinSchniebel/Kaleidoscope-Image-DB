@@ -46,6 +46,8 @@ func autoTag(userID bson.ObjectID, set *imageset.ImageSetMongo, sourceName strin
 // when fetched contains something new, so callers never need a separate
 // call to keep those in sync after a source-tag fetch.
 func ProcessSourceTags(userID string, set *imageset.ImageSetMongo, sourceIdx int, fetched []imageset.SourceTag) error {
+	defer lockUserTags(userID)()
+
 	uid, err := bson.ObjectIDFromHex(userID)
 	if err != nil {
 		return fmt.Errorf("parsing user id: %w", err)
