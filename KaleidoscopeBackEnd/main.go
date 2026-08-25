@@ -125,9 +125,6 @@ func ConnectDB() {
 	if err := imageset.EnsureIndexes(context.Background()); err != nil {
 		log.Fatal(err)
 	}
-	if err := imageset.BackfillNullAutoTags(context.Background()); err != nil {
-		log.Fatal(err)
-	}
 	if err := tagging.EnsureIndexes(context.Background()); err != nil {
 		log.Fatal(err)
 	}
