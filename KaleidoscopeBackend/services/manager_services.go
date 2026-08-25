@@ -463,7 +463,7 @@ func (ss *serviceScheduler) run() {
 		default:
 		}
 
-		task, ok := ss.nextTask()
+		task, userId, ok := ss.nextTask()
 		if !ok {
 			time.Sleep(50 * time.Millisecond)
 			continue
@@ -473,7 +473,9 @@ func (ss *serviceScheduler) run() {
 			time.Sleep(wait)
 		}
 
-		task()
+		if err := task(); err != nil {
+			fmt.Printf("ERROR: Services: task failed for user %s: %v\n", userId, err)
+		}
 		ss.lastRun = time.Now()
 	}
 }
@@ -481,7 +483,7 @@ func (ss *serviceScheduler) run() {
 // nextTask picks the next task from the front user.
 // When a user exhausts their QueriesPerTurn quota, they are rotated to the back.
 // Users with no pending tasks are skipped (and rotated past).
-func (ss *serviceScheduler) nextTask() (Task, bool) {
+func (ss *serviceScheduler) nextTask() (Task, string, bool) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
@@ -508,10 +510,10 @@ func (ss *serviceScheduler) nextTask() (Task, bool) {
 			ss.users = append(ss.users[1:], ss.users[0])
 		}
 
-		return task, true
+		return task, front.userId, true
 	}
 
-	return nil, false
+	return nil, "", false
 }
 
 // fireCredentialHook runs the registered provider's service-specific

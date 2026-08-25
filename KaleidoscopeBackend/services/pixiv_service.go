@@ -488,16 +488,16 @@ func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust) error {
 		return fmt.Errorf("illust %d: source vanished from its own set between sync passes", illust.ID)
 	}
 
-	changed, err := imagesChanged(illust, set, idx)
-	if err != nil {
-		return fmt.Errorf("checking images for illust %d: %w", illust.ID, err)
-	}
+	// changed, err := imagesChanged(illust, set, idx)
+	// if err != nil {
+	// 	return fmt.Errorf("checking images for illust %d: %w", illust.ID, err)
+	// }
 
 	checkedAt := time.Now()
-	if changed {
-		log.Printf("pixiv: illust %d (%q) images changed - deferring, manual review required", illust.ID, illust.Title)
-		return imageset.MarkSourcePendingImageChange(set, idx, illust.CreateDate, checkedAt)
-	}
+	// if changed {
+	// 	log.Printf("pixiv: illust %d (%q) images changed - deferring, manual review required", illust.ID, illust.Title)
+	// 	return imageset.MarkSourcePendingImageChange(set, idx, illust.CreateDate, checkedAt)
+	// }
 
 	newSrc := pixivSourceInfo(illust, set.Sources[idx])
 	if err := imageset.ApplySourceMetadataUpdate(set, idx, newSrc, checkedAt, userId); err != nil {
