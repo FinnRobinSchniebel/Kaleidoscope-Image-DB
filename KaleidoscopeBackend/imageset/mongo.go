@@ -33,6 +33,14 @@ func EnsureIndexes(ctx context.Context) error {
 	return err
 }
 
+// BackfillNullAutoTags sets autotags to [] wherever it's stored as null
+// (or missing) instead of an array - tagging's $addToSet/$pull require an
+// array field, not null. Idempotent, safe to call on every startup.
+func BackfillNullAutoTags(ctx context.Context) error {
+	_, err := Collection.UpdateMany(ctx, bson.M{"autotags": nil}, bson.M{"$set": bson.M{"autotags": bson.A{}}})
+	return err
+}
+
 // UpdateImageSet overwrites the stored document with a's current contents.
 func UpdateImageSet(a *ImageSetMongo) error {
 	result, err := Collection.UpdateByID(context.Background(), a.ID, bson.M{"$set": a})

@@ -127,7 +127,9 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	imageSet.Image = nil
 
 	imageSet.KscopeUserId = ""
-	imageSet.AutoTags = nil
+	// non-nil: a nil slice would marshal as BSON null instead of [], which
+	// breaks tagging's $addToSet/$pull against this field later.
+	imageSet.AutoTags = []bson.ObjectID{}
 	imageSet.Tags = nil
 	imageSet.TagRuleOverrides = nil
 

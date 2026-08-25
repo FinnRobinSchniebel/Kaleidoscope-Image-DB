@@ -3,6 +3,7 @@ package tagging
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -11,6 +12,25 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// autoTagErrorResponse maps an AutoTag CRUD failure to the HTTP status and
+// client-safe message describing it. Unrecognized errors map to 500 and
+// are logged here, not returned to the client.
+func autoTagErrorResponse(err error, fallback string) (int, string) {
+	switch {
+	case errors.Is(err, ErrAutoTagNotFound):
+		return fiber.StatusNotFound, err.Error()
+	case errors.Is(err, ErrAutoTagNameExists):
+		return fiber.StatusConflict, err.Error()
+	case errors.Is(err, ErrAutoTagNameReserved):
+		return fiber.StatusBadRequest, err.Error()
+	case errors.Is(err, ErrSystemAutoTagImmutable):
+		return fiber.StatusForbidden, err.Error()
+	default:
+		log.Printf("tagging: %v", err)
+		return fiber.StatusInternalServerError, fallback
+	}
+}
 
 func userIDFromLocals(c *fiber.Ctx) (bson.ObjectID, error) {
 	userID, _ := c.Locals("UserID").(string)
@@ -155,11 +175,9 @@ func CreateAutoTagHandler(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).SendString("name is required")
 	}
 	id, err := CreateAutoTag(userID, body.Name, body.SrcTagKeyMatch)
-	if errors.Is(err, ErrAutoTagNameExists) {
-		return c.Status(http.StatusConflict).SendString(err.Error())
-	}
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		status, msg := autoTagErrorResponse(err, "could not create auto tag")
+		return c.Status(status).SendString(msg)
 	}
 	return c.JSON(fiber.Map{"id": id.Hex()})
 }
@@ -186,14 +204,9 @@ func UpdateAutoTagHandler(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).SendString(err.Error())
 	}
 	err = UpdateAutoTag(userID, autoTagID, body.Name, body.SrcTagKeyMatch)
-	if errors.Is(err, ErrAutoTagNotFound) {
-		return c.Status(http.StatusNotFound).SendString(err.Error())
-	}
-	if errors.Is(err, ErrAutoTagNameExists) {
-		return c.Status(http.StatusConflict).SendString(err.Error())
-	}
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		status, msg := autoTagErrorResponse(err, "could not update auto tag")
+		return c.Status(status).SendString(msg)
 	}
 	return c.SendStatus(http.StatusOK)
 }
@@ -209,11 +222,9 @@ func DeleteAutoTagHandler(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).SendString("invalid id")
 	}
 	err = DeleteAutoTag(userID, autoTagID)
-	if errors.Is(err, ErrAutoTagNotFound) {
-		return c.Status(http.StatusNotFound).SendString(err.Error())
-	}
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		status, msg := autoTagErrorResponse(err, "could not delete auto tag")
+		return c.Status(status).SendString(msg)
 	}
 	return c.SendStatus(http.StatusOK)
 }
