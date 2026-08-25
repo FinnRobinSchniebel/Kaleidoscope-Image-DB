@@ -1,12 +1,13 @@
 'use client'
 
-import { useEffect, useMemo, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider";
 import getSourceTags_api, { SourceTagDoc } from "@/components/api/getSourceTags-api";
 import getAutoTagDetails_api, { AutoTagWithMatches } from "@/components/api/getAutoTagDetails-api";
 import createAutoTag_api from "@/components/api/createAutoTag-api";
 import updateAutoTag_api from "@/components/api/updateAutoTag-api";
 import deleteAutoTag_api from "@/components/api/deleteAutoTag-api";
+import regatherSourceTags_api, { RegatherSummary } from "@/components/api/regatherSourceTags-api";
 import AlertPopup from "@/components/KscopeSharedUI/ImageSet/AlertPopup";
 import FadingSeparator from "@/components/KscopeSharedUI/FadingSeparator";
 import SourceTagsSection from "./SourceTagsSection";
@@ -20,13 +21,17 @@ export interface DraftAutoTag {
   srcTagKeyMatch: string[]
 }
 
+export interface TaggingManagerHandle {
+  regather: () => Promise<RegatherSummary>
+}
+
 function resolveMatches(keys: string[], sourceTagsByKey: Map<string, SourceTagDoc>): SourceTagDoc[] {
   return keys
     .map(k => sourceTagsByKey.get(k))
     .filter((t): t is SourceTagDoc => t !== undefined)
 }
 
-export default function TaggingManager() {
+export default forwardRef<TaggingManagerHandle>(function TaggingManager(_props, ref) {
 
   const protectedApi = useProtected()
 
@@ -124,9 +129,22 @@ export default function TaggingManager() {
 
     const success = await deleteAutoTag_api({ id, protectedApi })
     if (!success) return
-    
+
     setAutoTags(prev => (prev ?? []).filter(t => t.Id !== id))
   }
+
+  async function handleRegather(): Promise<RegatherSummary> {
+
+    const summary = await regatherSourceTags_api({ protectedApi })
+    if (!summary) throw new Error('Failed to regather source tags.')
+
+    const tags = await getSourceTags_api({ protectedApi })
+    setSourceTags(tags ?? [])
+
+    return summary
+  }
+
+  useImperativeHandle(ref, () => ({ regather: handleRegather }))
 
   return (
     <AlertPopup>
@@ -150,4 +168,4 @@ export default function TaggingManager() {
       )}
     </AlertPopup>
   )
-}
+})
