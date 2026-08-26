@@ -1,11 +1,22 @@
 import { Lock } from "lucide-react";
 import { AutoTagWithMatches } from "@/components/api/getAutoTagDetails-api";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface Props {
-  systemTags: AutoTagWithMatches[]
+  systemTags: AutoTagWithMatches[] | null
 }
 
 export default function SystemTagsRow({ systemTags }: Props) {
+
+  if (systemTags === null) {
+    return (
+      <div className="flex flex-wrap gap-2 m-5">
+        <Skeleton className="h-7 w-28 rounded-md" />
+        <Skeleton className="h-7 w-24 rounded-md" />
+        <Skeleton className="h-7 w-32 rounded-md" />
+      </div>
+    )
+  }
 
   if (systemTags.length === 0) return null
 

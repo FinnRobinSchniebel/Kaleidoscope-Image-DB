@@ -4,6 +4,7 @@ import TagBadge from "@/components/KscopeSharedUI/ImageSet/TagBadge";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Trash2 } from "lucide-react";
 import { useDangerAlert } from "@/components/KscopeSharedUI/ImageSet/AlertPopup";
 import { displaySourceTagText, SourceTagDoc } from "@/components/api/getSourceTags-api";
@@ -11,6 +12,28 @@ import AutoTagColorSlot from "./AutoTagColorSlot";
 import AddSourceTagPopover from "./AddSourceTagPopover";
 
 export type ApplyResult = { ok: true } | { ok: false, error: string }
+
+export function AutoTagCardSkeleton() {
+  return (
+    <SeparatorBorder className="flex flex-col gap-2 m-5 p-3 bg-accent">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-1 items-center gap-2 ">
+          <Skeleton className="h-9 max-w-xs w-40 " />
+          <span className="text-sm text-muted-foreground shrink-0">0 sets</span>
+        </div>
+        <Skeleton className="size-8 rounded-md shrink-0" />
+      </div>
+
+      <AutoTagColorSlot />
+
+      <SeparatorBorder className="flex items-center  flex-wrap gap-1">
+        <Skeleton className="h-5 w-20 rounded-full m-1" />
+        <Skeleton className="h-5 w-28 rounded-full" />
+        <Skeleton className="h-5 w-16 rounded-full" />
+      </SeparatorBorder>
+    </SeparatorBorder>
+  )
+}
 
 interface Props {
   id: string | null

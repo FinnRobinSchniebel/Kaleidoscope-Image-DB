@@ -1,4 +1,4 @@
-import SourceGroupContainer from "./SourceGroupContainer";
+import SourceGroupContainer, { SourceGroupSkeleton } from "./SourceGroupContainer";
 import { SourceTagDoc } from "@/components/api/getSourceTags-api";
 
 interface Props {
@@ -8,7 +8,7 @@ interface Props {
 export default function SourceTagsSection({ sourceTagsBySource }: Props) {
 
   if (!sourceTagsBySource) {
-    return <p className="m-5 text-muted-foreground">Loading source tags...</p>
+    return <>{Array.from({ length: 3 }).map((_, i) => <SourceGroupSkeleton key={i} />)}</>
   }
 
   if (sourceTagsBySource.size === 0) {

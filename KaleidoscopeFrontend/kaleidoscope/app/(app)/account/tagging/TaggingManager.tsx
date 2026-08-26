@@ -83,8 +83,8 @@ export default forwardRef<TaggingManagerHandle>(function TaggingManager(_props, 
     return map
   }, [sourceTags])
 
-  const systemTags = useMemo(() => (autoTags ?? []).filter(t => t.System), [autoTags])
-  const regularTags = useMemo(() => (autoTags ?? []).filter(t => !t.System), [autoTags])
+  const systemTags = useMemo(() => autoTags === null ? null : autoTags.filter(t => t.System), [autoTags])
+  const regularTags = useMemo(() => autoTags === null ? null : autoTags.filter(t => !t.System), [autoTags])
 
   function handleCreateDraft() {
     setDrafts(prev => [{ tempId: crypto.randomUUID(), name: '', srcTagKeyMatch: [] }, ...prev])
@@ -149,23 +149,20 @@ export default forwardRef<TaggingManagerHandle>(function TaggingManager(_props, 
   return (
     <AlertPopup>
       <SourceTagsSection sourceTagsBySource={sourceTagsBySource} />
+      <FadingSeparator className="my-2" />
       <SystemTagsRow systemTags={systemTags} />
       <FadingSeparator className="my-2" />
-      {autoTags === null ? (
-        <p className="m-5 text-muted-foreground">Loading auto tags...</p>
-      ) : (
-        <AutoTagList
-          autoTags={regularTags}
-          drafts={drafts}
-          sourceTags={sourceTags ?? []}
-          sourceTagsByKey={sourceTagsByKey}
-          onCreateDraft={handleCreateDraft}
-          onApplyDraft={handleApplyDraft}
-          onDiscardDraft={handleDiscardDraft}
-          onApplyExisting={handleApplyExisting}
-          onDelete={handleDelete}
-        />
-      )}
+      <AutoTagList
+        autoTags={regularTags}
+        drafts={drafts}
+        sourceTags={sourceTags ?? []}
+        sourceTagsByKey={sourceTagsByKey}
+        onCreateDraft={handleCreateDraft}
+        onApplyDraft={handleApplyDraft}
+        onDiscardDraft={handleDiscardDraft}
+        onApplyExisting={handleApplyExisting}
+        onDelete={handleDelete}
+      />
     </AlertPopup>
   )
 })
