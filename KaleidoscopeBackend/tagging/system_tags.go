@@ -24,6 +24,28 @@ func (RegistrationHookFunc) OnServiceRegistrationChanged(userId, serviceName str
 	}
 }
 
+// SystemTagProvisionerFunc implements authutil.SystemTagProvisioner,
+// eagerly creating a new account's system AutoTags at registration.
+type SystemTagProvisionerFunc struct{}
+
+func (SystemTagProvisionerFunc) CreateSystemAutoTagsForUser(userID bson.ObjectID) error {
+	return createSystemAutoTags(userID)
+}
+
+// createSystemAutoTags creates the three system AutoTags for userID in a
+// single insert, with no existing-doc check - only valid for a userID that
+// has never had these tags, i.e. a just-created account.
+func createSystemAutoTags(userID bson.ObjectID) error {
+	docs := make([]interface{}, len(systemAutoTagNames))
+	for i, name := range systemAutoTagNames {
+		docs[i] = AutoTagDoc{ID: bson.NewObjectID(), UserID: userID, Name: name, System: true}
+	}
+	if _, err := AutoTagsDB.InsertMany(context.Background(), docs); err != nil {
+		return fmt.Errorf("creating system auto tags: %w", err)
+	}
+	return nil
+}
+
 // isLostMedia reports whether every one of sources has SourceMissing set.
 // False for a set with no sources at all - there's nothing to have gone missing.
 func isLostMedia(sources []imageset.SourceInfo) bool {

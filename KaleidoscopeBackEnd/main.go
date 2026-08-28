@@ -121,6 +121,7 @@ func ConnectDB() {
 	imageset.LowResPathAppend = LowResPathAppend
 	imageset.Tagger = tagging.AutoTagFunc{}
 	services.RegistrationHook = tagging.RegistrationHookFunc{}
+	authutil.TagProvisioner = tagging.SystemTagProvisionerFunc{}
 
 	if err := imageset.EnsureIndexes(context.Background()); err != nil {
 		log.Fatal(err)
