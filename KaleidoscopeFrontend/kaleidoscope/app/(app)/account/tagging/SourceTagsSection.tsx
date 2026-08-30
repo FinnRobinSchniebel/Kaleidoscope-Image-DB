@@ -3,9 +3,10 @@ import { SourceTagDoc } from "@/components/api/getSourceTags-api";
 
 interface Props {
   sourceTagsBySource: Map<string, SourceTagDoc[]> | null
+  onTagClick: (tag: SourceTagDoc) => void
 }
 
-export default function SourceTagsSection({ sourceTagsBySource }: Props) {
+export default function SourceTagsSection({ sourceTagsBySource, onTagClick }: Props) {
 
   if (!sourceTagsBySource) {
     return <>{Array.from({ length: 3 }).map((_, i) => <SourceGroupSkeleton key={i} />)}</>
@@ -18,7 +19,7 @@ export default function SourceTagsSection({ sourceTagsBySource }: Props) {
   return (
     <>
       {Array.from(sourceTagsBySource.entries()).map(([source, tags]) => (
-        <SourceGroupContainer key={source} source={source} tags={tags} />
+        <SourceGroupContainer key={source} source={source} tags={tags} onTagClick={onTagClick} />
       ))}
     </>
   )

@@ -2,7 +2,7 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider";
-import getSourceTags_api, { SourceTagDoc } from "@/components/api/getSourceTags-api";
+import getSourceTags_api, { displaySourceTagText, SourceTagDoc } from "@/components/api/getSourceTags-api";
 import getAutoTagDetails_api, { AutoTagWithMatches } from "@/components/api/getAutoTagDetails-api";
 import createAutoTag_api from "@/components/api/createAutoTag-api";
 import updateAutoTag_api from "@/components/api/updateAutoTag-api";
@@ -86,8 +86,12 @@ export default forwardRef<TaggingManagerHandle>(function TaggingManager(_props, 
   const systemTags = useMemo(() => autoTags === null ? null : autoTags.filter(t => t.System), [autoTags])
   const regularTags = useMemo(() => autoTags === null ? null : autoTags.filter(t => !t.System), [autoTags])
 
-  function handleCreateDraft() {
-    setDrafts(prev => [{ tempId: crypto.randomUUID(), name: '', srcTagKeyMatch: [] }, ...prev])
+  function handleCreateDraft(seed?: { name: string; srcTagKeyMatch: string[] }) {
+    setDrafts(prev => [{ tempId: crypto.randomUUID(), name: seed?.name ?? '', srcTagKeyMatch: seed?.srcTagKeyMatch ?? [] }, ...prev])
+  }
+
+  function handleCreateDraftFromSourceTag(tag: SourceTagDoc) {
+    handleCreateDraft({ name: displaySourceTagText(tag), srcTagKeyMatch: [tag.Key] })
   }
 
   function handleDiscardDraft(tempId: string) {
@@ -148,7 +152,7 @@ export default forwardRef<TaggingManagerHandle>(function TaggingManager(_props, 
 
   return (
     <AlertPopup>
-      <SourceTagsSection sourceTagsBySource={sourceTagsBySource} />
+      <SourceTagsSection sourceTagsBySource={sourceTagsBySource} onTagClick={handleCreateDraftFromSourceTag} />
       <FadingSeparator className="my-2" />
       <SystemTagsRow systemTags={systemTags} />
       <FadingSeparator className="my-2" />

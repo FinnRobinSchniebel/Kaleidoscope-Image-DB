@@ -1,6 +1,9 @@
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider"
+import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client"
 import { SearchFilter, SetData } from "@/components/api/search-api"
 import { searchPageCountResults, SearchSkipResults } from "@/components/api/searchResults"
+import getAutoTagsByIds_api from "@/components/api/getAutoTagsByIds-api"
+import { AutoTagCacheContext, AutoTagCacheStore } from "./AutoTagCache"
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
 
 interface ImageSetsContextType {
@@ -20,8 +23,18 @@ interface ImageSetsProviderProps {
 export function ImageSetsProvider({ children, filter }: ImageSetsProviderProps) {
 
   const protectedAPI = useProtected()
+  const protectedApiRef = useRef<protectedAPI>(protectedAPI)
+  protectedApiRef.current = protectedAPI
+
+  const autoTagStoreRef = useRef<AutoTagCacheStore | undefined>(undefined)
+  if (!autoTagStoreRef.current) {
+    autoTagStoreRef.current = new AutoTagCacheStore(ids => getAutoTagsByIds_api({ ids, protectedApi: protectedApiRef.current }))
+  }
+  const autoTagStore = autoTagStoreRef.current
 
   const [imageSets, setImageSets] = useState<SetData[]>([])
+  const imageSetsRef = useRef<SetData[]>(imageSets)
+  imageSetsRef.current = imageSets
 
   const pageRef = useRef(0)
   const loadingRef = useRef(false)
@@ -65,6 +78,7 @@ export function ImageSetsProvider({ children, filter }: ImageSetsProviderProps) 
       }
 
       setImageSets(prev => [...prev, ...res.imageSets])
+      autoTagStore.request(res.imageSets.flatMap(s => s.tags))
 
       return true
 
@@ -72,11 +86,10 @@ export function ImageSetsProvider({ children, filter }: ImageSetsProviderProps) 
       loadingRef.current = false
     }
 
-  }, [protectedAPI])
+  }, [protectedAPI, autoTagStore])
 
   const removeSet = useCallback(async (id: string): Promise<void> => {
-    var setLength = imageSets.length
-    var skip = setLength - 1
+    const skip = imageSetsRef.current.length - 1
     const res = await SearchSkipResults({
       api: protectedAPI,
       skipNumber: skip,
@@ -89,7 +102,8 @@ export function ImageSetsProvider({ children, filter }: ImageSetsProviderProps) 
       if (res.imageSets.length == 0) return removed
       return [...removed, res.imageSets[0]]
     })
-  }, [protectedAPI])
+    autoTagStore.request(res.imageSets.flatMap(s => s.tags))
+  }, [protectedAPI, autoTagStore])
 
   function reset() {
     searchIdRef.current++
@@ -107,16 +121,18 @@ export function ImageSetsProvider({ children, filter }: ImageSetsProviderProps) 
   }, [filter, loadNextPage])
 
   return (
-    <ImageSetsContext.Provider
-      value={{
-        imageSets,
-        loadNextPage,
-        removeSet,
-        reset
-      }}
-    >
-      {children}
-    </ImageSetsContext.Provider>
+    <AutoTagCacheContext.Provider value={autoTagStore}>
+      <ImageSetsContext.Provider
+        value={{
+          imageSets,
+          loadNextPage,
+          removeSet,
+          reset
+        }}
+      >
+        {children}
+      </ImageSetsContext.Provider>
+    </AutoTagCacheContext.Provider>
   )
 }
 

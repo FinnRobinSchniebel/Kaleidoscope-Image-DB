@@ -46,10 +46,10 @@ export default function SearchBar(props: Props) {
   const form = useForm<SearchInfo>({
     defaultValues: {
       Search: (searchParams.get("SearchTerm") ?? ""),
-      titleCheck: (searchParams.get("titleCheck")) === 'true',
-      authorCheck: (searchParams.get("authorCheck")) === 'true',
+      titleCheck: (searchParams.get("titleCheck")?? "true") === 'true',
+      authorCheck: (searchParams.get("authorCheck")?? "true") === 'true',
       tagsCheck: (searchParams.get("tagsCheck") ?? "true") === 'true',
-      sourceCheck: (searchParams.get("sourceCheck")) === 'true'
+      sourceCheck: (searchParams.get("sourceCheck") ?? "true") === 'true'
     }
   })
 

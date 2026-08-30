@@ -7,6 +7,7 @@ import { displaySourceTagText, SourceTagDoc } from "@/components/api/getSourceTa
 interface Props {
   source: string
   tags: SourceTagDoc[]
+  onTagClick: (tag: SourceTagDoc) => void
 }
 
 export function SourceGroupSkeleton() {
@@ -25,7 +26,7 @@ export function SourceGroupSkeleton() {
   )
 }
 
-export default function SourceGroupContainer({ source, tags }: Props) {
+export default function SourceGroupContainer({ source, tags, onTagClick }: Props) {
 
   return (
     <SeparatorBorder className="flex items-center gap-3 m-5 p-3 bg-accent rounded-2xl">
@@ -34,7 +35,7 @@ export default function SourceGroupContainer({ source, tags }: Props) {
         <ScrollArea aria-orientation="horizontal" className="w-full overflow-x-auto pb-3">
           <div className="flex">
             {tags.map(t => (
-              <TagBadge key={t.Key} tag={displaySourceTagText(t)} count={t.Count} variant="muted" />
+              <TagBadge key={t.Key} tag={displaySourceTagText(t)} count={t.Count} variant="muted" onClick={() => onTagClick(t)} />
             ))}
           </div>
           <ScrollBar orientation="horizontal" className="h-2" />
