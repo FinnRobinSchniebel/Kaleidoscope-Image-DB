@@ -50,6 +50,7 @@ export async function searchPageCountResults(props: SearchPageCountProps): Promi
     count: result.count ?? 0,
   }
 
+  
 }
 
 type SearchSkipCOountProps = {

@@ -1,6 +1,6 @@
 import { LoadingImageCard } from "@/app/(app)/search/ImageCards"
 import { imageAPI, imageRequest, imageRequestToString } from "@/components/api/image-api"
-import { imageCache } from "@/components/api/imageCaching"
+import { imageCache } from "@/components/api/ImageCaching"
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider"
 import { CarouselItem } from "@/components/ui/carousel"
 import { Skeleton } from "@/components/ui/skeleton"

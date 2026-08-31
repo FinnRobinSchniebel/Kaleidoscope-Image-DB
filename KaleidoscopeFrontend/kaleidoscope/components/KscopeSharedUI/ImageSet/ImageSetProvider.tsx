@@ -1,7 +1,7 @@
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider"
 import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client"
 import { SearchFilter, SetData } from "@/components/api/search-api"
-import { searchPageCountResults, SearchSkipResults } from "@/components/api/searchResults"
+import { searchPageCountResults, SearchSkipResults } from "@/components/api/SearchResults"
 import getAutoTagsByIds_api from "@/components/api/getAutoTagsByIds-api"
 import { AutoTagCacheContext, AutoTagCacheStore } from "./AutoTagCache"
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"

@@ -5,7 +5,7 @@ import { useEffect } from "react";
 
 import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
 import { useInView } from 'react-intersection-observer';
-import { searchPageCountResults } from '../../../components/api/searchResults';
+import { searchPageCountResults } from '../../../components/api/SearchResults';
 import { Loader2Icon } from 'lucide-react';
 import { Dialog } from '@/components/ui/dialog';
 
