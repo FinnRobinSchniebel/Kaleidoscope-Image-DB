@@ -33,7 +33,7 @@ const verbose = false
 
 export interface GORequest {
   endpoint: string
-  type: "GET" | "POST" | "PUT" | "DELETE";
+  type: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   header: {};
   body?: string | undefined | object,
   media?: File[] | undefined

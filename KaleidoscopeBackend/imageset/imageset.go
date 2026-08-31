@@ -9,28 +9,24 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// SourceTag holds a single tag as imported from a source.
+// SourceTag holds a single tag as imported from a source. EN is a translation
+// (only populated when the source actually provides one); Default is the
+// source's own untranslated tag and is always populated.
 type SourceTag struct {
-	Name string `json:"name" bson:"name" form:"name"`               //effective tag: the source's translation if it has one, else the untranslated tag
-	JP   string `json:"jp,omitempty" bson:"jp,omitempty" form:"jp"` //untranslated Japanese tag; only set when Name is a translation of it
+	EN      string `json:"en,omitempty" bson:"en,omitempty" form:"en"`
+	Default string `json:"default" bson:"default" form:"default"`
 }
 
 // canonical is the tag's translation-independent identity, used to detect
 // whether two SourceTags refer to the same underlying tag.
 func (t SourceTag) canonical() string {
-	if t.JP != "" {
-		return t.JP
-	}
-	return t.Name
+	return NormalizeTagText(t.Default)
 }
 
-// SourceTagNames returns each tag's effective Name.
-func SourceTagNames(tags []SourceTag) []string {
-	names := make([]string, len(tags))
-	for i, t := range tags {
-		names[i] = t.Name
-	}
-	return names
+// NormalizeTagText is the shared tag-identity transform (lowercase, trimmed)
+// so casing/whitespace differences don't produce distinct identities.
+func NormalizeTagText(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 type SourceInfo struct {
@@ -59,21 +55,21 @@ type ImageInfo struct {
 }
 
 type ImageSetMongo struct {
-	ID               bson.ObjectID `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
-	Title            string        `json:"title" bson:"title,omitempty" form:"title"`
-	Tags             []string      `json:"tags" bson:"tags,omitempty" form:"tags"`
-	Sources          []SourceInfo  `json:"sources" bson:"sources,omitempty" form:"sources"`
-	Authors          []string      `json:"authors" bson:"authors,omitempty" form:"authors"`
-	Path             string        `json:"path" bson:"path,omitempty" form:"path"`
-	Image            []ImageInfo   `json:"images,omitempty" bson:"images,omitempty" form:"images"`
-	AutoTags         []string      `json:"autotags" bson:"autotags,omitempty" form:"autotags"`
-	TagRuleOverrides []string      `json:"tag_rule_overrides" bson:"tag_rule_overrides,omitempty" form:"tag_rule_overrides"`
-	Itype            string        `json:"type" bson:"type,omitempty" form:"type"`
-	Description      string        `json:"description" bson:"description,omitempty" form:"description"`
-	Other            string        `json:"other" bson:"other,omitempty" form:"other"`
-	KscopeUserId     string        `json:"kscope_userid" bson:"kscope_userid" form:"kscope_userid"`
-	DateAdded        time.Time     `json:"date_added" bson:"date_added" form:"date_added"`
-	ThumbNail        string        `json:"thumbnail" bson:"thumbnail" form:"thumbnail"` //rendered 256x256 image path
+	ID               bson.ObjectID   `json:"id,omitempty" bson:"_id,omitempty" form:"id,omitempty"`
+	Title            string          `json:"title" bson:"title,omitempty" form:"title"`
+	Tags             []string        `json:"tags" bson:"tags" form:"tags"`
+	Sources          []SourceInfo    `json:"sources" bson:"sources,omitempty" form:"sources"`
+	Authors          []string        `json:"authors" bson:"authors,omitempty" form:"authors"`
+	Path             string          `json:"path" bson:"path,omitempty" form:"path"`
+	Image            []ImageInfo     `json:"images,omitempty" bson:"images,omitempty" form:"images"`
+	AutoTags         []bson.ObjectID `json:"autotags" bson:"autotags" form:"autotags"`
+	TagRuleOverrides []string        `json:"tag_rule_overrides" bson:"tag_rule_overrides,omitempty" form:"tag_rule_overrides"`
+	Itype            string          `json:"type" bson:"type,omitempty" form:"type"`
+	Description      string          `json:"description" bson:"description,omitempty" form:"description"`
+	Other            string          `json:"other" bson:"other,omitempty" form:"other"`
+	KscopeUserId     string          `json:"kscope_userid" bson:"kscope_userid" form:"kscope_userid"`
+	DateAdded        time.Time       `json:"date_added" bson:"date_added" form:"date_added"`
+	ThumbNail        string          `json:"thumbnail" bson:"thumbnail" form:"thumbnail"` //rendered 256x256 image path
 	// API will send file as well but it will not be placed in the struct: `json: media`
 
 }
@@ -163,7 +159,7 @@ func ImageSetToString(a ImageSetMongo) string {
 	// AutoTags
 	sb.WriteString("\nAutoTags:\n")
 	for _, tag := range a.AutoTags {
-		sb.WriteString(fmt.Sprintf(" - %s\n", tag))
+		sb.WriteString(fmt.Sprintf(" - %s\n", tag.Hex()))
 	}
 
 	// TagRuleOverrides
@@ -210,10 +206,10 @@ func SourcesToString(a SourceInfo) string {
 
 	sb.WriteString("Tags:\n")
 	for _, tag := range a.Tags {
-		if tag.JP != "" {
-			sb.WriteString(fmt.Sprintf("   - %s (%s)\n", tag.Name, tag.JP))
+		if tag.EN != "" {
+			sb.WriteString(fmt.Sprintf("   - %s (%s)\n", tag.EN, tag.Default))
 		} else {
-			sb.WriteString(fmt.Sprintf("   - %s\n", tag.Name))
+			sb.WriteString(fmt.Sprintf("   - %s\n", tag.Default))
 		}
 	}
 

@@ -4,7 +4,7 @@ import { useDangerAlert } from "../AlertPopup"
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider"
 import { deleteApi } from "@/components/api/delete-api"
 import { toast } from "sonner"
-import { useImageSetsProvider } from "../ImageSetProvider"
+import { useImageSetsActions } from "../ImageSetProvider"
 
 interface Props {
   setOpen: (e: boolean) => void
@@ -15,7 +15,7 @@ interface Props {
 export default function MorePopup({ setOpen, openState, id }: Props) {
 
 
-  const { removeSet } = useImageSetsProvider()
+  const { removeSet } = useImageSetsActions()
 
   const popoverRef = useRef<HTMLDivElement>(null)
   const [WasOpen, setwasOpen] = useState(false)

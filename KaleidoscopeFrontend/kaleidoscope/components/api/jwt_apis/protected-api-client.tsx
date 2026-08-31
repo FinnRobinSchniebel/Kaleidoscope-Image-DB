@@ -16,15 +16,6 @@ export interface JWTLayout extends JwtPayload {
   IndefiniteRef: boolean
 }
 
-export interface SearchItems {
-  //_id: string
-  Author?: string[]
-  Tags?: string[]
-  FromDate?: number
-  ToDate?: number
-  Title?: string
-}
-
 export class protectedAPI {
 
 
@@ -134,18 +125,7 @@ export class protectedAPI {
         this.onUnauthorized()
       }
     }
-    //return result after second attempt 
+    //return result after second attempt
     return callResult
-  }
-
-
-  public async GetSearch(Terms: SearchItems) {
-    const newRequest: GORequest = {
-      endpoint: "/search",
-      type: "POST",
-      header: { 'Content-Type': 'application/json'},
-      body: JSON.stringify(Terms)
-    }
-    return this.CallProtectedAPI(newRequest)
   }
 }

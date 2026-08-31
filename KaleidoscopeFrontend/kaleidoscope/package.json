@@ -21,6 +21,7 @@
     "@toolwind/anchors": "^1.0.10",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
     "embla-carousel-react": "^8.6.0",
     "js-cookie": "^3.0.5",
     "jwt-decode": "^4.0.0",
@@ -39,6 +40,7 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@playwright/cli": "^0.1.18",
     "@tailwindcss/postcss": "^4",
     "@types/js-cookie": "^3",
     "@types/node": "^20",

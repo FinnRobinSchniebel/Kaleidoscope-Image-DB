@@ -5,7 +5,7 @@ import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 
 import { useContext, useLayoutEffect, useRef, useState } from "react";
 import Source from "../SourceInfo";
-import TagBadge from "./TagBadge";
+import TagBadge, { ResolvedTagBadge } from "./TagBadge";
 import { HideUIContext } from "./VerticalSetCarousel";
 
 
@@ -79,25 +79,32 @@ export default function Description({ info, WhenOpenCallback}: props) {
 
           <div key={"NonCollapsibleDescription"} className="flex overflow-x-hidden overflow-y-hidden">
             <span ref={tagContainerRef} className={isDescriptionOpen ? "" : "w-fit h-6 overflow-x-hidden overflow-y-hidden"}>
-              {info?.Tags.map((item: string, index: number) => (
-                <TagBadge key={`tag-${item}`} tag={item} />
-              ))}
+              {info && info.Tags.length === 0
+                ? <TagBadge tag="Untagged" variant="muted" />
+                : info?.Tags.map((item: string, index: number) => (
+                  <ResolvedTagBadge key={`tag-${item}`} id={item} />
+                ))}
             </span>
+            
             {/* tag count beyond visible */}
             {!isDescriptionOpen && moreTagCount > 0 &&
               <span className="inline-block shrink-0 flex-auto ">
                 <Badge className="mr-2">"+{moreTagCount}"</Badge>
               </span>}
+
           </div>
+
           <div className="flex overflow-x-hidden overflow-y-hidden">
             <div className={`overflow-hidden font-bold ${!isDescriptionOpen && "whitespace-nowrap"}`}>
               {/* title */}
               {info?.Title ?? "..."}
             </div>
+
             {!isDescriptionOpen &&
               <div className="ml-1 mr-1 inline-block shrink-0 px-1 bg-white/10 rounded-sm">
                 more...
               </div>}
+              
           </div>
           <CollapsibleContent className=" transition-all duration-300 ease-out">
               

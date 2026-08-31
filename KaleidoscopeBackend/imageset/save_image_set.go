@@ -1,7 +1,6 @@
 package imageset
 
 import (
-	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tagging"
 	"context"
 	"errors"
 	"fmt"
@@ -13,11 +12,35 @@ import (
 	"mime/multipart"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// AutoTagger avoids an import cycle: tagging needs imageset's types, so this
+// interface is owned here and implemented by tagging.AutoTagFunc in main.go.
+type AutoTagger interface {
+	// ProcessSourceTags mutates set in place: merges fetched into
+	// Sources[sourceIdx].Tags, and updates AutoTags/Tags for tags new to
+	// the set. Leave Sources[sourceIdx].Tags empty first if sourceIdx has
+	// never been recorded before, so every fetched tag counts as new.
+	ProcessSourceTags(userID string, set *ImageSetMongo, sourceIdx int, fetched []SourceTag) error
+	// RecordDeletion undoes usage counts recorded when the now-deleted set
+	// was created or synced: source tags from sources, AutoTags from tags.
+	RecordDeletion(userID string, sources []SourceInfo, tags []string) error
+	// RecomputeSystemTags reconciles set's computed tags (e.g. Lost Media,
+	// Untracked) against its current Sources, mutating AutoTags/Tags in
+	// place. Does not persist set - callers own the eventual save.
+	RecomputeSystemTags(userID string, set *ImageSetMongo) error
+	// ResolveTagTerm resolves term (a tag name or partial name from a search
+	// query) to the ids of every AutoTag whose Name contains it. If the
+	// reserved Untagged AutoTag matches by name, its id is excluded from ids
+	// and matchEmpty is set instead, since its id never appears literally in
+	// any set's Tags.
+	ResolveTagTerm(userID string, term string) (ids []string, matchEmpty bool, err error)
+}
+
+var Tagger AutoTagger
 
 type MediaSource interface {
 	Open() (io.ReadSeekCloser, error)
@@ -104,6 +127,11 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	imageSet.Image = nil
 
 	imageSet.KscopeUserId = ""
+	// non-nil: a nil slice would marshal as BSON null instead of [], which
+	// breaks tagging's $addToSet/$pull against this field later.
+	imageSet.AutoTags = []bson.ObjectID{}
+	imageSet.Tags = nil
+	imageSet.TagRuleOverrides = nil
 
 	//set the author in case of none given to avoid issues with file path creation
 	if len(imageSet.Authors) == 0 || (imageSet.Authors[0] == "") {
@@ -111,16 +139,6 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	}
 	//add userId (done as seperate step to avoid exploits if changes are made)
 	imageSet.KscopeUserId = userId
-
-	//derive main tag list suggestions from each source's own tags, merging into
-	//whatever tags were already set without duplicating any
-	for _, src := range imageSet.Sources {
-		for _, t := range tagging.AutoTag(userId, src.Name, SourceTagNames(src.Tags)) {
-			if !slices.Contains(imageSet.Tags, t) {
-				imageSet.Tags = append(imageSet.Tags, t)
-			}
-		}
-	}
 
 	//check media count first to avoid empty imagsets in db
 	if len(media) == 0 {
@@ -161,6 +179,14 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	}()
 
 	imageSet.ID = insertResult.InsertedID.(bson.ObjectID)
+
+	for idx, src := range imageSet.Sources {
+		fetched := src.Tags
+		imageSet.Sources[idx].Tags = nil // nothing recorded for this source yet - every fetched tag is new
+		if err := Tagger.ProcessSourceTags(userId, imageSet, idx, fetched); err != nil {
+			return nil, "", fmt.Errorf("processing source tags: %w", err)
+		}
+	}
 
 	hashHits := make(CollisionMap)
 

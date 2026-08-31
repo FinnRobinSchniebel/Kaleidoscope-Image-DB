@@ -27,7 +27,7 @@ const ProtectedContext = createContext<protectedAPI | null>(null)
 
 export function ProtectedProvider({ token, children }: Props) {
 
-  console.log(token)
+  //console.log(token)
 
   const router = useRouter()
   const pathname = usePathname()

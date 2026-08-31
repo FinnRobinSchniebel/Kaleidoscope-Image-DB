@@ -1,14 +1,8 @@
 package imageset
 
 import (
-	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tagging"
-	"context"
-	"errors"
 	"fmt"
-	"slices"
 	"time"
-
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // ApplySourceMetadataUpdate updates source i's title, description and tags from
@@ -30,13 +24,8 @@ func ApplySourceMetadataUpdate(a *ImageSetMongo, i int, newSrc SourceInfo, check
 		UpdateSourceDescription(a, i, newSrc.Description)
 	}
 
-	if added := newTags(old.Tags, newSrc.Tags); len(added) > 0 {
-		a.Sources[i].Tags = append(a.Sources[i].Tags, added...)
-		for _, t := range tagging.AutoTag(userId, newSrc.Name, SourceTagNames(added)) {
-			if !slices.Contains(a.Tags, t) {
-				a.Tags = append(a.Tags, t)
-			}
-		}
+	if err := Tagger.ProcessSourceTags(userId, a, i, newSrc.Tags); err != nil {
+		return fmt.Errorf("processing source tags: %w", err)
 	}
 
 	a.Sources[i].Date = newSrc.Date
@@ -45,22 +34,7 @@ func ApplySourceMetadataUpdate(a *ImageSetMongo, i int, newSrc SourceInfo, check
 	a.Sources[i].PendingImageChange = false
 	a.Sources[i].SourceMissing = false
 
-	return SaveImageSet(a)
-}
-
-// newTags returns entries in fetched whose canonical tag isn't present in stored.
-func newTags(stored, fetched []SourceTag) []SourceTag {
-	existing := make(map[string]struct{}, len(stored))
-	for _, t := range stored {
-		existing[t.canonical()] = struct{}{}
-	}
-	added := make([]SourceTag, 0)
-	for _, t := range fetched {
-		if _, ok := existing[t.canonical()]; !ok {
-			added = append(added, t)
-		}
-	}
-	return added
+	return UpdateImageSet(a)
 }
 
 // MarkSourcePendingImageChange records that source i's images no longer match
@@ -73,27 +47,38 @@ func MarkSourcePendingImageChange(a *ImageSetMongo, i int, sourceDate, checkedAt
 	a.Sources[i].LastImageUpdate = sourceDate
 	a.Sources[i].Date = sourceDate
 	a.Sources[i].LastChecked = checkedAt
-	return SaveImageSet(a)
+	return UpdateImageSet(a)
 }
 
 // MarkSourceMissing records that source i could no longer be fetched. Any prior
 // PendingImageChange is cleared along with it: there's no source left to update
 // the images from, so an unresolved change can no longer be completed.
+// See MarkSourceRecovered for the opposite transition.
 func MarkSourceMissing(a *ImageSetMongo, i int, checkedAt time.Time) error {
+	wasMissing := a.Sources[i].SourceMissing
 	a.Sources[i].SourceMissing = true
 	a.Sources[i].PendingImageChange = false
 	a.Sources[i].LastChecked = checkedAt
-	return SaveImageSet(a)
+	if !wasMissing {
+		if err := Tagger.RecomputeSystemTags(a.KscopeUserId, a); err != nil {
+			return fmt.Errorf("computing system tags: %w", err)
+		}
+	}
+	return UpdateImageSet(a)
 }
 
-// SaveImageSet overwrites the stored document with a's current contents.
-func SaveImageSet(a *ImageSetMongo) error {
-	result, err := Collection.UpdateByID(context.Background(), a.ID, bson.M{"$set": a})
-	if err != nil {
-		return fmt.Errorf("updating image set: %w", err)
+// MarkSourceRecovered records that source i is reachable again with nothing
+// else to report - no metadata change, no image change (those cases go
+// through ApplySourceMetadataUpdate / MarkSourcePendingImageChange instead,
+// which already clear SourceMissing themselves).
+func MarkSourceRecovered(a *ImageSetMongo, i int, checkedAt time.Time) error {
+	wasMissing := a.Sources[i].SourceMissing
+	a.Sources[i].SourceMissing = false
+	a.Sources[i].LastChecked = checkedAt
+	if wasMissing {
+		if err := Tagger.RecomputeSystemTags(a.KscopeUserId, a); err != nil {
+			return fmt.Errorf("computing system tags: %w", err)
+		}
 	}
-	if result.MatchedCount == 0 {
-		return errors.New("update matched no image set")
-	}
-	return nil
+	return UpdateImageSet(a)
 }

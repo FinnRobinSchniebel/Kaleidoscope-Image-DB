@@ -26,3 +26,6 @@ const pixivServiceName = "pixiv"
 
 const PixivDelaySec = 1.0 //seconds between requests
 const PixivQpT = 1        //number of queries between delays
+
+//Accept-Language sent on every pixiv App API request, so Pixiv returns translated tag names (Tag.TranslatedName)
+const pixivAcceptLanguage = "en"

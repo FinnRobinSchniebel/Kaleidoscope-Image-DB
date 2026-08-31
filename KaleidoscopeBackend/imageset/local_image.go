@@ -90,7 +90,7 @@ func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 
 		err := os.Remove(path + entry.Name)
 		if err != nil {
-			fmt.Printf("Failed to Find File: %s\n", entry)
+			fmt.Printf("Failed to Find File: %s\n", entry.Name)
 			errList = errors.Join(errList, err)
 		}
 	}
@@ -101,7 +101,7 @@ func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 
 		err := os.Remove(path + LowResPathAppend + entry.LowResName)
 		if err != nil {
-			fmt.Printf("Failed to Find File: %s\n", entry)
+			fmt.Printf("Failed to Find File: %s\n", entry.LowResName)
 			errList = errors.Join(errList, err)
 		}
 	}

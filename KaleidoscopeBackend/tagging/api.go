@@ -1,95 +1,265 @@
 package tagging
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
+
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 
 	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-/*
-Returns an array of images in the 'images' field
-*/
-func AddTag(c *fiber.Ctx) error {
+// autoTagErrorResponse maps an AutoTag CRUD failure to the HTTP status and
+// client-safe message describing it. Unrecognized errors map to 500 and
+// are logged here, not returned to the client.
+func autoTagErrorResponse(err error, fallback string) (int, string) {
+	switch {
+	case errors.Is(err, ErrAutoTagNotFound):
+		return fiber.StatusNotFound, err.Error()
+	case errors.Is(err, ErrAutoTagNameExists):
+		return fiber.StatusConflict, err.Error()
+	case errors.Is(err, ErrAutoTagNameReserved):
+		return fiber.StatusBadRequest, err.Error()
+	case errors.Is(err, ErrSystemAutoTagImmutable):
+		return fiber.StatusForbidden, err.Error()
+	default:
+		log.Printf("tagging: %v", err)
+		return fiber.StatusInternalServerError, fallback
+	}
+}
 
-	var inputs Tag
-
-	c.BodyParser(&inputs)
-
-	userID := c.Locals("UserID").(string)
+func userIDFromLocals(c *fiber.Ctx) (bson.ObjectID, error) {
+	userID, _ := c.Locals("UserID").(string)
 	if userID == "" {
-		return c.Status(500).SendString("No user ID provided")
+		return bson.ObjectID{}, fmt.Errorf("no user id in context")
 	}
-
-	var err error
-
-	inputs.User, err = bson.ObjectIDFromHex(userID)
-	if err != nil {
-		return err
-	}
-
-	err = AddTags(inputs)
-
-	if err != nil {
-		return err
-	}
-	return c.SendStatus(200)
+	return bson.ObjectIDFromHex(userID)
 }
 
-// TODO
-func TagRetrieve(c *fiber.Ctx) error {
-
-	var requestParams struct {
-		IDs []string `json:"ids" bson:"ids" form:"ids" query:"ids"`
+// GET /api/sourcetags/search?source=&lang=&prefix=
+func SearchSourceTagsHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
 	}
-	err := c.QueryParser(&requestParams)
-	fmt.Println(requestParams.IDs)
-	if len(requestParams.IDs) == 0 || err != nil {
-		return c.Status(http.StatusBadRequest).SendString("no id given")
+	prefix := c.Query("prefix")
+	if prefix == "" {
+		return c.Status(http.StatusBadRequest).SendString("prefix is required")
 	}
+	results, err := SearchSourceTags(userID, c.Query("source"), c.Query("lang"), prefix, 20)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	return c.JSON(results)
+}
 
-	var objectIDs []bson.ObjectID
-	for _, idStr := range requestParams.IDs {
-		oid, err := bson.ObjectIDFromHex(idStr)
-		if err != nil {
-			return err
+// GET /api/sourcetags?source=&cursor=&limit= - limit<=0 (including omitted)
+// returns everything matching. TODO: give this a bounded default and real
+// paging once a UI consumes the cursor param.
+func ListSourceTagsHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	results, err := ListSourceTags(userID, c.Query("source"), c.Query("cursor"), c.QueryInt("limit", 0))
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	return c.JSON(results)
+}
+
+// POST /api/sourcetags/regather - recomputes the caller's own SourceTags
+// from scratch. Synchronous.
+func RegatherSourceTagsHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	summary, err := RegatherSourceTags(userID)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	return c.JSON(summary)
+}
+
+// GET /api/autotags?prefix=&limit= - {id, name, count} only, no SourceTagDoc
+// resolution. For autocomplete and for resolving ImageSetMongo.AutoTags IDs
+// to names. limit <= 0 means unlimited.
+func ListAutoTagsHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	results, err := ListAutoTagSummaries(userID, c.Query("prefix"), c.QueryInt("limit", 0))
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	return c.JSON(results)
+}
+
+// GET /api/autotags/byIds?ids=id1,id2,... - resolves specific AutoTag IDs to
+// {id, name, count}. Missing/unknown IDs are omitted, not an error.
+func AutoTagSummariesByIDHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	raw := strings.Split(c.Query("ids"), ",")
+	ids := make([]bson.ObjectID, 0, len(raw))
+	for _, s := range raw {
+		if s == "" {
+			continue
 		}
-		objectIDs = append(objectIDs, oid)
+		id, err := bson.ObjectIDFromHex(s)
+		if err != nil {
+			return c.Status(http.StatusBadRequest).SendString("invalid id: " + s)
+		}
+		ids = append(ids, id)
 	}
-
-	// fmt.Printf("tags: %s, authors %s\n", fmt.Sprintf("%s", requestParams.Tags), fmt.Sprintf("%s", requestParams.Author))
-
-	// result, err := imageset.GetImageInfoFromDB(objectIDs)
-	// if err != nil {
-	// 	return c.Status(http.StatusInternalServerError).SendString("an error occurd in the query: " + err.Error())
-	// }
-	// res := fiber.Map{
-	// 	"imagesets": result,
-	// }
-	// return c.JSON(res)
-	return nil
+	results, err := AutoTagSummariesByID(userID, ids)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	return c.JSON(results)
 }
 
-func Testautotag(c *fiber.Ctx) error {
-
-	var items struct {
-		Tags []string `json:"tags" bson:"tags" form:"tags"`
-	}
-
-	err := c.BodyParser(&items)
+// GET /api/autotags/details?prefix= - full AutoTagWithMatches, resolved
+// SourceTagDocs included. For the edit page only; costs an extra query and
+// a much larger payload than ListAutoTagsHandler.
+func ListAutoTagDetailsHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
 	if err != nil {
-		return err
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
 	}
-	if len(items.Tags) == 0 {
-		return c.Status(http.StatusBadRequest).SendString("no tags given")
-	}
-
-	res, err := FindAutoTag(items.Tags)
+	results, err := ListAutoTags(userID)
 	if err != nil {
-		return err
+		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+	}
+	if prefix := c.Query("prefix"); prefix != "" {
+		results = filterAutoTagsByPrefix(results, prefix)
+	}
+	return c.JSON(results)
+}
+
+func filterAutoTagsByPrefix(tags []AutoTagWithMatches, prefix string) []AutoTagWithMatches {
+	prefix = strings.ToLower(prefix)
+	filtered := make([]AutoTagWithMatches, 0, len(tags))
+	for _, t := range tags {
+		if strings.HasPrefix(strings.ToLower(t.Name), prefix) {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
+type createAutoTagRequest struct {
+	Name           string   `json:"name"`
+	SrcTagKeyMatch []string `json:"srcTagKeyMatch"`
+}
+
+// POST /api/autotags
+func CreateAutoTagHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	var body createAutoTagRequest
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(http.StatusBadRequest).SendString(err.Error())
+	}
+	if body.Name == "" {
+		return c.Status(http.StatusBadRequest).SendString("name is required")
+	}
+	id, err := CreateAutoTag(userID, body.Name, body.SrcTagKeyMatch)
+	if err != nil {
+		status, msg := autoTagErrorResponse(err, "could not create auto tag")
+		return c.Status(status).SendString(msg)
+	}
+	return c.JSON(fiber.Map{"id": id.Hex()})
+}
+
+// updateAutoTagRequest.SrcTagKeyMatch is nil when omitted from the body (not
+// to be changed) vs a non-nil empty slice when explicitly cleared.
+type updateAutoTagRequest struct {
+	Name           *string  `json:"name"`
+	SrcTagKeyMatch []string `json:"srcTagKeyMatch"`
+}
+
+// PATCH /api/autotags/:id
+func UpdateAutoTagHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	autoTagID, err := bson.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(http.StatusBadRequest).SendString("invalid id")
+	}
+	var body updateAutoTagRequest
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(http.StatusBadRequest).SendString(err.Error())
+	}
+	err = UpdateAutoTag(userID, autoTagID, body.Name, body.SrcTagKeyMatch)
+	if err != nil {
+		status, msg := autoTagErrorResponse(err, "could not update auto tag")
+		return c.Status(status).SendString(msg)
+	}
+	return c.SendStatus(http.StatusOK)
+}
+
+// DELETE /api/autotags/:id
+func DeleteAutoTagHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	autoTagID, err := bson.ObjectIDFromHex(c.Params("id"))
+	if err != nil {
+		return c.Status(http.StatusBadRequest).SendString("invalid id")
+	}
+	err = DeleteAutoTag(userID, autoTagID)
+	if err != nil {
+		status, msg := autoTagErrorResponse(err, "could not delete auto tag")
+		return c.Status(status).SendString(msg)
+	}
+	return c.SendStatus(http.StatusOK)
+}
+
+type setTagOverridesRequest struct {
+	IDs       []string `json:"ids"`
+	Overrides []string `json:"overrides"`
+}
+
+// PATCH /api/imagesets/tagoverrides
+func SetTagOverridesHandler(c *fiber.Ctx) error {
+	userID, err := userIDFromLocals(c)
+	if err != nil {
+		return c.Status(http.StatusUnauthorized).SendString(err.Error())
+	}
+	var body setTagOverridesRequest
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(http.StatusBadRequest).SendString(err.Error())
+	}
+	if len(body.IDs) == 0 {
+		return c.Status(http.StatusBadRequest).SendString("ids is required")
+	}
+	if len(body.Overrides) == 0 {
+		return c.Status(http.StatusBadRequest).SendString("overrides is required")
+	}
+	for _, entry := range body.Overrides {
+		if _, _, ok := ParseTagRuleOverrideEntry(entry); !ok {
+			return c.Status(http.StatusBadRequest).SendString("invalid override entry: " + entry)
+		}
 	}
 
-	return c.JSON(res)
-
+	updated, err := SetTagOverrides(userID.Hex(), body.IDs, body.Overrides)
+	if err != nil {
+		status, msg := imageset.ImageSetErrorResponse(err)
+		return c.Status(status).SendString(msg)
+	}
+	return c.JSON(fiber.Map{"updated": updated})
 }

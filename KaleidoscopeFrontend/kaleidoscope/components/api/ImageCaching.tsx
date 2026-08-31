@@ -41,7 +41,7 @@ class ImageCacheManager {
     if (this.inflight.has(key)) {
       return this.inflight.get(key)!;
     }
-    console.log("miss: " + key)
+    //console.log("miss: " + key)
 
     const promise = (async () => {
       const {blob, err}= await fetcher();

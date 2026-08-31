@@ -6,14 +6,14 @@ import { useEffect } from "react";
 import { protectedAPI } from "@/components/api/jwt_apis/protected-api-client";
 import { useInView } from 'react-intersection-observer';
 import { searchPageCountResults } from '../../../components/api/searchResults';
-import Image from 'next/image';
+import { Loader2Icon } from 'lucide-react';
 import { Dialog } from '@/components/ui/dialog';
 
 import ImageSetDialog from '@/components/KscopeSharedUI/ImageSet/ImageSetDialog';
 import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider';
 import { SetData } from '@/components/api/search-api';
 import ImageCard from './ImageCards';
-import { useImageSetsProvider } from '@/components/KscopeSharedUI/ImageSet/ImageSetProvider';
+import { useImageSetsData, useImageSetsActions } from '@/components/KscopeSharedUI/ImageSet/ImageSetProvider';
 
 
 type Props = {
@@ -32,7 +32,8 @@ const imageSetAccess = createContext<ImageSetAccess | null>(null)
 
 export default function LoadSearchResults(props: Props) {
 
-  const { imageSets, loadNextPage } = useImageSetsProvider()
+  const { imageSets, generation } = useImageSetsData()
+  const { loadNextPage } = useImageSetsActions()
 
   const { ref, inView } = useInView()
   const RunningRef = useRef(false)
@@ -69,7 +70,7 @@ export default function LoadSearchResults(props: Props) {
     }
 
 
-  }, [inView, loadNextPage])
+  }, [inView, loadNextPage, generation])
 
   return (
     <>
@@ -81,11 +82,7 @@ export default function LoadSearchResults(props: Props) {
         </ul>
       </section>
       <section className='justify-items-center'>
-        <Image ref={ref} src="./file.svg"
-          alt=""
-          width={50}
-          height={50}
-        />
+        <Loader2Icon ref={ref} className="size-8 animate-spin text-muted-foreground" />
       </section>
       <Dialog open={open} onOpenChange={setOpen}>
         <ImageSetDialog imageSets={imageSets} index={index} />

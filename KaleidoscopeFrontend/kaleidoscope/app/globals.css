@@ -51,7 +51,7 @@
   --foreground: oklch(100% 0.00011 271.152 / 0.308);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(100% 0.00011 271.152 / 0.842);
+  --popover: oklch(100% 0.00011 271.152 / 0.644);
   --popover-foreground: oklch(0% 0 0);
   --primary: oklch(0.205 0 0);
   --primary-foreground: oklch(0.985 0 0);
@@ -126,7 +126,7 @@
 @layer utilities {
    .imgCard{
      size: calc(var(--spacing) * 50)
-   } 
+   }
 
 
 

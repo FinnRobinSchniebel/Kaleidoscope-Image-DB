@@ -71,7 +71,7 @@ func openPixivSession(userId string) (*PixivSession, error) {
 			return fmt.Errorf("pixiv requires an APP refresh token (Key1)")
 		}
 
-		app, err := pixiv.NewApp(creds.Key1)
+		app, err := newPixivApp(creds.Key1)
 		if err != nil {
 			return fmt.Errorf("pixiv APP API: %w", err)
 		}
@@ -84,6 +84,17 @@ func openPixivSession(userId string) (*PixivSession, error) {
 		return nil, err
 	}
 	return session, nil
+}
+
+// newPixivApp builds an App API client with the project's Accept-Language
+// header set, so Pixiv returns translated tag names (Tag.TranslatedName).
+func newPixivApp(refreshToken string) (*pixiv.AppPixivAPI, error) {
+	app, err := pixiv.NewApp(refreshToken)
+	if err != nil {
+		return nil, err
+	}
+	app.SetAcceptLanguage(pixivAcceptLanguage)
+	return app, nil
 }
 
 // ---- ServiceProvider implementation ----
@@ -101,7 +112,7 @@ func (p *PixivProvider) TestCredentials(userId string, creds ExternalApiKeys) er
 	if creds.Key1 == "" {
 		return fmt.Errorf("pixiv requires a refresh token")
 	}
-	app, err := pixiv.NewApp(creds.Key1)
+	app, err := newPixivApp(creds.Key1)
 	if err != nil {
 		return err
 	}
@@ -217,7 +228,8 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 				continue
 			}
 			src, idx := sourceByID(set, idStr)
-			if idx >= 0 && sourceChanged(il, src) {
+
+			if idx >= 0 && (sourceChanged(il, src) || src.LastChecked.IsZero()) {
 				enqueueIllustFetch(userId, il.ID, true)
 			}
 		}
@@ -418,17 +430,16 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string) *imageset.Imag
 	}
 }
 
-// pixivIllustTags returns the illust's tags, preferring Pixiv's own translation
-// as the effective Name and keeping the untranslated tag as JP when a
-// translation exists.
+// pixivIllustTags returns the illust's tags: Default is always the untranslated
+// Pixiv tag, EN is Pixiv's own translation when it provides one.
 func pixivIllustTags(illust *pixivmodel.Illust) []imageset.SourceTag {
 	tags := make([]imageset.SourceTag, 0, len(illust.Tags))
 	for _, t := range illust.Tags {
+		tag := imageset.SourceTag{Default: t.Name}
 		if t.TranslatedName != nil && *t.TranslatedName != "" {
-			tags = append(tags, imageset.SourceTag{Name: *t.TranslatedName, JP: t.Name})
-		} else {
-			tags = append(tags, imageset.SourceTag{Name: t.Name})
+			tag.EN = *t.TranslatedName
 		}
+		tags = append(tags, tag)
 	}
 	return tags
 }
@@ -477,16 +488,16 @@ func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust) error {
 		return fmt.Errorf("illust %d: source vanished from its own set between sync passes", illust.ID)
 	}
 
-	changed, err := imagesChanged(illust, set, idx)
-	if err != nil {
-		return fmt.Errorf("checking images for illust %d: %w", illust.ID, err)
-	}
+	// changed, err := imagesChanged(illust, set, idx)
+	// if err != nil {
+	// 	return fmt.Errorf("checking images for illust %d: %w", illust.ID, err)
+	// }
 
 	checkedAt := time.Now()
-	if changed {
-		log.Printf("pixiv: illust %d (%q) images changed - deferring, manual review required", illust.ID, illust.Title)
-		return imageset.MarkSourcePendingImageChange(set, idx, illust.CreateDate, checkedAt)
-	}
+	// if changed {
+	// 	log.Printf("pixiv: illust %d (%q) images changed - deferring, manual review required", illust.ID, illust.Title)
+	// 	return imageset.MarkSourcePendingImageChange(set, idx, illust.CreateDate, checkedAt)
+	// }
 
 	newSrc := pixivSourceInfo(illust, set.Sources[idx])
 	if err := imageset.ApplySourceMetadataUpdate(set, idx, newSrc, checkedAt, userId); err != nil {

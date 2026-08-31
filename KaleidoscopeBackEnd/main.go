@@ -28,7 +28,8 @@ const minSecretKeySize = 32
 const ImageDbName = "ImageSets"
 const UserDbName = "Users"
 const SessionDbName = "Sessions"
-const tagDbName = "Tags"
+const sourceTagsDbName = "SourceTags"
+const autoTagsDbName = "AutoTags"
 const servicesDbName = "services"
 
 // const notificationDbName = "notifications"
@@ -114,9 +115,20 @@ func ConnectDB() {
 	imageset.Collection = db.Collection(ImageDbName)
 	authutil.UserCollection = db.Collection(UserDbName)
 	authutil.SessionDb = db.Collection((SessionDbName))
-	tagging.TagsDB = db.Collection(tagDbName)
+	tagging.SourceTagsDB = db.Collection(sourceTagsDbName)
+	tagging.AutoTagsDB = db.Collection(autoTagsDbName)
 	services.ServicesDb = db.Collection(servicesDbName)
 	imageset.LowResPathAppend = LowResPathAppend
+	imageset.Tagger = tagging.AutoTagFunc{}
+	services.RegistrationHook = tagging.RegistrationHookFunc{}
+	authutil.TagProvisioner = tagging.SystemTagProvisionerFunc{}
+
+	if err := imageset.EnsureIndexes(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+	if err := tagging.EnsureIndexes(context.Background()); err != nil {
+		log.Fatal(err)
+	}
 
 	log.Print("Connected, no issues ---------------------")
 
@@ -154,6 +166,7 @@ func StartAPI() {
 	app.Get("/api/imagesets", authutil.AuthSessionToken, imageset.GetImageSetById)
 	app.Post("/api/imagesets", authutil.AuthSessionToken, imageset.PostImageSet)
 	app.Delete("/api/imagesets", authutil.AuthSessionToken, imageset.DeleteImageSets)
+	app.Patch("/api/imagesets/tagoverrides", authutil.AuthSessionToken, tagging.SetTagOverridesHandler)
 	//TODO: Edit imageset api
 	//TODO: MarkForDepetion api
 
@@ -177,10 +190,19 @@ func StartAPI() {
 
 	app.Get("/api/thumbnail", authutil.AuthSessionToken, imageset.GetThumbnail)
 
-	//tags
-	app.Get("/api/getAllTags", authutil.AuthSessionToken, tagging.TagRetrieve)
-	app.Get("/api/testAutoTag", tagging.Testautotag)
-	app.Post("/api/addtag", authutil.AuthSessionToken, tagging.AddTag)
+	//source tags (imported tags, read-only from the frontend)
+	app.Get("/api/sourcetags/search", authutil.AuthSessionToken, tagging.SearchSourceTagsHandler)
+	app.Get("/api/sourcetags", authutil.AuthSessionToken, tagging.ListSourceTagsHandler)
+	app.Post("/api/sourcetags/regather", authutil.AuthSessionToken, tagging.RegatherSourceTagsHandler)
+
+	//auto tags
+	app.Get("/api/autotags", authutil.AuthSessionToken, tagging.ListAutoTagsHandler)
+	app.Get("/api/autotags/byIds", authutil.AuthSessionToken, tagging.AutoTagSummariesByIDHandler)
+	app.Get("/api/autotags/details", authutil.AuthSessionToken, tagging.ListAutoTagDetailsHandler)
+	app.Post("/api/autotags", authutil.AuthSessionToken, tagging.CreateAutoTagHandler)
+	app.Patch("/api/autotags/:id", authutil.AuthSessionToken, tagging.UpdateAutoTagHandler)
+	app.Delete("/api/autotags/:id", authutil.AuthSessionToken, tagging.DeleteAutoTagHandler)
+	//TODO: per-image-set "refresh tags" trigger (re-check one set's tags against current AutoTags)
 
 	//services
 	app.Get("/api/service/services", authutil.AuthSessionToken, services.ListServices) //lists all services with if the user has registered with it

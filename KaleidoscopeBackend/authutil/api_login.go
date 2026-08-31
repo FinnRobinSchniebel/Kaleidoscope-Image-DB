@@ -10,6 +10,16 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// SystemTagProvisioner avoids an import cycle: authutil can't import
+// tagging directly (tagging imports imageset, which imports authutil), so
+// this interface is owned here and implemented by
+// tagging.SystemTagProvisionerFunc, wired up in main.go's ConnectDB.
+type SystemTagProvisioner interface {
+	CreateSystemAutoTagsForUser(userID bson.ObjectID) error
+}
+
+var TagProvisioner SystemTagProvisioner
+
 func RegisterUser(c *fiber.Ctx) error {
 
 	username := c.FormValue("username")
@@ -39,10 +49,17 @@ func RegisterUser(c *fiber.Ctx) error {
 
 	log.Println("New User: " + newuser.Username)
 
-	_, err = AddUser(newuser)
+	result, err := AddUser(newuser)
 
 	if err != nil {
 		return err
+	}
+
+	userID := result.InsertedID.(bson.ObjectID)
+	if err := TagProvisioner.CreateSystemAutoTagsForUser(userID); err != nil {
+		// Non-fatal: ensureSystemAutoTags's lazy fallback (tagging/system_tags.go)
+		// provisions these the first time this account's tags are actually needed.
+		log.Printf("------ Warning: provisioning system auto tags for user [%s]: %s ------", userID.Hex(), err)
 	}
 
 	return c.SendStatus(200)

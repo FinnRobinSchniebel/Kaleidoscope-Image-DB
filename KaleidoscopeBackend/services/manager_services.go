@@ -165,6 +165,19 @@ func (s *Scheduler) RegisterService(name string, cfg ServiceConfig) {
 	fmt.Printf("Services: A new service \"%s\" has been Registered by the service schedule. Delay: %s, QpT: %d", name, cfg.Delay, cfg.QueriesPerTurn)
 }
 
+// RegistrationListener is notified when a user's registration in some
+// service's rotation changes, so dependent state elsewhere can be kept in
+// sync (e.g. tagging's computed "Untracked" tag). Owned here, not by the
+// dependent package, to avoid an import cycle: services must not depend on
+// its listeners.
+type RegistrationListener interface {
+	OnServiceRegistrationChanged(userId, serviceName string)
+}
+
+// RegistrationHook is notified by AddUser/RemoveUser on every actual
+// registration change (not on no-op calls). nil is a valid, no-op default.
+var RegistrationHook RegistrationListener
+
 // AddUser adds a user to a service's round-robin rotation.
 // Safe to call after Start. No-op if the user is already present.
 func (s *Scheduler) AddUser(serviceName, userId string) error {
@@ -176,6 +189,9 @@ func (s *Scheduler) AddUser(serviceName, userId string) error {
 
 	if _, created := ss.ensureUser(userId); created {
 		fmt.Printf("Services: Added user [%s] to service: %s", userId, serviceName)
+		if RegistrationHook != nil {
+			go RegistrationHook.OnServiceRegistrationChanged(userId, serviceName)
+		}
 	}
 	return nil
 }
@@ -227,6 +243,9 @@ func (s *Scheduler) RemoveUser(serviceName, userId string) error {
 	}
 
 	fmt.Printf("Services: Removed user [%s] from service: %s", userId, serviceName)
+	if RegistrationHook != nil {
+		go RegistrationHook.OnServiceRegistrationChanged(userId, serviceName)
+	}
 	return nil
 }
 
@@ -444,7 +463,7 @@ func (ss *serviceScheduler) run() {
 		default:
 		}
 
-		task, ok := ss.nextTask()
+		task, userId, ok := ss.nextTask()
 		if !ok {
 			time.Sleep(50 * time.Millisecond)
 			continue
@@ -454,7 +473,9 @@ func (ss *serviceScheduler) run() {
 			time.Sleep(wait)
 		}
 
-		task()
+		if err := task(); err != nil {
+			fmt.Printf("ERROR: Services: task failed for user %s: %v\n", userId, err)
+		}
 		ss.lastRun = time.Now()
 	}
 }
@@ -462,7 +483,7 @@ func (ss *serviceScheduler) run() {
 // nextTask picks the next task from the front user.
 // When a user exhausts their QueriesPerTurn quota, they are rotated to the back.
 // Users with no pending tasks are skipped (and rotated past).
-func (ss *serviceScheduler) nextTask() (Task, bool) {
+func (ss *serviceScheduler) nextTask() (Task, string, bool) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
@@ -489,10 +510,10 @@ func (ss *serviceScheduler) nextTask() (Task, bool) {
 			ss.users = append(ss.users[1:], ss.users[0])
 		}
 
-		return task, true
+		return task, front.userId, true
 	}
 
-	return nil, false
+	return nil, "", false
 }
 
 // fireCredentialHook runs the registered provider's service-specific

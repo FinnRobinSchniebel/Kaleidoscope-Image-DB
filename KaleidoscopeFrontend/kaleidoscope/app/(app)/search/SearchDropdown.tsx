@@ -18,13 +18,6 @@ export function PopDownGroup(form:{ form: any }) {
     { id: "tagsCheck", label: "Search Tags", Description: "Add results for matching Tags." },
     { id: "sourceCheck", label: "Search Source", Description: "Add results for source names that match search." },
   ]
-  const OptionItemsGroupTwo = [
-    { id: "PartialCheck", label: "Partial Matches", Description: "Searching for incomplete and partial matches." },
-    { id: "AndOr", label: "Match One", Description: "Search for all that match one of Any part of the search" },
-  ]
-
-
-
   return (
     <>
       {OptionItemsGroupOne.map((item) => <PopDownItem key={"PDI-" + item.id} item={item} form={form}/>)}
