@@ -38,8 +38,8 @@ export async function searchPageCountResults(props: SearchPageCountProps): Promi
 
   const request: SearchRequest = {
     ...toRequestFilter(props.filter),
-    pageCount: 8,
-    skipCount: props.page * 8,
+    pageCount: 24,
+    skipCount: props.page * 24,
     protectedApiRef: props.protected
   }
 

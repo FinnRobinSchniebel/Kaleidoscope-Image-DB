@@ -75,7 +75,7 @@ export default function ImageCard(cardInfo: Card) {
 
 export function LoadingImageCard() {
   return (
-    <Skeleton className={cn("size-60 md:size:80 lg:size-80 2xl:size-90 md:m-[1px] 2xl:m-[4px]")}></Skeleton>
+    <Skeleton className={cn("object-cover pointer-events-none")}></Skeleton>
   )
 
 }

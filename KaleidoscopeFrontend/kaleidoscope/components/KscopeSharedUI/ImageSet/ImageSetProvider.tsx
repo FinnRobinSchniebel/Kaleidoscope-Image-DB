@@ -8,6 +8,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 interface ImageSetsDataContextType {
   imageSets: SetData[]
+  generation: number
 }
 
 interface ImageSetsActionsContextType {
@@ -49,6 +50,9 @@ export function ImageSetsProvider({ children, filter }: ImageSetsProviderProps) 
   //can recognize its result is stale and discard it instead of appending
   //onto (or racing with) the freshly-reset list
   const searchIdRef = useRef(0)
+  //reactive mirror of searchIdRef: mutating a ref alone doesn't retrigger
+  //effects, so this lets other effects depend on "a reset just happened"
+  const [generation, setGeneration] = useState(0)
 
   //Loads the next set of images when reaching the bottom of the list
   const loadNextPage = useCallback(async (): Promise<boolean> => {
@@ -114,6 +118,7 @@ export function ImageSetsProvider({ children, filter }: ImageSetsProviderProps) 
     pageRef.current = 0
     isEmptyRef.current = false
     setImageSets([])
+    setGeneration(searchIdRef.current)
   }, [])
 
   //Restart pagination from page 0 whenever the active search filter changes,
@@ -123,7 +128,7 @@ export function ImageSetsProvider({ children, filter }: ImageSetsProviderProps) 
     loadNextPage()
   }, [filter, loadNextPage, reset])
 
-  const data = useMemo(() => ({ imageSets }), [imageSets])
+  const data = useMemo(() => ({ imageSets, generation }), [imageSets, generation])
   const actions = useMemo(
     () => ({ loadNextPage, removeSet, reset }),
     [loadNextPage, removeSet, reset]
