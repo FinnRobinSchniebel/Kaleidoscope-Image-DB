@@ -13,7 +13,7 @@ import ImageSetDialog from '@/components/KscopeSharedUI/ImageSet/ImageSetDialog'
 import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider';
 import { SetData } from '@/components/api/search-api';
 import ImageCard from './ImageCards';
-import { useImageSetsProvider } from '@/components/KscopeSharedUI/ImageSet/ImageSetProvider';
+import { useImageSetsData, useImageSetsActions } from '@/components/KscopeSharedUI/ImageSet/ImageSetProvider';
 
 
 type Props = {
@@ -32,7 +32,8 @@ const imageSetAccess = createContext<ImageSetAccess | null>(null)
 
 export default function LoadSearchResults(props: Props) {
 
-  const { imageSets, loadNextPage } = useImageSetsProvider()
+  const { imageSets } = useImageSetsData()
+  const { loadNextPage } = useImageSetsActions()
 
   const { ref, inView } = useInView()
   const RunningRef = useRef(false)

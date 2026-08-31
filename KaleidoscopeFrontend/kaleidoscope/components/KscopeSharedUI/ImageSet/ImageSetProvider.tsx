@@ -4,16 +4,20 @@ import { SearchFilter, SetData } from "@/components/api/search-api"
 import { searchPageCountResults, SearchSkipResults } from "@/components/api/searchResults"
 import getAutoTagsByIds_api from "@/components/api/getAutoTagsByIds-api"
 import { AutoTagCacheContext, AutoTagCacheStore } from "./AutoTagCache"
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 
-interface ImageSetsContextType {
+interface ImageSetsDataContextType {
   imageSets: SetData[]
+}
+
+interface ImageSetsActionsContextType {
   loadNextPage: () => Promise<boolean>
   removeSet: (id: string) => void
   reset: () => void
 }
 
-const ImageSetsContext = createContext<ImageSetsContextType | null>(null)
+const ImageSetsDataContext = createContext<ImageSetsDataContextType | null>(null)
+const ImageSetsActionsContext = createContext<ImageSetsActionsContextType | null>(null)
 
 interface ImageSetsProviderProps {
   children: React.ReactNode
@@ -105,39 +109,45 @@ export function ImageSetsProvider({ children, filter }: ImageSetsProviderProps) 
     autoTagStore.request(res.imageSets.flatMap(s => s.tags))
   }, [protectedAPI, autoTagStore])
 
-  function reset() {
+  const reset = useCallback(() => {
     searchIdRef.current++
     pageRef.current = 0
     isEmptyRef.current = false
     setImageSets([])
-  }
+  }, [])
 
   //Restart pagination from page 0 whenever the active search filter changes,
   //so a new query doesn't just append onto results loaded under the old one.
   useEffect(() => {
     reset()
     loadNextPage()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, loadNextPage])
+  }, [filter, loadNextPage, reset])
+
+  const data = useMemo(() => ({ imageSets }), [imageSets])
+  const actions = useMemo(
+    () => ({ loadNextPage, removeSet, reset }),
+    [loadNextPage, removeSet, reset]
+  )
 
   return (
     <AutoTagCacheContext.Provider value={autoTagStore}>
-      <ImageSetsContext.Provider
-        value={{
-          imageSets,
-          loadNextPage,
-          removeSet,
-          reset
-        }}
-      >
-        {children}
-      </ImageSetsContext.Provider>
+      <ImageSetsActionsContext.Provider value={actions}>
+        <ImageSetsDataContext.Provider value={data}>
+          {children}
+        </ImageSetsDataContext.Provider>
+      </ImageSetsActionsContext.Provider>
     </AutoTagCacheContext.Provider>
   )
 }
 
-export function useImageSetsProvider() {
-  const ctx = useContext(ImageSetsContext)
-  if (!ctx) throw new Error("useImageSets must be used inside ImageSetsProvider")
+export function useImageSetsData() {
+  const ctx = useContext(ImageSetsDataContext)
+  if (!ctx) throw new Error("useImageSetsData must be used inside ImageSetsProvider")
+  return ctx
+}
+
+export function useImageSetsActions() {
+  const ctx = useContext(ImageSetsActionsContext)
+  if (!ctx) throw new Error("useImageSetsActions must be used inside ImageSetsProvider")
   return ctx
 }
