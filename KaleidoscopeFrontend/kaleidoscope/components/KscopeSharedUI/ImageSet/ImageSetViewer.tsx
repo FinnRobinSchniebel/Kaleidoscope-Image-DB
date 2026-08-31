@@ -1,4 +1,4 @@
-import GetImageSetData, { FullImageSetData } from "@/components/api/getImageSetData-api";
+import GetImageSetData, { FullImageSetData } from "@/components/api/GetImageSetData-api";
 import { useProtected } from "@/components/api/jwt_apis/ProtectedProvider";
 import { SetData } from "@/components/api/search-api";
 import { Carousel, CarouselApi, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";

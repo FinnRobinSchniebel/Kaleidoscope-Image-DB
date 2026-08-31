@@ -1,6 +1,6 @@
 
-import connectExteranel_api from '@/components/api/connectExternal-api'
-import { getServiceCredentials } from '@/components/api/getServiceCredentials-api'
+import connectExteranel_api from '@/components/api/ConnectExternal-api'
+import { getServiceCredentials } from '@/components/api/GetServiceCredentials-api'
 import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider'
 import SeparatorBorder from '@/components/KscopeSharedUI/SeparatorBorder'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'

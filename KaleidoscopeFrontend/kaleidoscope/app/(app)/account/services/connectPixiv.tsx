@@ -1,7 +1,7 @@
 'use client'
 
 import SeparatorBorder from '@/components/KscopeSharedUI/SeparatorBorder'
-import { getServiceCredentials } from '@/components/api/getServiceCredentials-api'
+import { getServiceCredentials } from '@/components/api/GetServiceCredentials-api'
 import { GORequest } from '@/components/api/apicaller'
 import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider'
 import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from '@/components/ui/field'

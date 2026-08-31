@@ -22,7 +22,7 @@ import { SubmitErrorHandler, SubmitHandler, useForm } from 'react-hook-form'
 
 import { useProtected } from '@/components/api/jwt_apis/ProtectedProvider'
 import { Item } from '@radix-ui/react-navigation-menu'
-import postZip from '@/components/api/postZip-api'
+import postZip from '@/components/api/PostZip-api'
 
 export type UploadFormValues = {
   zipFile: File | null
