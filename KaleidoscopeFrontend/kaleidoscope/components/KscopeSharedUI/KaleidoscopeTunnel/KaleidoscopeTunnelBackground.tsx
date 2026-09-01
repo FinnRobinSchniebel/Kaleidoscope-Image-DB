@@ -8,20 +8,28 @@ const PALETTE = [
 export default function KaleidoscopeTunnelBackground() {
   return (
     <div className="absolute inset-0 -z-10 overflow-hidden pointer-events-none flex items-center justify-center bg-[#0a0a12]">
-      <div className="relative w-full h-full">
-        {TUNNEL_TILE_PATCH.map((t, i) => (
-          <div
-            key={i}
-            className="tunnel-tile"
-            style={{
-              ["--u" as string]: t.u,
-              ["--v" as string]: t.v,
-              ["--rot" as string]: t.rot,
-              ["--mirror" as string]: t.mirrored ? -1 : 1,
-              background: PALETTE[i % PALETTE.length],
-            }}
-          />
-        ))}
+      <div className="relative w-full h-full" style={{ perspective: 1800 }}>
+        <div className="absolute inset-0" style={{ transformStyle: "preserve-3d" }}>
+          {TUNNEL_TILE_PATCH.map((t, i) => (
+            <div
+              key={i}
+              className="tunnel-plane"
+              style={{
+                ["--u" as string]: t.u,
+                ["--v" as string]: t.v,
+              }}
+            >
+              <div
+                className="tunnel-tile"
+                style={{
+                  ["--rot" as string]: t.rot,
+                  ["--mirror" as string]: t.mirrored ? -1 : 1,
+                  background: PALETTE[i % PALETTE.length],
+                }}
+              />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

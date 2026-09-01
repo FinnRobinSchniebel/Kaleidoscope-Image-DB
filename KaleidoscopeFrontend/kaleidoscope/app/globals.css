@@ -123,31 +123,137 @@
   }
 }
 
+:root {
+  /* cone-helix constants (Step 3) -- u-min/u-max match the actual generated
+     strip's extent (tunnelTilePatch.ts, recentred to [-120, 120]); tune the
+     rest visually */
+  --tunnel-u-min: -120;
+  --tunnel-u-max: 120;
+  --tunnel-v-half: 3;
+  --tunnel-n-turns: 3;
+  /* CSS translateZ is the opposite sign of "depth" -- positive moves an
+     element TOWARD the viewer (larger), negative moves it away (smaller).
+     So the near end sits at a small positive z, and the far/vanishing-point
+     end must be a large NEGATIVE z, not positive -- getting this backwards
+     pushes the "far" tiles past the camera entirely (invisible). */
+  /* z-near stays at exactly 0 (not a positive offset) -- CSS's perspective
+     scale factor is perspective / (perspective - z), which is hyperbolic, not
+     linear: pushing z-near close to the perspective value crams almost all
+     the shrinkage into the first ~10-20% of the strip (confirmed by sampling
+     actual rendered widths: 377px -> 108px within the first 20%, then only
+     108px -> 27px across the remaining 80%) and produces wildly distorted,
+     oversized tiles right at the start. With z-near at 0, the near end
+     renders at its natural, undistorted size; "starts outside the screen"
+     comes entirely from r-near being much larger than the viewport, not from
+     artificial perspective enlargement. */
+  --tunnel-z-near: 0px;
+  --tunnel-z-far: -9000px;
+  /* vmax (not a fixed px) so the near end reliably exceeds the visible
+     viewport on any screen size, per "starts from outside the screen" --
+     a fixed px radius could end up smaller than the viewport on a large
+     screen. */
+  --tunnel-r-near: 90vmax;
+  /* NOT exactly 0 -- the v-perturbation below divides by radius, and an exact
+     zero would blow up to an infinite angle right at the tip. A small
+     positive floor keeps that bounded (a real cone tip isn't a literal
+     zero-width point either). */
+  --tunnel-r-tip: 20px;
+  /* same px-per-unit scale used for u throughout (Step 2's flat layout) --
+     v needs converting to a physical offset before it can be turned into an
+     angle below. */
+  --tunnel-v-scale: 38.709678px;
+  /* both operands must stay positive (z-near > z-far under the convention
+     above), so this subtracts in the opposite order from the z lerp below */
+  --tunnel-cone-slope: atan2(calc(var(--tunnel-r-near) - var(--tunnel-r-tip)), calc(var(--tunnel-z-near) - var(--tunnel-z-far)));
+}
+
 @layer utilities {
    .imgCard{
      size: calc(var(--spacing) * 50)
    }
 
-  .tunnel-tile {
+  /* .tunnel-plane is the little patch of "cone surface" at one (u, v)
+     position -- it owns the position + cone-tilt math and nothing else.
+     .tunnel-tile sits inside it, unpositioned (matches the parent's box
+     exactly), owning only its own flat in-plane rotation/mirror -- it
+     inherits the plane's 3D orientation via preserve-3d instead of that
+     orientation being baked into the same combined transform. Splitting
+     these into two elements (rather than one element computing both) makes
+     each piece independently checkable: temporarily zero out --rot and the
+     plane's own placement/tilt is all that's left to verify. */
+  .tunnel-plane {
     position: absolute;
-    /* anchor/pivot uses the tile's TRUE (unshrunk) local origin V0 (89.032px, 52.258px) --
-       NOT the grout-shrunk polygon's V0 -- so every tile rotates/positions about the
-       same reference point hatviz's placement math assumes. Using the shrunk point here
-       would offset each tile by a small vector that then rotates differently per-tile
-       (since each tile has a different rotation), breaking edge-to-edge adjacency. */
-    /* 38.709678 = 19.354839 * 2: the generated (u, v) are in hatviz's patch-space
-       units, where a hat tile sits at scale k=0.5 relative to the raw hat_outline
-       polygon our clip-path is built from -- so positions need this extra 1/k
-       factor to stay in proportion with the tile's own (unscaled) rendered size. */
-    left: calc(50% + (var(--u, 0) * 38.709678px) - 89.032px);
-    top: calc(50% + (var(--v, 0) * 38.709678px) - 52.258px);
+    left: 50%;
+    top: 50%;
     width: 120px;
     height: 89.03px;
+    transform-style: preserve-3d;
+    /* pivot stays the tile's TRUE (unshrunk) local origin V0 -- matches
+       hatviz's own placement convention (rotate/mirror happens about local
+       (0,0), then translate) */
+    transform-origin: 89.032px 52.258px;
+
+    /* t: 0 at the strip's near end (u-min, mouth of the tunnel) to 1 at the
+       far end (u-max, the vanishing point) -- NOT (u / u-max), which would
+       run -1..1 for our symmetric-around-0 u range and send half the strip
+       to negative depth (behind the camera). */
+    --t: calc((var(--u, 0) - var(--tunnel-u-min)) / (var(--tunnel-u-max) - var(--tunnel-u-min)));
+    --tunnel-angle: calc(var(--t) * var(--tunnel-n-turns) * 360deg);
+    --tunnel-tz: calc(var(--tunnel-z-near) + var(--t) * (var(--tunnel-z-far) - var(--tunnel-z-near)));
+    --tunnel-radius: calc(var(--tunnel-r-near) + var(--t) * (var(--tunnel-r-tip) - var(--tunnel-r-near)));
+    /* v as an ANGULAR perturbation (tried two variants: constant angle-per-v,
+       then radius-compensated) kept crowding/overlapping tiles that share
+       nearly the same u across the full v-range -- confirmed by a direct
+       diagnostic: forcing --v to 0 for every tile (collapsing the band to a
+       single-file line along u only) rendered as a clean, non-overlapping
+       spiral with each tile's own rotation intact, proving the u-based math
+       (radius, depth, sweep, tilt) was never the problem -- only how v got
+       folded in. Perturbing the RADIUS directly instead (moving a tile
+       slightly closer to/further from the axis, at the SAME angle as its u
+       would give with v=0) avoids angular crowding entirely: it needs no
+       division by a shrinking radius, so it can't blow up near the tip
+       either, and gives the band real physical thickness the same way a
+       tunnel wall has an inner and outer radius. */
+    --tunnel-v-offset: calc(var(--v, 0) * var(--tunnel-v-scale));
+    --tunnel-theta: var(--tunnel-angle);
+    --tunnel-radius-with-v: calc(var(--tunnel-radius) + var(--tunnel-v-offset));
+    --tunnel-tx: calc(var(--tunnel-radius-with-v) * cos(var(--tunnel-theta)));
+    --tunnel-ty: calc(var(--tunnel-radius-with-v) * sin(var(--tunnel-theta)));
+
+    /* A cone is "developable" (unrollable flat with zero distortion, unlike a
+       sphere) -- but that means a tile's own ORIENTATION as you move around
+       the cone does NOT keep pace with its azimuthal position (theta).
+       Parallel-transporting a direction all the way around a cone (theta =
+       360deg) only accumulates 360deg * sin(coneSlope) of actual rotation --
+       this is the standard cone angular-deficit result. theta is correct for
+       POSITION (x, y above); using theta directly for the SWEEP rotation too
+       over-rotates every tile relative to its neighbor by a factor of
+       1/sin(coneSlope) -- with N_TURNS=3 (over 1080deg of theta) and a shallow
+       coneSlope, that's a large multiplier, and is very likely the real
+       reason neighboring tiles still looked scattered after the last two
+       fixes: not enough turns of theta itself, but the wrong angle being used
+       to spin them. */
+    --tunnel-psi: calc(var(--tunnel-theta) * sin(var(--tunnel-cone-slope)));
+
+    /* rotateZ(psi) sweeps this patch of plane's ORIENTATION to match its
+       position on the cone (see --tunnel-psi above); rotateX tilts it (in its
+       OWN, already-swept local
+       frame) to lie flush against the cone surface there. No tile-specific
+       rotation lives here at all anymore -- that's entirely the child's job. */
+    transform: translate3d(calc(var(--tunnel-tx) - 89.032px), calc(var(--tunnel-ty) - 52.258px), var(--tunnel-tz)) rotateZ(var(--tunnel-psi)) rotateX(calc(var(--tunnel-cone-slope) * -1));
+  }
+
+  .tunnel-tile {
+    position: absolute;
+    inset: 0;
     background: #7c5cff;
     /* uniform 3.5px perpendicular inset of every edge (not a centroid-shrink,
        which gave visibly uneven gap widths) -- see inset-polygon.js */
     clip-path: polygon(85.53px 54.28px, 85.53px 22.23px, 67.66px 22.23px, 58.72px 6.75px, 34.47px 20.76px, 34.47px 55.76px, 13.63px 55.76px, 6.71px 67.75px, 30.97px 81.76px, 61.28px 64.25px, 71.70px 82.31px, 106.37px 82.31px, 113.28px 70.31px);
     transform-origin: 89.032px 52.258px;
-    transform: rotate(calc(var(--rot, 0) * 1deg)) scaleX(var(--mirror, 1));
+    /* purely the tile's own orientation within the flat tiling pattern --
+       inherits the parent .tunnel-plane's 3D position/tilt automatically. */
+    transform: rotateZ(calc(var(--rot, 0) * 1deg)) scaleX(var(--mirror, 1));
   }
 }
+
