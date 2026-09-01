@@ -128,6 +128,26 @@
      size: calc(var(--spacing) * 50)
    }
 
-
-
+  .tunnel-tile {
+    position: absolute;
+    /* anchor/pivot uses the tile's TRUE (unshrunk) local origin V0 (89.032px, 52.258px) --
+       NOT the grout-shrunk polygon's V0 -- so every tile rotates/positions about the
+       same reference point hatviz's placement math assumes. Using the shrunk point here
+       would offset each tile by a small vector that then rotates differently per-tile
+       (since each tile has a different rotation), breaking edge-to-edge adjacency. */
+    /* 38.709678 = 19.354839 * 2: the generated (u, v) are in hatviz's patch-space
+       units, where a hat tile sits at scale k=0.5 relative to the raw hat_outline
+       polygon our clip-path is built from -- so positions need this extra 1/k
+       factor to stay in proportion with the tile's own (unscaled) rendered size. */
+    left: calc(50% + (var(--u, 0) * 38.709678px) - 89.032px);
+    top: calc(50% + (var(--v, 0) * 38.709678px) - 52.258px);
+    width: 120px;
+    height: 89.03px;
+    background: #7c5cff;
+    /* uniform 3.5px perpendicular inset of every edge (not a centroid-shrink,
+       which gave visibly uneven gap widths) -- see inset-polygon.js */
+    clip-path: polygon(85.53px 54.28px, 85.53px 22.23px, 67.66px 22.23px, 58.72px 6.75px, 34.47px 20.76px, 34.47px 55.76px, 13.63px 55.76px, 6.71px 67.75px, 30.97px 81.76px, 61.28px 64.25px, 71.70px 82.31px, 106.37px 82.31px, 113.28px 70.31px);
+    transform-origin: 89.032px 52.258px;
+    transform: rotate(calc(var(--rot, 0) * 1deg)) scaleX(var(--mirror, 1));
+  }
 }
