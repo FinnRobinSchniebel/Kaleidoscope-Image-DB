@@ -13,7 +13,7 @@ const BASE_CONFIG = {
   uMin: -120,
   uMax: 120,
   uvScale: 38.709678,
-  turns: 1,
+  turns: 3,
   zNear: 0,
   zFar: -9000,
   slantWeight: 0.4,
@@ -45,7 +45,7 @@ export default function KaleidoscopeTunnelBackground() {
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0 -z-10 overflow-hidden pointer-events-none flex items-center justify-center bg-[#0a0a12]"
+      className="absolute inset-0 -z-10 overflow-hidden pointer-events-none flex items-center justify-center bg-black"
     >
       {/* rNear depends on measuring this element, which only exists once
           mounted in the browser -- rendering tiles only after that avoids

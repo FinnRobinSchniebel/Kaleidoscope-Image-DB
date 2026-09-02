@@ -80,11 +80,25 @@ function frameAt(x: number, cfg: ConeConfig) {
 
   const C: Vec3 = [r * Math.cos(theta), r * Math.sin(theta), z];
 
-  const That = norm([
+  const T: Vec3 = [
     rPrime * Math.cos(theta) - r * omega * Math.sin(theta),
     rPrime * Math.sin(theta) + r * omega * Math.cos(theta),
     k,
-  ]);
+  ];
+  // |T| (the tangent's raw, un-normalized magnitude) is exactly how many
+  // physical px one unit of flat-strip x actually covers once wrapped onto
+  // the cone. The patch data spaces tiles at a roughly constant rate in x,
+  // with no awareness of the cone at all, so this is not constant along
+  // the strip: near the wide mouth, one unit of x sweeps a big arc (large
+  // r * omega tangential term) -- covering far more physical distance than
+  // the same unit of x does near the tip (r -> 0, tangential term
+  // vanishes). Tiles rendered at a fixed size can't keep up with that, so
+  // they end up spaced apart with visible gaps toward the mouth -- worse
+  // the more turns the spiral makes, since each additional turn packs the
+  // same tile count across proportionally less x per loop. See `scale` in
+  // matrixFor, which grows tile size by this same ratio to compensate.
+  const speed = Math.hypot(T[0], T[1], T[2]);
+  const That = mul(T, 1 / (speed || 1));
 
   const m = cfg.rNear / (cfg.zNear - cfg.zFar);
   const radial: Vec3 = [Math.cos(theta), Math.sin(theta), 0];
@@ -101,14 +115,26 @@ function frameAt(x: number, cfg: ConeConfig) {
   const radialOut = norm([C[0], C[1], 0]);
   if (dot(N, radialOut) > 0) N = mul(N, -1);
 
-  return { C, That, Gorth, N };
+  // Reference speed: the tangent's magnitude at the tip (r = 0), where the
+  // tangential term drops out entirely -- tiles there are taken as the
+  // "natural", unstretched size, and scale grows from 1 at the tip toward
+  // however much bigger the mouth's tiles need to be to keep up.
+  const tipSpeed = Math.hypot(rPrime, k) || 1;
+  const scale = speed / tipSpeed;
+
+  return { C, That, Gorth, N, scale };
 }
 
 export function matrixFor(tile: TunnelTile, cfg: ConeConfig): string {
   const x = (tile.u - cfg.uMin) * cfg.uvScale;
   const vOffset = tile.v * cfg.uvScale;
-  const { C, That, Gorth, N } = frameAt(x, cfg);
-  const P = add(C, mul(Gorth, vOffset));
+  const { C, That, Gorth, N, scale } = frameAt(x, cfg);
+  // vOffset gets the same `scale` as tile size (see frameAt) -- Gorth is a
+  // pure unit direction with no stretch of its own baked in, so without
+  // this, tiles at nonzero v would grow bigger toward the mouth without
+  // the gap between v-neighbors growing to match, piling them on top of
+  // each other instead of just closing the along-strip gaps.
+  const P = add(C, mul(Gorth, vOffset * scale));
 
   const rot = (tile.rot * Math.PI) / 180;
   const c = Math.cos(rot);
@@ -116,10 +142,12 @@ export function matrixFor(tile: TunnelTile, cfg: ConeConfig): string {
 
   // rotate(rot) scaleX(mirror) composes as p' = R(rot)*S(mirror)*p, so
   // mirroring flips the image of local x-hat (this "right" column) only --
-  // the image of local y-hat ("down") is untouched by scaleX.
-  let right = add(mul(That, c), mul(Gorth, sn));
+  // the image of local y-hat ("down") is untouched by scaleX. Both also
+  // get the position-dependent `scale` factor so tile size grows in step
+  // with the growing gap between neighbors toward the mouth.
+  let right = mul(add(mul(That, c), mul(Gorth, sn)), scale);
   if (tile.mirrored) right = mul(right, -1);
-  const down = add(mul(That, -sn), mul(Gorth, c));
+  const down = mul(add(mul(That, -sn), mul(Gorth, c)), scale);
 
   const m = [
     right[0], right[1], right[2], 0,
