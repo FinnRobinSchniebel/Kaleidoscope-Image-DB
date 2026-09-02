@@ -5,8 +5,7 @@ import { TUNNEL_TILE_PATCH } from "./tunnelTilePatch.ts";
 import { projectTunnelTiles, type ConeConfig } from "./tunnelSpiral.ts";
 
 const PALETTE = [
-  "#6d5acd", "#5a4fcf", "#8a5ccf", "#4a3fae", "#b45cc9",
-  "#7c6fe0", "#c9c9d8", "#8f8fd0", "#a75ccf", "#5c5cae",
+  "#15dcff", "var(--color-white)", "var(--color-blue-50)", "var(--color-blue-300)", "#425df7", "var(--color-teal-200)" 
 ];
 
 // Perspective every tile's projection (see tunnelSpiral.ts's projectTile)
@@ -20,7 +19,7 @@ const PERSPECTIVE = 1800;
 // make every tile's position and size wrong.
 const PATCH_SHAPE = {
   uMin: -120,
-  uMax: 120,
+  uMax: 121,
   uvScale: 38.709678,
 } as const;
 
@@ -36,7 +35,7 @@ const TUNNEL_SETTINGS = {
   // sizes. 1 spans that dimension edge to edge; default 1.8 deliberately
   // overshoots so the mouth starts off-screen. Lower toward/below 1 to
   // bring it on-screen, raise to push more off.
-  baseWidth: 1.2,
+  baseWidth: 1.8,
 
   // Depth (px) of the mouth from the PERSPECTIVE origin. 0 sits at that
   // origin, where a tile's rendered size matches its real px size;
@@ -45,7 +44,7 @@ const TUNNEL_SETTINGS = {
   startDepth: 0,
 
   // How far (px) the tunnel recedes from its mouth to its tip.
-  depth: 9000,
+  depth: 6000,
 
   // 0..1, blends which direction each tile is placed/sized across the
   // strip (see frameAt in tunnelSpiral.ts): 0 keeps tiles face-on but
@@ -54,7 +53,7 @@ const TUNNEL_SETTINGS = {
   // If tiles look too twisted at a value that also closes the gaps, widen
   // or shorten the cone (raise baseWidth, lower depth/turns) rather than
   // raising this further.
-  slantWeight: 0.3,
+  slantWeight: 0.0,
 };
 
 export default function KaleidoscopeTunnelBackground() {
@@ -94,19 +93,26 @@ export default function KaleidoscopeTunnelBackground() {
   }, [size]);
 
   return (
-    <div
-      ref={containerRef}
-      className="fixed inset-0 -z-10 overflow-hidden pointer-events-none bg-black"
-    >
+    <div ref={containerRef} className="fixed inset-0 -z-10 w-screen overflow-hidden pointer-events-none bg-radial-[circle_in_oklab] from-white from-1% via-teal-200 via-30% to-[#77c2ff]">
       {/* Sizing depends on measuring this element, which only exists once
           mounted in the browser -- rendering tiles only after that avoids
           a spurious hydration diff against SSR's guessed-size markup. */}
       {tiles !== null && size !== null && (
-        <svg width={size.w} height={size.h} className="absolute inset-0">
+        <svg width={size.w} height={size.h} className="absolute inset-0 stroke-primary/40 stroke-2 ">
           <g transform={`translate(${size.w / 2},${size.h / 2})`}>
-            {tiles.map((t, i) => (
-              <polygon key={i} points={t.points} fill={t.color} />
-            ))}
+            <g>
+              <animateTransform
+                attributeName="transform"
+                type="rotate"
+                from="0"
+                to="360"
+                dur="1200s"
+                repeatCount="indefinite"
+              />
+              {tiles.map((t, i) => (
+                <polygon key={i} points={t.points} fill={t.color} fillOpacity={.6}/>
+              ))}
+            </g>
           </g>
         </svg>
       )}
