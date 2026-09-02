@@ -87,16 +87,25 @@ function frameAt(x: number, cfg: ConeConfig) {
   ];
   // |T| (the tangent's raw, un-normalized magnitude) is exactly how many
   // physical px one unit of flat-strip x actually covers once wrapped onto
-  // the cone. The patch data spaces tiles at a roughly constant rate in x,
-  // with no awareness of the cone at all, so this is not constant along
-  // the strip: near the wide mouth, one unit of x sweeps a big arc (large
+  // the cone. In the flat (pre-wrap) patch, x is already denominated in
+  // physical px (x = u * uvScale, "1 unit = 1 short tile edge"), so 1 unit
+  // of x there covers exactly 1 physical px -- meaning |T| doubles as the
+  // wrap's own local stretch factor relative to that flat, unwrapped
+  // design: |T| = 1 is no stretch, |T| = 2 means this point covers twice
+  // the ground the flat layout assumed. It is not constant along the
+  // strip: near the wide mouth, one unit of x sweeps a big arc (large
   // r * omega tangential term) -- covering far more physical distance than
   // the same unit of x does near the tip (r -> 0, tangential term
   // vanishes). Tiles rendered at a fixed size can't keep up with that, so
   // they end up spaced apart with visible gaps toward the mouth -- worse
   // the more turns the spiral makes, since each additional turn packs the
-  // same tile count across proportionally less x per loop. See `scale` in
-  // matrixFor, which grows tile size by this same ratio to compensate.
+  // same tile count across proportionally less x per loop, and worse the
+  // deeper the tunnel (zFar/zNear) since that widens how much the
+  // tangential term varies along the strip too. `scale` below is exactly
+  // this |T| (see matrixFor), grown or shrunk to compensate -- crucially
+  // NOT normalized against |T| at any particular point (the tip's, say),
+  // since that point's own value shifts with turns/depth/size, which would
+  // silently rescale the whole compensation as those settings change.
   const speed = Math.hypot(T[0], T[1], T[2]);
   const That = mul(T, 1 / (speed || 1));
 
@@ -115,39 +124,45 @@ function frameAt(x: number, cfg: ConeConfig) {
   const radialOut = norm([C[0], C[1], 0]);
   if (dot(N, radialOut) > 0) N = mul(N, -1);
 
-  // Reference speed: the tangent's magnitude at the tip (r = 0), where the
-  // tangential term drops out entirely -- tiles there are taken as the
-  // "natural", unstretched size, and scale grows from 1 at the tip toward
-  // however much bigger the mouth's tiles need to be to keep up.
-  const tipSpeed = Math.hypot(rPrime, k) || 1;
-  const scale = speed / tipSpeed;
+  const scale = speed;
 
-  return { C, That, Gorth, N, scale };
+  return { C, That, Gorth, N, scale, r };
 }
 
 export function matrixFor(tile: TunnelTile, cfg: ConeConfig): string {
   const x = (tile.u - cfg.uMin) * cfg.uvScale;
   const vOffset = tile.v * cfg.uvScale;
-  const { C, That, Gorth, N, scale } = frameAt(x, cfg);
-  // vOffset gets the same `scale` as tile size (see frameAt) -- Gorth is a
-  // pure unit direction with no stretch of its own baked in, so without
-  // this, tiles at nonzero v would grow bigger toward the mouth without
-  // the gap between v-neighbors growing to match, piling them on top of
-  // each other instead of just closing the along-strip gaps.
-  const P = add(C, mul(Gorth, vOffset * scale));
+  const { C, That, Gorth, N, scale, r } = frameAt(x, cfg);
+  // The stretch `scale` compensates for is specifically motion along That
+  // (the strip's own u-direction, the only direction whose physical rate
+  // actually varies with position -- see frameAt). Gorth is a constant
+  // unit vector everywhere, so v-direction spacing was never stretched by
+  // the wrap in the first place and needs no compensation here.
+  const vTaper = r / (Math.hypot(r, vOffset) || 1);
+  const P = add(C, mul(Gorth, vOffset * vTaper));
 
   const rot = (tile.rot * Math.PI) / 180;
   const c = Math.cos(rot);
   const sn = Math.sin(rot);
 
+  // Anisotropic: stretch only the That-component of the tile's own local
+  // axes by `scale`, leave the Gorth-component at natural size, THEN mix
+  // in the tile's own rotation -- scaling has to happen in the (That,
+  // Gorth) basis, before rotation, not on the tile's own "right"/"down"
+  // axes directly, since which of those ends up That-aligned vs
+  // Gorth-aligned depends on each tile's own `rot`. Scaling both "right"
+  // and "down" uniformly (an earlier version of this code) inflated the
+  // across-strip size too, even though that direction never needed it --
+  // tiles ballooned well past their neighbors' actual spacing and heavily
+  // overlapped, independent of slantWeight (which only affects Gorth's
+  // direction, not this).
+  const scaledThat = mul(That, scale);
   // rotate(rot) scaleX(mirror) composes as p' = R(rot)*S(mirror)*p, so
   // mirroring flips the image of local x-hat (this "right" column) only --
-  // the image of local y-hat ("down") is untouched by scaleX. Both also
-  // get the position-dependent `scale` factor so tile size grows in step
-  // with the growing gap between neighbors toward the mouth.
-  let right = mul(add(mul(That, c), mul(Gorth, sn)), scale);
+  // the image of local y-hat ("down") is untouched by scaleX.
+  let right = add(mul(scaledThat, c), mul(Gorth, sn));
   if (tile.mirrored) right = mul(right, -1);
-  const down = mul(add(mul(That, -sn), mul(Gorth, c)), scale);
+  const down = add(mul(scaledThat, -sn), mul(Gorth, c));
 
   const m = [
     right[0], right[1], right[2], 0,
