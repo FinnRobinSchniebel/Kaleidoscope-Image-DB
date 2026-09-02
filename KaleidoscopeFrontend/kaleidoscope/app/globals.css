@@ -127,28 +127,5 @@
    .imgCard{
      size: calc(var(--spacing) * 50)
    }
-
-  /* Position/orientation (a matrix3d, one per tile) is computed in JS --
-     see tunnelSpiral.ts -- and supplied as an inline `transform` style, not
-     a CSS var/calc() chain, since it needs a full local coordinate frame
-     (derived from real vector calculus) that CSS's rotate()/translate3d()
-     composition can't express reliably. This rule only owns the tile's
-     static 2D shape/pivot. */
-  .tunnel-tile {
-    position: absolute;
-    /* box is shifted so the hat monotile's TRUE (unshrunk) local origin V0
-       -- matches hatviz's own placement convention (rotate/mirror about
-       local V0, then translate) -- sits at local (0,0,0) before the inline
-       matrix3d is applied, so the matrix's translation column places V0
-       itself, not the box's corner or center. */
-    top: -52.258px;
-    left: -89.032px;
-    width: 120px;
-    height: 89.03px;
-    /* uniform 3.5px perpendicular inset of every edge (not a centroid-shrink,
-       which gave visibly uneven gap widths) -- see inset-polygon.js */
-    clip-path: polygon(85.53px 54.28px, 85.53px 22.23px, 67.66px 22.23px, 58.72px 6.75px, 34.47px 20.76px, 34.47px 55.76px, 13.63px 55.76px, 6.71px 67.75px, 30.97px 81.76px, 61.28px 64.25px, 71.70px 82.31px, 106.37px 82.31px, 113.28px 70.31px);
-    transform-origin: 89.032px 52.258px;
-  }
 }
 
