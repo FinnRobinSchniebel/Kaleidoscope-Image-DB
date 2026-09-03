@@ -48,6 +48,15 @@ export type ConeConfig = {
   // own slant direction. See frameAt's comment for the tradeoff this
   // blends between.
   readonly slantWeight: number;
+  // World-space (x, y) the mouth's axis point is shifted by, tapering
+  // linearly to 0 at the tip -- tilts the cone's axis so the mouth and tip
+  // can aim at different screen points instead of sharing one.
+  readonly baseOffset: Vec2;
+  // Radians added to every tile's theta -- spins the spiral around its own
+  // (possibly tilted) axis. Can't be done as a post-hoc 2D transform once
+  // baseOffset is nonzero, since the axis no longer passes through a
+  // single shared screen point at every depth.
+  readonly phase: number;
 };
 
 // Local frame (position + tangent/across) at flat-strip parameter x. Gorth
@@ -64,15 +73,22 @@ function frameAt(x: number, cfg: ConeConfig) {
   const k = (cfg.zFar - cfg.zNear) / xMax;
   const rPrime = -cfg.rNear / xMax;
 
-  const theta = omega * x;
+  const theta = omega * x + cfg.phase;
   const r = cfg.rNear * (1 - x / xMax);
   const z = cfg.zNear + k * x;
 
-  const C: Vec3 = [r * Math.cos(theta), r * Math.sin(theta), z];
+  // Tapers baseOffset from full strength at the mouth (x = 0) to 0 at the
+  // tip (x = xMax), so the axis is a straight 3D line between the two.
+  const taper = 1 - x / xMax;
+  const taperPrime = -1 / xMax;
+  const ox = cfg.baseOffset[0] * taper;
+  const oy = cfg.baseOffset[1] * taper;
+
+  const C: Vec3 = [r * Math.cos(theta) + ox, r * Math.sin(theta) + oy, z];
 
   const T: Vec3 = [
-    rPrime * Math.cos(theta) - r * omega * Math.sin(theta),
-    rPrime * Math.sin(theta) + r * omega * Math.cos(theta),
+    rPrime * Math.cos(theta) - r * omega * Math.sin(theta) + cfg.baseOffset[0] * taperPrime,
+    rPrime * Math.sin(theta) + r * omega * Math.cos(theta) + cfg.baseOffset[1] * taperPrime,
     k,
   ];
   // |T| is the wrap's local stretch factor relative to the flat (pre-wrap)
