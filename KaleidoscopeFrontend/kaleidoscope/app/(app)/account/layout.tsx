@@ -1,7 +1,6 @@
 import { ReadToken } from '@/components/api/get_variables_server';
 import { ProtectedProvider } from '@/components/api/jwt_apis/ProtectedProvider';
-import { Geist, Geist_Mono } from 'next/font/google';
-import React, { useContext } from 'react'
+import React from 'react'
 
 
 export default async function AppLayout({

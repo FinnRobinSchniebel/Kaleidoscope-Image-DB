@@ -1,7 +1,6 @@
 'use client'
 import { useState } from 'react'
 import { Home, Search, User, GalleryVertical, Grid2x2, Bookmark, Tag } from "lucide-react";
-import '../../app/globals.css'
 import { cn } from "@/lib/utils"
 import Link from 'next/link';
 import { useSelectedLayoutSegment } from "next/navigation";
