@@ -7,8 +7,11 @@ import {
 // the placements use -- i.e. turtle-monotile-kites-fresnel.svg's viewBox. These
 // two stay in sync by construction rather than by discipline: the generator
 // derives its placements from the very kite paths that file draws.
-const TILE_W = 5.9;
+const TILE_W = 6;
 const TILE_H = 4.33012702;
+const TileCenterX = 3
+const TileCenterY = 2.165063512
+const scale = .98
 
 export type TurtleFieldBackgroundProps = {
   /**
@@ -58,7 +61,8 @@ export default function TurtleFieldBackground({
           // generator rotate about, so no pivot offset is needed here.
           transform={
             `translate(${t.x},${t.y}) rotate(${t.rot})` +
-            (t.mirrored ? " scale(-1,1)" : "")
+            (t.mirrored ? " scale(-1,1)" : "") + 
+            ` translate(${TileCenterX},${TileCenterY}) scale(${scale}) translate(${-TileCenterX},${-TileCenterY})`
           }
         />
       ))}
