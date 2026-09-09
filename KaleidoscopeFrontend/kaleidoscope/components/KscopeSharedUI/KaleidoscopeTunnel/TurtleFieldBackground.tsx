@@ -9,9 +9,9 @@ import {
 // derives its placements from the very kite paths that file draws.
 const TILE_W = 6;
 const TILE_H = 4.33012702;
-const TileCenterX = 3
-const TileCenterY = 2.165063512
-const scale = .98
+const TILE_CENTER_X = 3;
+const TILE_CENTER_Y = 2.165063512;
+const GAP_SCALE = 0.98;
 
 export type TurtleFieldBackgroundProps = {
   /**
@@ -35,6 +35,32 @@ export type TurtleFieldBackgroundProps = {
  * The placement table is already exactly the tiles that can appear, so there is
  * no filtering here either -- see turtleFieldPlacements.ts's header.
  */
+// Applied right to left: shrink toward TILE_CENTER_X/Y first, then mirror,
+// rotate, and translate -- placement instead pivots on the artwork's origin (V0).
+function tileTransform(t: { x: number; y: number; rot: number; mirrored: boolean }): string {
+  return (
+    `translate(${t.x},${t.y}) rotate(${t.rot})` +
+    (t.mirrored ? " scale(-1,1)" : "") +
+    ` translate(${TILE_CENTER_X},${TILE_CENTER_Y}) scale(${GAP_SCALE}) translate(${-TILE_CENTER_X},${-TILE_CENTER_Y})`
+  );
+}
+
+function TurtleTiles() {
+  return (
+    <>
+      {TURTLE_FIELD_PLACEMENTS.map((t, i) => (
+        <image
+          key={i}
+          href="/turtle-monotile-kites-fresnel.svg"
+          width={TILE_W}
+          height={TILE_H}
+          transform={tileTransform(t)}
+        />
+      ))}
+    </>
+  );
+}
+
 export default function TurtleFieldBackground({
   opacity = 1,
 }: TurtleFieldBackgroundProps = {}) {
@@ -47,25 +73,31 @@ export default function TurtleFieldBackground({
       preserveAspectRatio="xMidYMid slice"
       opacity={opacity}
       aria-hidden="true"
+      // Isolates this static layer so the spiral's ~20fps repaint doesn't
+      // force it (mask included) to re-rasterize every frame instead of once.
+      style={{ willChange: "transform" }}
     >
-      {TURTLE_FIELD_PLACEMENTS.map((t, i) => (
-        <image
-          key={i}
-          href="/turtle-monotile-kites-fresnel.svg"
-          width={TILE_W}
-          height={TILE_H}
-          // SVG applies transforms right to left, so this is mirror, then
-          // rotate, then translate: the same p' = R(rot) . S(mirrored) . p
-          // order projectTile uses in tunnelSpiral.ts. The artwork's origin is
-          // the turtle's V0, which is the pivot both that convention and the
-          // generator rotate about, so no pivot offset is needed here.
-          transform={
-            `translate(${t.x},${t.y}) rotate(${t.rot})` +
-            (t.mirrored ? " scale(-1,1)" : "") + 
-            ` translate(${TileCenterX},${TileCenterY}) scale(${scale}) translate(${-TileCenterX},${-TileCenterY})`
-          }
-        />
-      ))}
+      <defs>
+        {/* Forced solid black, not just opaque: a luminance mask reads color,
+            so an opaque white pixel wouldn't cut a hole. The *20 covers
+            alpha as low as 0.06 (the artwork's faintest kites). */}
+        <filter id="turtleSolid">
+          <feColorMatrix
+            type="matrix"
+            values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 20 0"
+          />
+        </filter>
+        <mask id="turtleGaps" maskUnits="userSpaceOnUse" x={x} y={y} width={w} height={h}>
+          <rect x={x} y={y} width={w} height={h} fill="white" />
+          <g filter="url(#turtleSolid)">
+            <TurtleTiles />
+          </g>
+        </mask>
+      </defs>
+
+      <rect x={x} y={y} width={w} height={h} fill="white" fillOpacity={0.7} mask="url(#turtleGaps)" />
+
+      <TurtleTiles />
     </svg>
   );
 }
