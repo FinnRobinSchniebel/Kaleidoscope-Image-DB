@@ -15,7 +15,6 @@ export default function AppLayout({
   return (
     <div className="relative flex-grow justify-items-center h-full">
       <KaleidoscopeTunnelBackground turns={2.5}
-        palette={["#01295F", "#437F97", "#849324", "#c2d836", "#15345e", "#2c415f", "#5a8697"]}
         baseWidth={1.5}
         startDepth={0}
         depth={9000}

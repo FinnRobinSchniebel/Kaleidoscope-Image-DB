@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { TUNNEL_TILE_PATCH } from "./tunnelTilePatch.ts";
 import { projectTunnelTiles, type ConeConfig } from "./tunnelSpiral.ts";
+import TurtleFieldBackground from "./TurtleFieldBackground.tsx";
 
 const DEFAULT_PALETTE = [
-  "#15dcff", "var(--color-white)", "var(--color-blue-50)", "var(--color-blue-300)", "#425df7", "var(--color-teal-200)"
+  "#15dcff", "#f3f5f8", "#37237a", "#4478f1", "#ff9cf0", "#9cf3fa","#4478f1", "#9cf3fa", "#ffac9c", "#a4fcce"
 ];
 
 // Fixed screen-px offset each tile's side wall is extruded toward -- same
@@ -190,15 +191,21 @@ export default function KaleidoscopeTunnelBackground({
   return (
     <div
       ref={containerRef}
-      className="fixed inset-0 -z-10 w-screen overflow-hidden pointer-events-none"
+      className="fixed inset-0 -z-10 w-screen overflow-hidden pointer-events-none "
       style={{
         // Tailwind's bg-radial-* utilities can't take a dynamic position
         // (tipFocus isn't known until build/runtime), so this gradient is
         // plain CSS instead -- kept in sync with the tunnel's own vanishing
         // point so the glow sits right where the tiles converge.
-        backgroundImage: `radial-gradient(circle at ${tipFocusX * 100}% ${tipFocusY * 95}% in oklab, white 1%, var(--color-teal-200) 30%, #77c2ff)`,
+        backgroundImage: `radial-gradient(circle at ${tipFocusX * 100}% ${tipFocusY * 95}% in oklab, white 1%, var(--color-teal-200) 7%, #77c2ff 90%)`,
       }}
     >
+      {/* Middle layer: static turtle-monotile texture over the gradient,
+          under the spiral. Z-order comes from document order alone -- both
+          this and the spiral are absolutely positioned siblings, so no
+          z-index is involved. */}
+      <TurtleFieldBackground />
+
       {/* Sizing depends on measuring this element, which only exists once
           mounted in the browser -- rendering tiles only after that avoids
           a spurious hydration diff against SSR's guessed-size markup. */}
