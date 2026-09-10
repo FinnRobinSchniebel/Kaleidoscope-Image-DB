@@ -9,6 +9,10 @@ const DEFAULT_PALETTE = [
   "#15dcff", "#f3f5f8", "#37237a", "#4478f1", "#ff9cf0", "#9cf3fa","#4478f1", "#9cf3fa", "#ffac9c", "#a4fcce"
 ];
 
+const PALETTE_GLASS = [
+  "#cce0ff", "#e0fbff", "#e8fcf5", "#f9fce8", "#fce9e8", "#fbe8fc", "#f2e8fc"
+]
+
 // Fixed screen-px offset each tile's side wall is extruded toward -- same
 // vector for every tile regardless of depth, like a single light source
 // rather than a true per-tile 3D normal.
@@ -111,7 +115,7 @@ export default function KaleidoscopeTunnelBackground({
   baseFocusX = -1,
   baseFocusY = 1.9,
   rotationPeriod = 1200,
-  palette = DEFAULT_PALETTE,
+  palette = PALETTE_GLASS,
 }: KaleidoscopeTunnelBackgroundProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -210,25 +214,45 @@ export default function KaleidoscopeTunnelBackground({
           mounted in the browser -- rendering tiles only after that avoids
           a spurious hydration diff against SSR's guessed-size markup. */}
       {tiles !== null && size !== null && (
-        <svg width={size.w} height={size.h} className="absolute inset-0 stroke-primary/40 stroke-2 ">
-          <defs>
-            {palette.map((color, i) => (
-              <linearGradient key={i} id={`tileGrad-${i}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor={`color-mix(in oklab, ${color} 100%, white 35%)`} />
-                <stop offset="100%" stopColor={`color-mix(in oklab, ${color} 100%, black 15%)`} />
-              </linearGradient>
-            ))}
-          </defs>
-          <g transform={`translate(${size.w * tipFocusX},${size.h * tipFocusY})`}>
-            {tiles.map((t) => (
-              <g key={t.id}>
-                <polygon points={shiftPoints(t.points, EXTRUDE.dx, EXTRUDE.dy)} fill={`color-mix(in oklab, ${t.color} 65%, black)`} fillOpacity={.5}
-                />
-                <polygon points={t.points} fill={`url(#tileGrad-${t.paletteIndex})`} fillOpacity={.7} />
-              </g>
-            ))}
-          </g>
-        </svg>
+        <>
+          {/* Blurs only the background pixels sitting behind the tiles'
+              own footprint (via the SVG mask below), instead of the whole
+              screen -- backdrop-blur on the tile svg itself would blur its
+              entire bounding box, including gaps between tiles. */}
+          <div
+            className="absolute inset-0 backdrop-blur-[2px]"
+            style={{ maskImage: "url(#tilesMask)", WebkitMaskImage: "url(#tilesMask)" }}
+          />
+          <svg width={size.w} height={size.h} className="absolute inset-0 stroke-primary/40 stroke-2">
+            <defs>
+              {palette.map((color, i) => (
+                <linearGradient key={i} id={`tileGrad-${i}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor={`color-mix(in oklab, ${color} 100%, white 35%)`} />
+                  <stop offset="100%" stopColor={`color-mix(in oklab, ${color} 100%, black 15%)`} />
+                </linearGradient>
+              ))}
+              <mask id="tilesMask" maskUnits="userSpaceOnUse" x="0" y="0" width={size.w} height={size.h}>
+                <g transform={`translate(${size.w * tipFocusX},${size.h * tipFocusY})`}>
+                  {tiles.map((t) => (
+                    <g key={t.id}>
+                      <polygon points={shiftPoints(t.points, EXTRUDE.dx, EXTRUDE.dy)} fill="white" />
+                      <polygon points={t.points} fill="white" />
+                    </g>
+                  ))}
+                </g>
+              </mask>
+            </defs>
+            <g transform={`translate(${size.w * tipFocusX},${size.h * tipFocusY})`}>
+              {tiles.map((t) => (
+                <g key={t.id}>
+                  <polygon points={shiftPoints(t.points, EXTRUDE.dx, EXTRUDE.dy)} fill={`color-mix(in oklab, ${t.color} 65%, black)`} fillOpacity={.6}
+                  />
+                  <polygon points={t.points} fill={`url(#tileGrad-${t.paletteIndex})`} fillOpacity={.6} />
+                </g>
+              ))}
+            </g>
+          </svg>
+        </>
       )}
     </div>
   );

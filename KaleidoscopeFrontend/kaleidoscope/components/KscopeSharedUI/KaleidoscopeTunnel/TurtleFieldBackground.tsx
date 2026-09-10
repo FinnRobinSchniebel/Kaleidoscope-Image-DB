@@ -11,7 +11,7 @@ const TILE_W = 6;
 const TILE_H = 4.33012702;
 const TILE_CENTER_X = 3;
 const TILE_CENTER_Y = 2.165063512;
-const GAP_SCALE = 0.98;
+const GAP_SCALE = 0.95;
 
 export type TurtleFieldBackgroundProps = {
   /**
@@ -95,7 +95,7 @@ export default function TurtleFieldBackground({
         </mask>
       </defs>
 
-      <rect x={x} y={y} width={w} height={h} fill="white" fillOpacity={0.7} mask="url(#turtleGaps)" />
+      <rect x={x} y={y} width={w} height={h} fill="white" fillOpacity={0.6} mask="url(#turtleGaps)" />
 
       <TurtleTiles />
     </svg>
