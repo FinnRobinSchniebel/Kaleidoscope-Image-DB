@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { TUNNEL_TILE_PATCH } from "./tunnelTilePatch.ts";
-import { projectTunnelTiles, type ConeConfig } from "./tunnelSpiral.ts";
+import { projectTunnelTiles, TILE_LOCAL_STROKE_WIDTH, type ConeConfig } from "./tunnelSpiral.ts";
 import TurtleFieldBackground from "./TurtleFieldBackground.tsx";
 
 const DEFAULT_PALETTE = [
@@ -27,6 +27,48 @@ function shiftPoints(points: string, dx: number, dy: number): string {
     })
     .join(" ");
 }
+
+// Multiplier on TILE_LOCAL_STROKE_WIDTH -- the rim-light knob.
+// Below 1 narrows the lit band toward the edge; above 1 widens it,
+// eating further into each tile's interior.
+const RIM_WIDTH_SCALE = .7;
+
+// One small bump, zero at its own edges so it tiles seamlessly via
+// feTile below. Generic and independent of tile geometry, so it's
+// generated once on mount rather than reacting to tiles/phase.
+function generateBumpTile(tileSize: number): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = tileSize;
+  canvas.height = tileSize;
+  const ctx = canvas.getContext("2d")!;
+  const imageData = ctx.createImageData(tileSize, tileSize);
+  const data = imageData.data;
+  const center = tileSize / 2;
+  const maxR = tileSize / 2;
+  for (let y = 0; y < tileSize; y++) {
+    for (let x = 0; x < tileSize; x++) {
+      const ox = x - center;
+      const oy = y - center;
+      const r = Math.sqrt(ox * ox + oy * oy);
+      const t = Math.min(1, r / maxR);
+      const magnitude = Math.sin(Math.PI * t);
+      const invLen = r > 0 ? magnitude / r : 0;
+      const dx = ox * invLen;
+      const dy = oy * invLen;
+      const i = (y * tileSize + x) * 4;
+      data[i] = Math.max(0, Math.min(255, 128 + dx * 127));
+      data[i + 1] = Math.max(0, Math.min(255, 128 + dy * 127));
+      data[i + 2] = 128;
+      data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL();
+}
+
+// Repeat spacing (px) for the bump pattern -- a visual knob, not
+// derived from tile size.
+const LENS_BUMP_TILE_PX = 80;
 
 // Perspective every tile's projection (see tunnelSpiral.ts's projectTile)
 // is computed under. Not a prop since it isn't a per-tile concern.
@@ -68,7 +110,7 @@ export type KaleidoscopeTunnelBackgroundProps = {
    */
   startDepth?: number;
 
-  /** How far (px) the tunnel recedes from its mouth to its tip. */
+  /** How far (px) the tunnel recedes from its base to its tip. */
   depth?: number;
 
   /**
@@ -82,25 +124,18 @@ export type KaleidoscopeTunnelBackgroundProps = {
    */
   slantWeight?: number;
 
-  /**
-   * Where the tunnel's vanishing point (tip) sits, as a fraction of the
-   * container's width/height (0.5, 0.5 is dead center).
-   */
+  //Screen position vanishing point
   tipFocusX?: number;
   tipFocusY?: number;
 
-  /**
-   * Where the mouth's center sits, same units as tipFocus*. Equal to
-   * tipFocus* keeps the tunnel aimed straight at the viewer; diverging the
-   * two tilts its axis so it points elsewhere.
-   */
+  //Screen position base center point (center of funnel start)
   baseFocusX?: number;
   baseFocusY?: number;
 
-  /** Seconds for one full spin around the tunnel's own axis. */
+  //Seconds per rotation
   rotationPeriod?: number;
 
-  /** Tile fill colors (any valid CSS color), cycled in patch order. */
+  //List of tile colors (any valid css color)
   palette?: readonly string[];
 };
 
@@ -120,6 +155,7 @@ export default function KaleidoscopeTunnelBackground({
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [phase, setPhase] = useState(0);
+  const [lensMapUrl, setLensMapUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -192,6 +228,10 @@ export default function KaleidoscopeTunnelBackground({
       .sort((a, b) => a.z - b.z);
   }, [size, phase, startDepthProp, baseFocusX, tipFocusX, baseFocusY, tipFocusY, turns, slantWeightProp, baseWidth, depth, palette]);
 
+  useEffect(() => {
+    setLensMapUrl(generateBumpTile(LENS_BUMP_TILE_PX));
+  }, []);
+
   return (
     <div
       ref={containerRef}
@@ -213,17 +253,22 @@ export default function KaleidoscopeTunnelBackground({
       {/* Sizing depends on measuring this element, which only exists once
           mounted in the browser -- rendering tiles only after that avoids
           a spurious hydration diff against SSR's guessed-size markup. */}
-      {tiles !== null && size !== null && (
+      {tiles !== null && size !== null && lensMapUrl !== null && (
         <>
-          {/* Blurs only the background pixels sitting behind the tiles'
+          {/* Warps only the background pixels sitting behind the tiles'
               own footprint (via the SVG mask below), instead of the whole
-              screen -- backdrop-blur on the tile svg itself would blur its
-              entire bounding box, including gaps between tiles. */}
+              screen -- backdrop-filter on the tile svg itself would apply
+              to its entire bounding box, including gaps between tiles. */}
           <div
-            className="absolute inset-0 backdrop-blur-[2px]"
-            style={{ maskImage: "url(#tilesMask)", WebkitMaskImage: "url(#tilesMask)" }}
+            className="absolute inset-0"
+            style={{
+              backdropFilter: "url(#lensFilter)",
+              WebkitBackdropFilter: "url(#lensFilter)",
+              maskImage: "url(#tilesMask)",
+              WebkitMaskImage: "url(#tilesMask)",
+            }}
           />
-          <svg width={size.w} height={size.h} className="absolute inset-0 stroke-primary/40 stroke-2">
+          <svg width={size.w} height={size.h} className="absolute inset-0 stroke-primary/30 stroke-2">
             <defs>
               {palette.map((color, i) => (
                 <linearGradient key={i} id={`tileGrad-${i}`} x1="0%" y1="0%" x2="100%" y2="100%">
@@ -241,13 +286,45 @@ export default function KaleidoscopeTunnelBackground({
                   ))}
                 </g>
               </mask>
+              {/* Single feDisplacementMap pass fed by one small bump
+                  repeated via feTile: many little lenses at roughly tile
+                  scale, not one lens per real tile, and won't align to
+                  each tile's actual boundary (see generateBumpTile). */}
+              <filter id="lensFilter" colorInterpolationFilters="sRGB">
+                <feImage href={lensMapUrl} x="0" y="0" width={LENS_BUMP_TILE_PX} height={LENS_BUMP_TILE_PX} result="bumpTile" />
+                <feTile in="bumpTile" result="lensMap" />
+                <feDisplacementMap in="SourceGraphic" in2="lensMap" scale={40} xChannelSelector="R" yChannelSelector="G" />
+              </filter>
+              {/* Explicit region: the default (-10%/120% of the stroked
+                  shape's own bbox) was clipping the blurred stroke away
+                  almost entirely, since strokeWidth is often a large
+                  fraction of that bbox. */}
+              <filter id="tileRimBlur" x="-100%" y="-100%" width="300%" height="300%">
+                <feGaussianBlur stdDeviation={3} />
+              </filter>
+              {/* Fades each tile toward transparent at center, opaque at
+                  the edge. Traces the real (spiky, concave) boundary via
+                  a stroke rather than a circular gradient, which would
+                  only reach full strength near the single farthest
+                  vertex. */}
+              {tiles.map((t) => (
+                <mask key={t.id} id={`tileRimMask-${t.id}`} x="-50%" y="-50%" width="200%" height="200%">
+                  <polygon points={t.points} fill="white" fillOpacity={0.25} />
+                  <polygon
+                    points={t.points}
+                    fill="none"
+                    stroke="white"
+                    strokeWidth={Math.max(2, TILE_LOCAL_STROKE_WIDTH * t.scale * RIM_WIDTH_SCALE)}
+                    filter="url(#tileRimBlur)"
+                  />
+                </mask>
+              ))}
             </defs>
             <g transform={`translate(${size.w * tipFocusX},${size.h * tipFocusY})`}>
               {tiles.map((t) => (
                 <g key={t.id}>
-                  <polygon points={shiftPoints(t.points, EXTRUDE.dx, EXTRUDE.dy)} fill={`color-mix(in oklab, ${t.color} 65%, black)`} fillOpacity={.6}
-                  />
-                  <polygon points={t.points} fill={`url(#tileGrad-${t.paletteIndex})`} fillOpacity={.6} />
+                  <polygon points={shiftPoints(t.points, EXTRUDE.dx, EXTRUDE.dy)} fill={`color-mix(in oklab, ${t.color} 55%, black)`}  mask={`url(#tileRimMask-${t.id})`}/>
+                  <polygon points={t.points} fill={`url(#tileGrad-${t.paletteIndex})`} mask={`url(#tileRimMask-${t.id})`} />
                 </g>
               ))}
             </g>

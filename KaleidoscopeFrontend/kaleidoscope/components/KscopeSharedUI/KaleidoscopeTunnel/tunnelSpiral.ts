@@ -36,6 +36,26 @@ const TILE_LOCAL_POINTS: readonly Vec2[] = [
   [113.28, 70.31],
 ];
 
+// 2*area/perimeter of TILE_LOCAL_POINTS: average local half-width of the
+// canonical (unprojected) tile shape, used by KaleidoscopeTunnelBackground
+// to size its rim stroke. Computed once here since the local shape is
+// fixed -- callers scale this by their own tile's projected `scale`
+// instead of recomputing perimeter/area from live projected geometry
+// every frame.
+function localShapeStrokeWidth(verts: readonly Vec2[]): number {
+  let area2 = 0;
+  let perimeter = 0;
+  for (let i = 0; i < verts.length; i++) {
+    const [x1, y1] = verts[i];
+    const [x2, y2] = verts[(i + 1) % verts.length];
+    area2 += x1 * y2 - x2 * y1;
+    perimeter += Math.hypot(x2 - x1, y2 - y1);
+  }
+  return perimeter > 0 ? Math.abs(area2) / perimeter : 2;
+}
+
+export const TILE_LOCAL_STROKE_WIDTH = localShapeStrokeWidth(TILE_LOCAL_POINTS);
+
 export type ConeConfig = {
   readonly uMin: number;
   readonly uMax: number;
@@ -119,6 +139,13 @@ function frameAt(x: number, cfg: ConeConfig) {
 export type ProjectedTile = {
   readonly points: string; // ready-made SVG <polygon points> value
   readonly z: number; // world depth, for painter's-algorithm sort order
+  // Approximate local-to-screen linear magnification at this tile's pivot
+  // (frameAt's `scale` times the perspective factor at P[2]). Not exact
+  // per-vertex truth -- real magnification is anisotropic (scaled along
+  // That, unscaled along Gorth) -- but close enough to scale shape-derived
+  // constants like TILE_LOCAL_STROKE_WIDTH without re-deriving them from
+  // live projected geometry every frame.
+  readonly scale: number;
 };
 
 // Projects each of the 13 polygon vertices individually, perspective-
@@ -167,7 +194,13 @@ export function projectTile(
     return `${wx * pf},${wy * pf}`;
   }).join(" ");
 
-  return { points, z: P[2] };
+  // Average of |right| and |down| rather than the raw `scale`: right/down
+  // blend That (stretched by `scale`) with Gorth (unit, unstretched)
+  // according to this tile's own rot, so `scale` alone overstates the
+  // stretch for any tile whose rot leans toward Gorth.
+  const pfCenter = perspective / (perspective - P[2]);
+  const localScale = (Math.hypot(...right) + Math.hypot(...down)) / 2;
+  return { points, z: P[2], scale: localScale * pfCenter };
 }
 
 export function projectTunnelTiles(
