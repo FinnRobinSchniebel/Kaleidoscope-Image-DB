@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import KaleidoscopeTunnelBackground from "@/components/KscopeSharedUI/KaleidoscopeTunnel/KaleidoscopeTunnelBackground.tsx";
+import TunnelBackground from "@/components/KscopeSharedUI/KaleidoscopeTunnel/TunnelBackground.tsx";
 
 export const metadata: Metadata = {
   title: "Auth Kaleidoscope",
@@ -10,7 +10,7 @@ export default function AuthLayout({ children, }: Readonly<{ children: React.Rea
 
   return (
     <div className="flex items-center justify-center bg-fixed bg-cover flex-grow object-cover">
-      <KaleidoscopeTunnelBackground turns={2.5}
+      <TunnelBackground turns={2.5}
         baseWidth={2}
         startDepth={0}
         depth={9000}

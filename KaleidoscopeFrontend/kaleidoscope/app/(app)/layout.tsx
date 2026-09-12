@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 import Nav from '../../components/KscopeSharedUI/Nav.tsx'
 import { Toaster } from "@/components/ui/sonner.tsx";
-import KaleidoscopeTunnelBackground from '../../components/KscopeSharedUI/KaleidoscopeTunnel/KaleidoscopeTunnelBackground.tsx'
+import TunnelBackground from '../../components/KscopeSharedUI/KaleidoscopeTunnel/TunnelBackground.tsx'
 
 export const metadata: Metadata = {
   title: "Kaleidoscope",
@@ -14,7 +14,7 @@ export default function AppLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <div className="relative flex-grow justify-items-center h-full">
-      <KaleidoscopeTunnelBackground turns={2.5}
+      <TunnelBackground turns={2.5}
         baseWidth={1.5}
         startDepth={0}
         depth={9000}
