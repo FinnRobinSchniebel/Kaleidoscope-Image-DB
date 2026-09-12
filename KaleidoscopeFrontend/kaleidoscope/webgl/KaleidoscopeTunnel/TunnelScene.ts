@@ -1,125 +1,186 @@
 import * as THREE from "three";
 import { TUNNEL_TILE_PATCH } from "@/components/KscopeSharedUI/KaleidoscopeTunnel/tunnelTilePatch.ts";
+import type { TunnelTile } from "@/components/KscopeSharedUI/KaleidoscopeTunnel/tunnelTilePatch.types.ts";
 import { loadTunnelTileGeometry } from "./tunnelTileAsset.ts";
-import { PATCH_U_MIN, PATCH_U_MAX, PATCH_UV_SCALE } from "./tunnelConeMath.ts";
+import { PATCH_U_MIN, PATCH_U_MAX, PATCH_UV_SCALE, computeTileFrame, type ConeConfig, type Vec2 } from "./tunnelConeMath.ts";
 
 // DEBUG ONLY -- set to [uMin, uMax] to render just that spatial slice
 // (TUNNEL_TILE_PATCH isn't stored in spatial order, so array slicing
 // doesn't give neighbors) for close inspection; null renders everything.
-// Must be null before calling M2 done.
 const DEBUG_U_RANGE: [number, number] | null = null;
+
+// Same reference distance as the SVG version's PERSPECTIVE constant (see
+// KaleidoscopeTunnelBackground.tsx) -- the camera sits this many world units
+// in front of the z=0 plane, along +Z. Not a prop: matching this exactly
+// (not just "some perspective-looking value") is what makes frameAt/
+// computeTileFrame's ported math reproduce the SVG version's shape, since
+// world units there are implicitly "CSS px at z=0".
+const PERSPECTIVE = 1800;
+
+// M3: fixed reference config matching the real values app/(app)/layout.tsx
+// passes to <TunnelBackground> today (not KaleidoscopeTunnelBackground.tsx's
+// own bare defaults, which neither real mount site actually uses), so the
+// two implementations' output can be compared directly at an actual
+// production config. Not wired to props/animated phase yet -- that's M4.
+const TURNS = 2.5;
+const BASE_WIDTH = 1.5;
+const START_DEPTH = 0;
+const DEPTH = 9000;
+const SLANT_WEIGHT = 0.0;
+const TIP_FOCUS: Vec2 = [0.95, 0.2];
+const BASE_FOCUS: Vec2 = [-1, 1.9];
+const PHASE = 0;
 
 // Owns the actual three.js scene/camera/InstancedMesh for the tunnel tiles,
 // independent of React -- KaleidoscopeTunnelBackgroundGL.tsx just drives its
-// lifecycle (load/setAspect/render/dispose) from effects.
+// lifecycle (load/setSize/render/dispose) from effects.
 export class TunnelScene {
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(50, 1, 1, 1);
+  readonly camera = new THREE.PerspectiveCamera();
+  // tunnelSpiral.ts's math (ported in tunnelConeMath.ts) treats +y as
+  // "down the screen", matching SVG/CSS pixel convention -- three.js's
+  // camera instead treats +y as up. Rather than thread a sign flip through
+  // every ported formula, the whole tile group is mirrored across the X
+  // axis once here, so position/right/down/normal math above this line can
+  // stay a direct, literal port with no convention translation of its own.
+  private readonly worldGroup = new THREE.Group();
   private mesh: THREE.InstancedMesh | null = null;
   private material: THREE.MeshBasicMaterial | null = null;
-  private bounds: THREE.Box3 | null = null;
-  private lastAspect: number | null = null;
+  private patch: readonly TunnelTile[] = [];
+  private lastWidth = -1;
+  private lastHeight = -1;
 
-  // M2: places every patch tile at its flat (u, v) position -- no cone wrap
-  // yet (that's frameAt, landing in M3). Mirroring negates `right` the same
-  // way projectTile does, which flips handedness; DoubleSide sidesteps the
-  // resulting wrong-way normal on mirrored tiles for now. That'll need a
-  // real fix (flip the normal back, not just render both sides) once M5's
-  // lighting actually depends on normal direction.
+  constructor() {
+    this.worldGroup.scale.y = -1;
+    this.scene.add(this.worldGroup);
+  }
+
   async load(palette: readonly string[]): Promise<void> {
     const geometry = await loadTunnelTileGeometry();
-    geometry.computeBoundingSphere();
-    const tileRadius = geometry.boundingSphere?.radius ?? 0;
     const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, vertexColors: true });
     const patch = DEBUG_U_RANGE
       ? TUNNEL_TILE_PATCH.filter((t) => t.u > DEBUG_U_RANGE[0] && t.u < DEBUG_U_RANGE[1])
       : TUNNEL_TILE_PATCH;
     const mesh = new THREE.InstancedMesh(geometry, material, patch.length);
 
-    const uMid = (PATCH_U_MIN + PATCH_U_MAX) / 2;
+    const color = new THREE.Color();
+    patch.forEach((_, i) => mesh.setColorAt(i, color.set(palette[i % palette.length])));
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+
+    this.worldGroup.add(mesh);
+    this.mesh = mesh;
+    this.material = material;
+    this.patch = patch;
+
+    // A size may already have been reported before load() resolved; lay
+    // out immediately with it instead of waiting for the next resize.
+    if (this.lastWidth > 0 && this.lastHeight > 0) {
+      this.layout(this.buildConfig(this.lastWidth, this.lastHeight));
+    }
+  }
+
+  // rNear/baseOffset (and so every tile's position) are genuine px
+  // quantities, not just an aspect ratio, so -- unlike M2's auto-fit camera
+  // -- this needs the real container size, not merely width/height's ratio.
+  setSize(width: number, height: number): void {
+    if (width === this.lastWidth && height === this.lastHeight) return;
+    this.lastWidth = width;
+    this.lastHeight = height;
+    if (width <= 0 || height <= 0) return;
+
+    const cfg = this.buildConfig(width, height);
+    this.updateCamera(width, height, cfg);
+    if (this.mesh) this.layout(cfg);
+  }
+
+  // Mirrors KaleidoscopeTunnelBackground.tsx's own useMemo -- baseOffset is
+  // the mouth-to-tip world-space axis tilt that makes the mouth's screen
+  // projection land on baseFocus while the tip lands on tipFocus (tipFocus
+  // itself is applied separately below, as a camera-level shift, since
+  // frameAt's taper already zeroes baseOffset out at the tip).
+  private buildConfig(width: number, height: number): ConeConfig {
+    const startDepth = Math.min(START_DEPTH, PERSPECTIVE - 100);
+    const pfNear = PERSPECTIVE / (PERSPECTIVE - startDepth);
+    const baseOffset: Vec2 = [
+      (width * (BASE_FOCUS[0] - TIP_FOCUS[0])) / pfNear,
+      (height * (BASE_FOCUS[1] - TIP_FOCUS[1])) / pfNear,
+    ];
+    return {
+      uMin: PATCH_U_MIN,
+      uMax: PATCH_U_MAX,
+      uvScale: PATCH_UV_SCALE,
+      turns: TURNS,
+      slantWeight: SLANT_WEIGHT,
+      rNear: (BASE_WIDTH * Math.max(width, height)) / 2,
+      zNear: startDepth,
+      zFar: startDepth - DEPTH,
+      baseOffset,
+      phase: PHASE,
+    };
+  }
+
+  // Reproduces the SVG version's `pf = PERSPECTIVE / (PERSPECTIVE - z)`
+  // projection exactly: a real camera sitting PERSPECTIVE world units in
+  // front of the z=0 plane, with vertical FOV chosen so that plane's world
+  // units map 1:1 to CSS px, is the same single-center-of-projection
+  // transform in disguise. tipFocus (the vanishing point's screen position)
+  // is then an off-axis frustum shift, not a camera rotation -- rotating
+  // the camera to "look at" tipFocus would introduce keystone distortion
+  // the SVG version's plain 2D translate never had; shifting the frustum
+  // window instead reproduces a constant screen-pixel offset at every
+  // depth, matching a plain translate exactly (unlike the SVG version, this
+  // can't be a post-render translate of the canvas element -- WebGL culls
+  // geometry outside the camera's frustum, so content revealed at the
+  // shifted edge must actually be rendered there, not just uncovered).
+  private updateCamera(width: number, height: number, cfg: ConeConfig): void {
+    const halfHeight = height / 2;
+    this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(halfHeight / PERSPECTIVE));
+    this.camera.aspect = width / height;
+    this.camera.position.set(0, 0, PERSPECTIVE);
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(0, 0, 0);
+
+    const distNear = PERSPECTIVE - cfg.zNear;
+    const distFar = PERSPECTIVE - cfg.zFar;
+    const margin = Math.max(500, Math.abs(cfg.zFar - cfg.zNear) * 0.05);
+    this.camera.near = Math.max(1, Math.min(distNear, distFar) - margin);
+    this.camera.far = Math.max(distNear, distFar) + margin;
+
+    const shiftX = (TIP_FOCUS[0] - 0.5) * width;
+    const shiftY = (TIP_FOCUS[1] - 0.5) * height;
+    this.camera.setViewOffset(width, height, -shiftX, -shiftY, width, height);
+    this.camera.updateProjectionMatrix();
+  }
+
+  // Converts each patch tile's cone-wrapped position/basis (tunnelConeMath)
+  // into a per-instance matrix. Mirroring negates `right` (the local
+  // x-axis's image) same as projectTile does -- but only after `normal` is
+  // derived from the *unmirrored* right, since negating two of a basis's
+  // three vectors is a proper rotation, not a reflection, and would flip a
+  // mirrored tile's extrusion to face the camera instead of away from it.
+  private layout(cfg: ConeConfig): void {
+    const mesh = this.mesh;
+    if (!mesh) return;
+
     const matrix = new THREE.Matrix4();
     const position = new THREE.Vector3();
     const right = new THREE.Vector3();
     const down = new THREE.Vector3();
     const normal = new THREE.Vector3();
-    const color = new THREE.Color();
-    const bounds = new THREE.Box3();
 
-    patch.forEach((tile, i) => {
-      position.set((tile.u - uMid) * PATCH_UV_SCALE, tile.v * PATCH_UV_SCALE, 0);
-
-      const rot = (tile.rot * Math.PI) / 180;
-      const c = Math.cos(rot);
-      const s = Math.sin(rot);
-      right.set(c, s, 0);
-      down.set(-s, c, 0);
-      // Computed from the unmirrored `right` -- mirroring must only flip
-      // the in-plane footprint (right), not the extrusion direction. Doing
-      // this after negating right would flip normal's sign too (right and
-      // normal both negated = a proper rotation, not a reflection), which
-      // extrudes a mirrored tile's depth toward the camera instead of away
-      // from it like every other tile.
-      normal.crossVectors(right, down);
+    this.patch.forEach((tile, i) => {
+      const frame = computeTileFrame(tile, cfg);
+      position.set(...frame.position);
+      right.set(...frame.right);
+      down.set(...frame.down);
+      normal.crossVectors(right, down).normalize();
       if (tile.mirrored) right.multiplyScalar(-1);
 
       matrix.makeBasis(right, down, normal).setPosition(position);
       mesh.setMatrixAt(i, matrix);
-      mesh.setColorAt(i, color.set(palette[i % palette.length]));
-      bounds.expandByPoint(position);
     });
 
     mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-
-    // `bounds` so far only covers tile *centers* -- pad by each tile's own
-    // extent, or a small/nearby cluster (like the debug view) can end up
-    // with a smaller box than the tiles actually drawn, putting the camera
-    // closer than the geometry itself.
-    bounds.expandByScalar(tileRadius);
-    this.bounds = bounds;
-    this.scene.add(mesh);
-    this.mesh = mesh;
-    this.material = material;
-    // A placeholder aspect here is fine -- setAspect always re-fits on its
-    // very first real call (lastAspect starts null), before render() is
-    // ever reached, so this never produces a visibly-wrong frame.
-    this.frameCamera(1.5);
-  }
-
-  // Fits the camera tight to whatever was actually placed, for the current
-  // aspect ratio -- TUNNEL_TILE_PATCH is a long, thin strip (~9445 x ~232
-  // units). Fitting a bounding sphere via vertical FOV alone (the previous
-  // approach) is aspect-independent by construction, which left most of a
-  // typical wide viewport blank: it sizes to whichever axis the sphere is
-  // tightest on regardless of how much wider the viewport actually is.
-  // Picks whichever of width/height is the binding constraint instead.
-  private frameCamera(aspect: number): void {
-    if (!this.bounds) return;
-    const size = this.bounds.getSize(new THREE.Vector3());
-    const center = this.bounds.getCenter(new THREE.Vector3());
-    const margin = 1.1;
-    const halfFovV = THREE.MathUtils.degToRad(this.camera.fov / 2);
-    const distanceForHeight = (size.y / 2) * margin / Math.tan(halfFovV);
-    const distanceForWidth = (size.x / 2) * margin / (Math.tan(halfFovV) * aspect);
-    const distance = Math.max(distanceForHeight, distanceForWidth, 1);
-    const depthMargin = Math.max(size.x, size.y, 10);
-    this.camera.position.set(center.x, center.y, center.z + distance);
-    this.camera.near = Math.max(1, distance - depthMargin);
-    this.camera.far = distance + depthMargin;
-    this.camera.aspect = aspect;
-    this.camera.lookAt(center);
-    this.camera.updateProjectionMatrix();
-  }
-
-  setAspect(aspect: number): void {
-    if (this.lastAspect === aspect) return;
-    this.lastAspect = aspect;
-    if (this.bounds) {
-      this.frameCamera(aspect);
-    } else {
-      this.camera.aspect = aspect;
-      this.camera.updateProjectionMatrix();
-    }
   }
 
   render(renderer: THREE.WebGLRenderer): void {

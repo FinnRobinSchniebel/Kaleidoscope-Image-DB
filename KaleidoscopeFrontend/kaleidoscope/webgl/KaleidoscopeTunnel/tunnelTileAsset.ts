@@ -18,10 +18,14 @@ const XY_SCALE = 3.87152;
 // clean round numbers here once inverted back into the STL's raw space.
 const PIVOT_X_RAW = 10;
 const PIVOT_Y_RAW = 0;
-// The STL's modeled depth (4 units) reads much thicker than the old fake
-// extrusion's few-px sliver once scaled by XY_SCALE alone -- dampened
-// further here. Tune by eye against the current SVG version.
-const DEPTH_DAMPING = 0.4;
+// The STL's modeled depth (4 units), scaled by XY_SCALE alone, reads
+// noticeably flatter than intended -- most tiles sit close to face-on to
+// the camera (slantWeight keeps them radial-seeded), so only a thin
+// silhouette sliver of the side walls is ever visible, and that sliver
+// needs real thickness behind it to read as 3D at all rather than a crude
+// shadow. Tune by eye against the live scene, not the old SVG version's
+// fake shadow-sliver depth (there's no equivalent quantity to match there).
+const DEPTH_DAMPING = 2;
 
 // The 13 boundary points of hat-monotile.stl's front/back cap outline, in
 // the STL's own raw coordinates (extracted once by walking the front-cap

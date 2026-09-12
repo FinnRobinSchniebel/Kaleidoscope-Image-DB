@@ -31,8 +31,8 @@ export type TunnelBackgroundProps = {
 // neighbors can misread as a crack through what looks like one tile.
 const DEFAULT_PALETTE = ["#ff6b6b", "#4dabf7", "#69db7c", "#ffd43b", "#da77f2", "#ff922b", "#20c997", "#748ffc"];
 
-// M2: all patch tiles instanced at their flat (u, v) positions, palette-
-// colored, no cone wrap yet -- see TunnelScene.ts.
+// M3: all patch tiles instanced along the cone/spiral wrap, palette-
+// colored, phase fixed (no rotation animation yet) -- see TunnelScene.ts.
 export default function KaleidoscopeTunnelBackgroundGL({
   palette = DEFAULT_PALETTE,
 }: TunnelBackgroundProps = {}) {
@@ -56,7 +56,7 @@ export default function KaleidoscopeTunnelBackgroundGL({
   useRenderLoop(23, () => {
     const tunnel = sceneRef.current;
     if (!renderer || !tunnel || !size) return;
-    tunnel.setAspect(size.width / size.height);
+    tunnel.setSize(size.width, size.height);
     tunnel.render(renderer);
   });
 
