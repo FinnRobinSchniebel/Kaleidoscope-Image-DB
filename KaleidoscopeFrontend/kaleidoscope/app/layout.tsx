@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -15,6 +15,16 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Kaleidoscope",
   description: "An Image DB viewing frontend",
+};
+
+// No theme provider is wired up anywhere in this app (next-themes is a
+// dependency but unused for now) -- this is a light-only page. Without an
+// explicit color-scheme, a browser on a dark-mode OS paints its very first
+// frame with a dark/grey placeholder before this page's actual (light,
+// blue-grey) content ever arrives, which shows as a brief flash/flicker on
+// initial load, independent of anything in the tunnel background itself.
+export const viewport: Viewport = {
+  colorScheme: "light",
 };
 
 export default function RootLayout({

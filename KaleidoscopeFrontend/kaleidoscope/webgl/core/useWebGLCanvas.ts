@@ -24,6 +24,11 @@ export function useWebGLCanvas() {
     // Caps DPR on high-density mobile screens -- fillrate cost grows with
     // the square of pixel ratio, and this is a background element.
     gl.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Without this, three.js defaults to NoToneMapping and any shader
+    // output above 1.0 hard-clips to flat white instead of compressing
+    // smoothly. This scene's real light intensities (see TunnelScene.ts's
+    // DEFAULT_LIGHTING) routinely exceed 1.0.
+    gl.toneMapping = THREE.ACESFilmicToneMapping;
     setRenderer(gl);
 
     const update = () => {

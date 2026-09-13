@@ -91,10 +91,9 @@ function frameAt(x: number, cfg: ConeConfig) {
 
 export type TileFrame = {
   readonly position: Vec3;
-  // Unmirrored -- callers apply mirroring themselves (negate right) *after*
-  // deriving anything that must stay consistent regardless of mirroring,
-  // like a face normal via cross(right, down). See TunnelScene's comment on
-  // why computing that from an already-mirrored right flips its sign too.
+  // Always the unmirrored basis -- mirroring is handled by using a
+  // separate pre-mirrored geometry per tile group (see TunnelScene.ts's
+  // TileGroup), not by negating a vector here.
   readonly right: Vec3;
   readonly down: Vec3;
 };
