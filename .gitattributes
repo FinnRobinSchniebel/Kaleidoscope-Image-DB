@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
-* text=auto 
+* text=auto
+
+# Shell scripts are bind-mounted straight into Linux containers (see
+# compose.yaml), so they must never be checked out with CRLF.
+*.sh text eol=lf

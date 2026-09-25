@@ -165,16 +165,19 @@ function buildRimAlphaTexture(boundary: readonly (readonly [number, number])[]):
   canvas.height = SIZE;
   const ctx = canvas.getContext("2d")!;
 
-  // Opaque only within halfWidth of the true edge, then a long linear
-  // falloff over featherPx back down to the base interior value (rgb 64,
-  // matching the SVG mask's fillOpacity={0.25}). halfWidth is kept small
-  // relative to featherPx deliberately: a sharp convex spike (this shape
-  // has several) is locally thin, so its whole tip sits within a fixed
-  // distance of *some* edge -- too large a halfWidth reads as a solid,
-  // ungraded patch of full opacity right at those tips instead of a rim.
+  // A single continuous linear falloff from fully opaque at the true edge
+  // (minDist = 0) down to the base interior value (rgb 64, matching the SVG
+  // mask's fillOpacity={0.25}) at minDist >= featherPx -- deliberately no
+  // flat "fully opaque" plateau before the falloff starts. This shape has
+  // both sharp convex spikes and sharp concave (reflex) notches; a plateau
+  // wide enough to avoid a hard, ungraded patch at a convex spike's thin
+  // tip is *also* wide enough to swallow a concave notch's entire depth in
+  // one step, since a notch's interior distance-to-nearest-edge grows much
+  // faster with depth than a straight edge's does. Removing the plateau
+  // entirely (any distance > 0 already starts fading) avoids both failure
+  // modes at once, regardless of local convexity.
   const strokeWidthPx = ((TILE_LOCAL_STROKE_WIDTH * RIM_WIDTH_SCALE) / (maxX - minX)) * SIZE;
-  const halfWidth = strokeWidthPx * 0.15;
-  const featherPx = strokeWidthPx * 2;
+  const featherPx = strokeWidthPx * 3.5;
 
   const image = ctx.createImageData(SIZE, SIZE);
   const data = image.data;
@@ -187,7 +190,7 @@ function buildRimAlphaTexture(boundary: readonly (readonly [number, number])[]):
         const d = distanceToSegment(px + 0.5, py + 0.5, ax, ay, bx, by);
         if (d < minDist) minDist = d;
       }
-      const t = Math.max(0, Math.min(1, (minDist - halfWidth) / featherPx));
+      const t = Math.max(0, Math.min(1, minDist / featherPx));
       const value = 255 + (64 - 255) * t;
       const idx = (py * SIZE + px) * 4;
       data[idx] = data[idx + 1] = data[idx + 2] = value;
