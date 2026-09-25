@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// ApplySourceMetadataUpdate updates source i's title, description and tags from
+// ApplySourceMetadataUpdate updates Sources[index]'s title, description and tags from
 // newSrc and saves the set. The set's own Title only changes if it still matched
 // the source's old title, so a user's custom title is never overwritten. Callers
 // must confirm the source's images are unchanged before calling this; images are
@@ -38,7 +38,7 @@ func ApplySourceMetadataUpdate(ISet *ImageSetMongo, index int, newSrc SourceInfo
 	return UpdateImageSet(ISet)
 }
 
-// MarkSourcePendingImageChange records that source i's images no longer match
+// MarkSourcePendingImageChange records that Sources[index]'s images no longer match
 // what's stored, without writing any image or metadata change. sourceDate is the
 // source's own Date as of this check; storing it lets a later sync tell whether
 // the source has moved on again since this still-unresolved change was detected.
@@ -57,7 +57,7 @@ func MarkSourcePendingImageChange(ISet *ImageSetMongo, index int, sourceDate, ch
 	return UpdateImageSet(ISet)
 }
 
-// MarkSourceMissing records that source i could no longer be fetched. Any prior
+// MarkSourceMissing records that Sources[index] could no longer be fetched. Any prior
 // PendingImageChange is cleared along with it: there's no source left to update
 // the images from, so an unresolved change can no longer be completed.
 // See MarkSourceRecovered for the opposite transition.
@@ -74,7 +74,7 @@ func MarkSourceMissing(ISet *ImageSetMongo, index int, checkedAt time.Time) erro
 	return UpdateImageSet(ISet)
 }
 
-// MarkSourceRecovered records that source i is reachable again with nothing
+// MarkSourceRecovered records that Sources[index] is reachable again with nothing
 // else to report - no metadata change, no image change (those cases go
 // through ApplySourceMetadataUpdate / MarkSourcePendingImageChange instead,
 // which already clear SourceMissing themselves).

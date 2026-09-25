@@ -187,10 +187,8 @@ func enqueueBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 	})
 }
 
-// processBookmarkPage fetches one page of bookmarks, queries the DB for only
-// those IDs, applies metadata updates to changed existing sets inline, queues
-// save tasks for new items, then enqueues the next page task. Public pages are
-// followed by private pages.
+// processBookmarkPage fetches one page of bookmarks, processes its items, then
+// enqueues the next page task. Public pages are followed by private pages.
 func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int, done func()) error {
 	sess, err := GetPixivSession(userId)
 	if err != nil {
@@ -213,7 +211,7 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 		processBookmarkItems(userId, illusts, restrict == pixiv.Private)
 	}
 
-	// Chain to the next page, or transition Public→Private, or finish.
+	// Chain to the next page, or move from public to private, or finish.
 	var nextErr error
 	if next != 0 {
 		nextErr = enqueueBookmarkPage(userId, pixivUID, restrict, next, done)
@@ -232,8 +230,8 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 	return nil
 }
 
-// processBookmarkItems handles one page's listing items. The page's DB
-// snapshot only decides what to do; every write re-reads its set first.
+// processBookmarkItems uses the page's DB snapshot only to decide what to do;
+// every write re-reads its set first.
 func processBookmarkItems(userId string, illusts []pixivmodel.Illust, isPrivate bool) {
 	sourceIDs := make([]string, len(illusts))
 	for i, il := range illusts {
@@ -273,9 +271,8 @@ func processBookmarkItems(userId string, illusts []pixivmodel.Illust, isPrivate 
 	}
 }
 
-// finishPixivSync queues done as the user's final task, so it only fires once
-// every save task queued before it has run. Falls back to calling done
-// directly if queueing fails (e.g. the user was removed mid-sync).
+// finishPixivSync queues done behind the user's pending save tasks, or calls
+// it directly if queueing fails.
 func finishPixivSync(userId string, done func()) {
 	if err := DefaultScheduler.Enqueue(pixivServiceName, userId, func() error {
 		log.Printf("pixiv sync [%s]: bookmark sync complete", userId)
@@ -286,11 +283,9 @@ func finishPixivSync(userId string, done func()) {
 	}
 }
 
-// pixivSourceStale reports whether a stored pixiv source needs its metadata
-// re-applied from the listing item il. Pixiv's App API create_date tracks a
-// work's last edit, not its original post date, so a moved date covers most
-// changes; tags are compared separately since a tag edit or bookmark
-// visibility flip doesn't move it. il must be visible.
+// pixivSourceStale reports whether src needs re-applying from listing item il,
+// which must be visible. Tags are compared separately because a tag edit or
+// bookmark visibility flip doesn't move create_date.
 func pixivSourceStale(il pixivmodel.Illust, src imageset.SourceInfo, isPrivate bool) bool {
 	return src.LastChecked.IsZero() ||
 		src.SourceMissing ||
@@ -298,10 +293,9 @@ func pixivSourceStale(il pixivmodel.Illust, src imageset.SourceInfo, isPrivate b
 		tagsChanged(src.Tags, pixivIllustTags(&il, isPrivate))
 }
 
-// illustRemoved reports whether a non-visible listing entry is Pixiv's
-// placeholder for a deleted or author-privated work. Other non-visible
-// entries (e.g. hidden by the account's R-18 filter) still exist and are not
-// matched, so an unrecognized placeholder is never treated as removed.
+// illustRemoved reports whether il is Pixiv's placeholder for a deleted or
+// author-privated work. Only limit_unknown matches, so any other placeholder
+// (e.g. R-18 filtered) is never marked missing.
 func illustRemoved(il pixivmodel.Illust) bool {
 	return !il.Visible && il.ImageURLs != nil &&
 		strings.Contains(il.ImageURLs.SquareMedium, "limit_unknown")
@@ -320,8 +314,7 @@ func sourceByID(set *imageset.ImageSetMongo, sourceID string) (src imageset.Sour
 
 // ----- Per-illust work ----
 
-// enqueueNewIllust queues a save task for a bookmark not yet in the DB. Kept
-// on the scheduler (unlike metadata updates) because it downloads images.
+// enqueueNewIllust is queued rather than run inline because it downloads images.
 func enqueueNewIllust(userId string, illust pixivmodel.Illust, isPrivate bool) {
 	if err := DefaultScheduler.Enqueue(pixivServiceName, userId, func() error {
 		return savePixivIllust(userId, &illust, isPrivate)
@@ -330,8 +323,8 @@ func enqueueNewIllust(userId string, illust pixivmodel.Illust, isPrivate bool) {
 	}
 }
 
-// markPixivSourceMissing flags the stored pixiv source for illustID as
-// missing, re-reading its set first so no concurrent write is overwritten.
+// markPixivSourceMissing re-reads the set right before writing, to keep the
+// window for overwriting a concurrent edit small.
 func markPixivSourceMissing(userId string, illustID uint64) {
 	sourceID := strconv.FormatUint(illustID, 10)
 	set, ok, err := imageset.GetImageSetBySourceID(userId, pixivServiceName, sourceID)
@@ -346,9 +339,8 @@ func markPixivSourceMissing(userId string, illustID uint64) {
 	}
 }
 
-// tagsChanged reports whether want's tag identities differ from have's.
-// Compares by normalized Default text only, same identity reconcileSourceTags
-// uses - EN/translation drift alone isn't a "tags changed" case.
+// tagsChanged compares by normalized Default text only; EN/translation
+// differences don't count as a change.
 func tagsChanged(have, want []imageset.SourceTag) bool {
 	haveSet := make(map[string]struct{}, len(have))
 	for _, t := range have {
@@ -365,9 +357,8 @@ func tagsChanged(have, want []imageset.SourceTag) bool {
 	return len(haveSet) != len(wantSet)
 }
 
-// savePixivIllust downloads every page of a new listing item and saves it via
-// AddImageSet. Runs as a scheduler task, one at a time, which AddImageSet's
-// duplicate-hash check relies on.
+// savePixivIllust must run serially (as a scheduler task): AddImageSet's
+// duplicate-hash check relies on it.
 func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) error {
 	illustID := illust.ID
 
@@ -492,7 +483,7 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string, isPrivate bool
 
 // pixivIllustTags returns the illust's tags: Default is always the untranslated
 // Pixiv tag, EN is Pixiv's own translation when it provides one. isPrivate
-// appends the synthetic pixivPrivatedTag for illusts bookmarked as private.
+// also appends pixivPrivatedTag.
 func pixivIllustTags(illust *pixivmodel.Illust, isPrivate bool) []imageset.SourceTag {
 	tags := make([]imageset.SourceTag, 0, len(illust.Tags)+1)
 	for _, t := range illust.Tags {
@@ -533,10 +524,9 @@ func pixivSourceInfo(illust *pixivmodel.Illust, old imageset.SourceInfo, isPriva
 	}
 }
 
-// applyPixivSourceUpdate re-reads the existing set for illust's source right
-// before writing (so no concurrent write is overwritten) and applies the
-// listing item's metadata to it. Called inline from processBookmarkPage, since
-// it makes no Pixiv calls.
+// applyPixivSourceUpdate applies illust's metadata to its stored set,
+// re-reading the set right before writing to keep the window for overwriting
+// a concurrent edit small.
 func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust, isPrivate bool) error {
 	sourceID := strconv.FormatUint(illust.ID, 10)
 	set, ok, err := imageset.GetImageSetBySourceID(userId, pixivServiceName, sourceID)
