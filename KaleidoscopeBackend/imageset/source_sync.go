@@ -10,75 +10,82 @@ import (
 // the source's old title, so a user's custom title is never overwritten. Callers
 // must confirm the source's images are unchanged before calling this; images are
 // never touched here.
-func ApplySourceMetadataUpdate(a *ImageSetMongo, i int, newSrc SourceInfo, checkedAt time.Time, userId string) error {
-	old := a.Sources[i]
+func ApplySourceMetadataUpdate(ISet *ImageSetMongo, index int, newSrc SourceInfo, checkedAt time.Time, userId string) error {
+	old := ISet.Sources[index]
 
 	if newSrc.Title != old.Title {
-		if a.Title == old.Title {
-			a.Title = newSrc.Title
+		if ISet.Title == old.Title {
+			ISet.Title = newSrc.Title
 		}
-		a.Sources[i].Title = newSrc.Title
+		ISet.Sources[index].Title = newSrc.Title
 	}
 
 	if newSrc.Description != old.Description {
-		UpdateSourceDescription(a, i, newSrc.Description)
+		UpdateSourceDescription(ISet, index, newSrc.Description)
 	}
 
-	if err := Tagger.ProcessSourceTags(userId, a, i, newSrc.Tags); err != nil {
+	// Must precede ProcessSourceTags: its system-tag recompute reads SourceMissing.
+	ISet.Sources[index].Date = newSrc.Date
+	ISet.Sources[index].LastChecked = checkedAt
+	ISet.Sources[index].LastImageUpdate = newSrc.Date
+	ISet.Sources[index].PendingImageChange = false
+	ISet.Sources[index].SourceMissing = false
+
+	if err := Tagger.ProcessSourceTags(userId, ISet, index, newSrc.Tags); err != nil {
 		return fmt.Errorf("processing source tags: %w", err)
 	}
 
-	a.Sources[i].Date = newSrc.Date
-	a.Sources[i].LastChecked = checkedAt
-	a.Sources[i].LastImageUpdate = newSrc.Date
-	a.Sources[i].PendingImageChange = false
-	a.Sources[i].SourceMissing = false
-
-	return UpdateImageSet(a)
+	return UpdateImageSet(ISet)
 }
 
 // MarkSourcePendingImageChange records that source i's images no longer match
 // what's stored, without writing any image or metadata change. sourceDate is the
 // source's own Date as of this check; storing it lets a later sync tell whether
 // the source has moved on again since this still-unresolved change was detected.
-func MarkSourcePendingImageChange(a *ImageSetMongo, i int, sourceDate, checkedAt time.Time) error {
-	a.Sources[i].PendingImageChange = true
-	a.Sources[i].SourceMissing = false
-	a.Sources[i].LastImageUpdate = sourceDate
-	a.Sources[i].Date = sourceDate
-	a.Sources[i].LastChecked = checkedAt
-	return UpdateImageSet(a)
+func MarkSourcePendingImageChange(ISet *ImageSetMongo, index int, sourceDate, checkedAt time.Time) error {
+	wasMissing := ISet.Sources[index].SourceMissing
+	ISet.Sources[index].PendingImageChange = true
+	ISet.Sources[index].SourceMissing = false
+	ISet.Sources[index].LastImageUpdate = sourceDate
+	ISet.Sources[index].Date = sourceDate
+	ISet.Sources[index].LastChecked = checkedAt
+	if wasMissing {
+		if err := Tagger.RecomputeSystemTags(ISet.KscopeUserId, ISet); err != nil {
+			return fmt.Errorf("computing system tags: %w", err)
+		}
+	}
+	return UpdateImageSet(ISet)
 }
 
 // MarkSourceMissing records that source i could no longer be fetched. Any prior
 // PendingImageChange is cleared along with it: there's no source left to update
 // the images from, so an unresolved change can no longer be completed.
 // See MarkSourceRecovered for the opposite transition.
-func MarkSourceMissing(a *ImageSetMongo, i int, checkedAt time.Time) error {
-	wasMissing := a.Sources[i].SourceMissing
-	a.Sources[i].SourceMissing = true
-	a.Sources[i].PendingImageChange = false
-	a.Sources[i].LastChecked = checkedAt
+func MarkSourceMissing(ISet *ImageSetMongo, index int, checkedAt time.Time) error {
+	wasMissing := ISet.Sources[index].SourceMissing
+	ISet.Sources[index].SourceMissing = true
+	ISet.Sources[index].PendingImageChange = false
+	ISet.Sources[index].LastChecked = checkedAt
 	if !wasMissing {
-		if err := Tagger.RecomputeSystemTags(a.KscopeUserId, a); err != nil {
+		if err := Tagger.RecomputeSystemTags(ISet.KscopeUserId, ISet); err != nil {
 			return fmt.Errorf("computing system tags: %w", err)
 		}
 	}
-	return UpdateImageSet(a)
+	return UpdateImageSet(ISet)
 }
 
 // MarkSourceRecovered records that source i is reachable again with nothing
 // else to report - no metadata change, no image change (those cases go
 // through ApplySourceMetadataUpdate / MarkSourcePendingImageChange instead,
 // which already clear SourceMissing themselves).
-func MarkSourceRecovered(a *ImageSetMongo, i int, checkedAt time.Time) error {
-	wasMissing := a.Sources[i].SourceMissing
-	a.Sources[i].SourceMissing = false
-	a.Sources[i].LastChecked = checkedAt
+func MarkSourceRecovered(ISet *ImageSetMongo, index int, checkedAt time.Time) error {
+	wasMissing := ISet.Sources[index].SourceMissing
+	ISet.Sources[index].SourceMissing = false
+	ISet.Sources[index].LastChecked = checkedAt
 	if wasMissing {
-		if err := Tagger.RecomputeSystemTags(a.KscopeUserId, a); err != nil {
+		if err := Tagger.RecomputeSystemTags(ISet.KscopeUserId, ISet); err != nil {
 			return fmt.Errorf("computing system tags: %w", err)
 		}
 	}
-	return UpdateImageSet(a)
+	return UpdateImageSet(ISet)
 }

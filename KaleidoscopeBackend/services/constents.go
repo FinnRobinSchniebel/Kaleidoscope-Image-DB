@@ -29,3 +29,7 @@ const PixivQpT = 1        //number of queries between delays
 
 //Accept-Language sent on every pixiv App API request, so Pixiv returns translated tag names (Tag.TranslatedName)
 const pixivAcceptLanguage = "en"
+
+// pixivPrivatedTag is a synthetic source tag (not sourced from Pixiv's own
+// tag list) applied to image sets bookmarked as private.
+const pixivPrivatedTag = "privated"
