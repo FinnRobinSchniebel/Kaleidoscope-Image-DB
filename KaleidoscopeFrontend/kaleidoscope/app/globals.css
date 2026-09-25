@@ -127,7 +127,5 @@
    .imgCard{
      size: calc(var(--spacing) * 50)
    }
-
-
-
 }
+

@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  Derived from turtle-monotile-kites.svg. The ten kite paths are byte-identical
+  to that file's; only the presentation changes:
+
+  - The scale(10) wrapper is dropped, so coordinates are the turtle's own unit
+    system (1 = one short edge). turtleFieldPlacements.ts emits placements in
+    those same units, which lets a placement drive an <image> of this file
+    directly, with no scale factor to keep in sync.
+  - The three flat grays become alpha instead of colour: every kite is white,
+    and darkgray/gray/lightgray now mean most/mid/least opaque. This sits behind
+    the spiral, so it has to stay quiet; these are deliberately low.
+  - Each kite is then lit along its own edges (the "Fresnel" pass).
+
+  Why the rim is a self-clipped stroke and not a gradient. An
+  objectBoundingBox radialGradient measures distance from the bounding box
+  centre, which is not distance from the kite's own edge: kites are elongated,
+  so that lights the pointy ends hard and the long edges barely at all. Worse,
+  every edge is shared by two kites, and one of them usually has that edge far
+  from its bbox centre while the other has it close, so seams end up lit on one
+  side only. Stroking each kite and clipping the stroke to that same kite gives
+  a true inner rim, so both sides of every seam are lit, each at its own kite's
+  strength. Stroke width is doubled because clipping discards the outer half.
+
+  Why the rim is also blurred. A flat stroke has the same opacity all the way
+  across its width, so at any width/opacity it reads as a hard-edged band, not
+  a light; widening or brightening it just makes a bigger band. A filter
+  applies before clip-path, so blurring the (unclipped, double-width) stroke
+  and then clipping it keeps the outer edge exactly at the kite boundary
+  (clipping cuts away the softened edge that would otherwise poke outside the
+  shape), while the inner edge, which clipping never touches, comes out as a
+  soft falloff into the fill. That falloff is the actual "fade".
+
+  Structure: geometry lives once in <defs>, carrying no paint attributes, so
+  the fill pass and the rim pass can each set their own via <use>.
+
+  Tuning knobs, in order of effect:
+    fill-opacity  per level - the gray-to-alpha base, and what makes one turtle
+                  distinguishable from its neighbours, so keep these well
+                  separated (currently ~3.5x from lightest to darkest).
+    stroke-opacity per level - the rim's peak brightness, right at the edge.
+                  Composites over the fill, so the values below land each rim
+                  at roughly 3x its own base.
+    stroke-width  how far inward the rim reaches before the blur has fully
+                  dissipated it, together with the blur's stdDeviation below.
+    feGaussianBlur stdDeviation - how soft the fade is; larger reaches further
+                  and peaks lower for the same stroke-opacity.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" id="turtle-kites-fresnel"
+     width="600" height="433.012702" viewBox="0 0 6 4.33012702">
+  <defs>
+    <!--
+     1.73205081 = sqrt(3);
+     0.86602540 = sqrt(3)/2;
+     3.46410161 = 2*sqrt(3);
+     -->
+    <path id="k1" d="M
+           0 1.73205081
+           l
+            0   -1.73205081
+           1    0
+           0.5 0.86602540
+           -1.5 0.86602540
+           z"
+        class="monotile">
+    </path>
+    <path id="k2" d="M
+           0 1.73205081
+           l
+           1.5 -0.86602540
+           0.5 0.86602540
+           -0.5 0.86602540
+           z"
+        class="monotile">
+    </path>
+    <path id="k3" d="M
+           3 0
+           l
+            0   1.73205081
+           -1    0
+           -0.5 -0.86602540
+           1.5 -0.86602540
+           z"
+        class="monotile">
+    </path>
+    <path id="k4" d="M
+           3 0
+           l
+            0   1.73205081
+           1    0
+           0.5 -0.86602540
+           -1.5 -0.86602540
+           z"
+        class="monotile">
+    </path>
+    <path id="k5" d="M
+           6 1.73205081
+           l
+           -1.5 -0.86602540
+           -0.5 0.86602540
+           0.5 0.86602540
+           z"
+        class="monotile">
+    </path>
+    <path id="k6" d="M
+           6 1.73205081
+           l
+            0   1.73205081
+           -1    0
+           -0.5 -0.86602540
+           1.5 -0.86602540
+           z"
+        class="monotile">
+    </path>
+    <path id="k7" d="M
+           3 3.46410161
+           l
+           1.5 -0.86602540
+           0.5 0.86602540
+           -0.5 0.86602540
+           z"
+        class="monotile">
+    </path>
+    <path id="k8" d="M
+           3 3.46410161
+           l
+            0   -1.73205081
+           1    0
+           0.5 0.86602540
+           -1.5 0.86602540
+           z"
+        class="monotile">
+    </path>
+    <path id="k9" d="M
+           3 3.46410161
+           l
+            0   -1.73205081
+           -1    0
+           -0.5 0.86602540
+           1.5 0.86602540
+           z"
+        class="monotile">
+    </path>
+    <path id="k10" d="M
+           3 3.46410161
+           l
+           -1.5 -0.86602540
+           -0.5 0.86602540
+           0.5 0.86602540
+           z"
+        class="monotile">
+    </path>
+
+    <clipPath id="ck1"><use href="#k1"/></clipPath>
+    <clipPath id="ck2"><use href="#k2"/></clipPath>
+    <clipPath id="ck3"><use href="#k3"/></clipPath>
+    <clipPath id="ck4"><use href="#k4"/></clipPath>
+    <clipPath id="ck5"><use href="#k5"/></clipPath>
+    <clipPath id="ck6"><use href="#k6"/></clipPath>
+    <clipPath id="ck7"><use href="#k7"/></clipPath>
+    <clipPath id="ck8"><use href="#k8"/></clipPath>
+    <clipPath id="ck9"><use href="#k9"/></clipPath>
+    <clipPath id="ck10"><use href="#k10"/></clipPath>
+
+    <filter id="rimBlur" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="0.09"/>
+    </filter>
+  </defs>
+
+  <!-- base alpha, from the source file's grays: dark .21 / mid .13 / light .06 -->
+  <g fill="#fff" stroke="none">
+    <use href="#k1"  fill-opacity="0.21"/>
+    <use href="#k2"  fill-opacity="0.06"/>
+    <use href="#k3"  fill-opacity="0.21"/>
+    <use href="#k4"  fill-opacity="0.06"/>
+    <use href="#k5"  fill-opacity="0.13"/>
+    <use href="#k6"  fill-opacity="0.21"/>
+    <use href="#k7"  fill-opacity="0.06"/>
+    <use href="#k8"  fill-opacity="0.21"/>
+    <use href="#k9"  fill-opacity="0.13"/>
+    <use href="#k10" fill-opacity="0.06"/>
+  </g>
+
+  <!-- inner rim, blurred then clipped to each kite so both sides of every
+       seam get lit with a soft falloff rather than a hard band -->
+  <g fill="none" stroke="#fff" stroke-width="0.22" stroke-linejoin="round">
+    <use href="#k1"  filter="url(#rimBlur)" clip-path="url(#ck1)"  stroke-opacity="0.60"/>
+    <use href="#k2"  filter="url(#rimBlur)" clip-path="url(#ck2)"  stroke-opacity="0.17"/>
+    <use href="#k3"  filter="url(#rimBlur)" clip-path="url(#ck3)"  stroke-opacity="0.60"/>
+    <use href="#k4"  filter="url(#rimBlur)" clip-path="url(#ck4)"  stroke-opacity="0.17"/>
+    <use href="#k5"  filter="url(#rimBlur)" clip-path="url(#ck5)"  stroke-opacity="0.37"/>
+    <use href="#k6"  filter="url(#rimBlur)" clip-path="url(#ck6)"  stroke-opacity="0.60"/>
+    <use href="#k7"  filter="url(#rimBlur)" clip-path="url(#ck7)"  stroke-opacity="0.17"/>
+    <use href="#k8"  filter="url(#rimBlur)" clip-path="url(#ck8)"  stroke-opacity="0.60"/>
+    <use href="#k9"  filter="url(#rimBlur)" clip-path="url(#ck9)"  stroke-opacity="0.37"/>
+    <use href="#k10" filter="url(#rimBlur)" clip-path="url(#ck10)" stroke-opacity="0.17"/>
+  </g>
+</svg>
