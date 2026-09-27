@@ -2,20 +2,25 @@ package imageset
 
 import (
 	"fmt"
+	"maps"
 	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // ApplySourceMetadataUpdate updates Sources[index]'s title, description and tags from
-// newSrc and saves the set. The set's own Title only changes if it still matched
-// the source's old title, so a user's custom title is never overwritten. Callers
-// must confirm the source's images are unchanged before calling this; images are
-// never touched here.
+// newSrc and saves them. The set's own Title only follows a non-empty new source title,
+// and only if it still matched the old one, so a user's custom title is never
+// overwritten. Callers must confirm the source's images are unchanged first; images
+// are never touched here.
 func ApplySourceMetadataUpdate(ISet *ImageSetMongo, index int, newSrc SourceInfo, checkedAt time.Time, userId string) error {
 	old := ISet.Sources[index]
+	fields := bson.M{}
 
 	if newSrc.Title != old.Title {
-		if ISet.Title == old.Title {
+		if ISet.Title == old.Title && newSrc.Title != "" {
 			ISet.Title = newSrc.Title
+			fields["title"] = ISet.Title
 		}
 		ISet.Sources[index].Title = newSrc.Title
 	}
@@ -35,7 +40,9 @@ func ApplySourceMetadataUpdate(ISet *ImageSetMongo, index int, newSrc SourceInfo
 		return fmt.Errorf("processing source tags: %w", err)
 	}
 
-	return UpdateImageSet(ISet)
+	fields[fmt.Sprintf("sources.%d", index)] = ISet.Sources[index]
+	maps.Copy(fields, tagFields(ISet))
+	return updateSourceFields(ISet, index, fields)
 }
 
 // MarkSourcePendingImageChange records that Sources[index]'s images no longer match
@@ -49,43 +56,66 @@ func MarkSourcePendingImageChange(ISet *ImageSetMongo, index int, sourceDate, ch
 	ISet.Sources[index].LastImageUpdate = sourceDate
 	ISet.Sources[index].Date = sourceDate
 	ISet.Sources[index].LastChecked = checkedAt
+
+	p := fmt.Sprintf("sources.%d.", index)
+	fields := bson.M{
+		p + "pending_image_change": true,
+		p + "source_missing":       false,
+		p + "last_image_update":    sourceDate,
+		p + "date":                 sourceDate,
+		p + "last_checked":         checkedAt,
+	}
 	if wasMissing {
 		if err := Tagger.RecomputeSystemTags(ISet.KscopeUserId, ISet); err != nil {
 			return fmt.Errorf("computing system tags: %w", err)
 		}
+		maps.Copy(fields, tagFields(ISet))
 	}
-	return UpdateImageSet(ISet)
+	return updateSourceFields(ISet, index, fields)
 }
 
 // MarkSourceMissing records that Sources[index] could no longer be fetched. Any prior
 // PendingImageChange is cleared along with it: there's no source left to update
 // the images from, so an unresolved change can no longer be completed.
-// See MarkSourceRecovered for the opposite transition.
 func MarkSourceMissing(ISet *ImageSetMongo, index int, checkedAt time.Time) error {
 	wasMissing := ISet.Sources[index].SourceMissing
 	ISet.Sources[index].SourceMissing = true
 	ISet.Sources[index].PendingImageChange = false
 	ISet.Sources[index].LastChecked = checkedAt
+
+	p := fmt.Sprintf("sources.%d.", index)
+	fields := bson.M{
+		p + "source_missing":       true,
+		p + "pending_image_change": false,
+		p + "last_checked":         checkedAt,
+	}
 	if !wasMissing {
 		if err := Tagger.RecomputeSystemTags(ISet.KscopeUserId, ISet); err != nil {
 			return fmt.Errorf("computing system tags: %w", err)
 		}
+		maps.Copy(fields, tagFields(ISet))
 	}
-	return UpdateImageSet(ISet)
+	return updateSourceFields(ISet, index, fields)
 }
 
 // MarkSourceRecovered records that Sources[index] is reachable again with nothing
-// else to report - no metadata change, no image change (those cases go
-// through ApplySourceMetadataUpdate / MarkSourcePendingImageChange instead,
-// which already clear SourceMissing themselves).
+// else to report. Metadata or image changes go through ApplySourceMetadataUpdate /
+// MarkSourcePendingImageChange instead, which clear SourceMissing themselves.
 func MarkSourceRecovered(ISet *ImageSetMongo, index int, checkedAt time.Time) error {
 	wasMissing := ISet.Sources[index].SourceMissing
 	ISet.Sources[index].SourceMissing = false
 	ISet.Sources[index].LastChecked = checkedAt
+
+	p := fmt.Sprintf("sources.%d.", index)
+	fields := bson.M{
+		p + "source_missing": false,
+		p + "last_checked":   checkedAt,
+	}
 	if wasMissing {
 		if err := Tagger.RecomputeSystemTags(ISet.KscopeUserId, ISet); err != nil {
 			return fmt.Errorf("computing system tags: %w", err)
 		}
+		maps.Copy(fields, tagFields(ISet))
 	}
-	return UpdateImageSet(ISet)
+	return updateSourceFields(ISet, index, fields)
 }

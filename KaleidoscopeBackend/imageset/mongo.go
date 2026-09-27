@@ -33,9 +33,8 @@ func EnsureIndexes(ctx context.Context) error {
 	return err
 }
 
-// UpdateImageSet overwrites the stored document with a's current contents.
-func UpdateImageSet(a *ImageSetMongo) error {
-	result, err := Collection.UpdateByID(context.Background(), a.ID, bson.M{"$set": a})
+func updateSetFields(id bson.ObjectID, fields bson.M) error {
+	result, err := Collection.UpdateByID(context.Background(), id, bson.M{"$set": fields})
 	if err != nil {
 		return fmt.Errorf("updating image set: %w", err)
 	}
@@ -43,6 +42,46 @@ func UpdateImageSet(a *ImageSetMongo) error {
 		return errors.New("update matched no image set")
 	}
 	return nil
+}
+
+// updateSourceFields only writes if Sources[index] still holds the same
+// source (by name and source_id), so a shifted array can't redirect the write.
+// Keys in fields are full paths, e.g. "sources.2.last_checked".
+func updateSourceFields(set *ImageSetMongo, index int, fields bson.M) error {
+	src := set.Sources[index]
+	prefix := fmt.Sprintf("sources.%d.", index)
+	filter := bson.M{
+		"_id":                 set.ID,
+		prefix + "name":      src.Name,
+		prefix + "source_id": src.SourceID,
+	}
+	result, err := Collection.UpdateOne(context.Background(), filter, bson.M{"$set": fields})
+	if err != nil {
+		return fmt.Errorf("updating image set source: %w", err)
+	}
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("update matched no image set with source %s/%s at index %d", src.Name, src.SourceID, index)
+	}
+	return nil
+}
+
+// tagFields never writes autotags as null: $addToSet/$pull elsewhere reject it.
+func tagFields(set *ImageSetMongo) bson.M {
+	autoTags := set.AutoTags
+	if autoTags == nil {
+		autoTags = []bson.ObjectID{}
+	}
+	return bson.M{"autotags": autoTags, "tags": set.Tags}
+}
+
+// SaveTagOverrides writes set's TagRuleOverrides and Tags. Nil overrides are
+// stored as an empty list, clearing any previous overrides.
+func SaveTagOverrides(set *ImageSetMongo) error {
+	overrides := set.TagRuleOverrides
+	if overrides == nil {
+		overrides = []string{}
+	}
+	return updateSetFields(set.ID, bson.M{"tag_rule_overrides": overrides, "tags": set.Tags})
 }
 
 // UpdateTagTranslations applies EN to every image set (userID's own) with a

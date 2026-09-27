@@ -8,6 +8,7 @@ import (
 	"image/gif"
 	"io"
 	"log"
+	"maps"
 	"mime"
 	"mime/multipart"
 	"os"
@@ -125,6 +126,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 
 	//clean file paths to avoid unauthorized access
 	imageSet.Image = nil
+	imageSet.ThumbNail = ""
 
 	imageSet.KscopeUserId = ""
 	// non-nil: a nil slice would marshal as BSON null instead of [], which
@@ -249,17 +251,11 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 
 	log.Print("Files Uploaded")
 
-	update := bson.M{"$set": imageSet}
-	result, err := Collection.UpdateByID(context.Background(), imageSet.ID, update)
-
-	if err != nil {
-		fmt.Println("Update Failed")
-		return nil, "", fmt.Errorf("updating image set: %w", err)
-	}
-
-	if result.MatchedCount == 0 {
-		log.Print("COULD NOT UPDATE DB FILE AFTER ADDING INFO")
-		return nil, "", errors.New("update matched no image set")
+	// Leaves out thumbnail, which CreateThumbnailForNew has already written.
+	fields := bson.M{"sources": imageSet.Sources, "images": imageSet.Image}
+	maps.Copy(fields, tagFields(imageSet))
+	if err := updateSetFields(imageSet.ID, fields); err != nil {
+		return nil, "", err
 	}
 	CreatedSuccessfully = true
 

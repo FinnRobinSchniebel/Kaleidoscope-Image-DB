@@ -116,8 +116,8 @@ func ensureSystemAutoTags(userID bson.ObjectID, names []string) (map[string]bson
 // RecomputeSystemTags reconciles set's Lost Media/Untracked membership
 // against its current Sources, mutating set.AutoTags/set.Tags in place and
 // adjusting stored counts, then refreshes Untagged's Count. Like
-// ProcessSourceTags, it does not persist set - callers already own the
-// eventual UpdateImageSet/insert.
+// ProcessSourceTags, it does not persist set; callers must write
+// autotags/tags themselves.
 func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 	uid, err := bson.ObjectIDFromHex(userID)
 	if err != nil {

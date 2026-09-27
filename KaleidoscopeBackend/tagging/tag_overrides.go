@@ -62,29 +62,35 @@ func rebuildTagsAndAdjustCounts(userID bson.ObjectID, set *imageset.ImageSetMong
 }
 
 // SetTagOverrides replaces TagRuleOverrides on every set in ids (owner or
-// admin only, see GetFromID) and rebuilds Tags. Stops at the first error.
+// admin only, see GetFromID) and rebuilds Tags. Empty overrides clear them.
+// Counts are adjusted for each set's owner, not the caller. Stops at the
+// first error.
 func SetTagOverrides(userId string, ids []string, overrides []string) ([]string, error) {
-	uid, err := bson.ObjectIDFromHex(userId)
-	if err != nil {
-		return nil, fmt.Errorf("parsing user id: %w", err)
-	}
 	sets, err := imageset.GetFromID(userId, ids...)
 	if err != nil {
 		return nil, err
 	}
 	updated := make([]string, 0, len(sets))
+	owners := make(map[bson.ObjectID]bool)
 	for i := range sets {
+		ownerID, err := bson.ObjectIDFromHex(sets[i].KscopeUserId)
+		if err != nil {
+			return updated, fmt.Errorf("parsing owner of image set %s: %w", sets[i].ID.Hex(), err)
+		}
 		sets[i].TagRuleOverrides = overrides
-		if err := rebuildTagsAndAdjustCounts(uid, &sets[i]); err != nil {
+		if err := rebuildTagsAndAdjustCounts(ownerID, &sets[i]); err != nil {
 			return updated, err
 		}
-		if err := imageset.UpdateImageSet(&sets[i]); err != nil {
+		if err := imageset.SaveTagOverrides(&sets[i]); err != nil {
 			return updated, err
 		}
 		updated = append(updated, sets[i].ID.Hex())
+		owners[ownerID] = true
 	}
-	if len(updated) == 0 {
-		return updated, nil
+	for ownerID := range owners {
+		if err := refreshUntaggedCount(ownerID); err != nil {
+			return updated, err
+		}
 	}
-	return updated, refreshUntaggedCount(uid)
+	return updated, nil
 }

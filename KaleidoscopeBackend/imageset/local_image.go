@@ -7,6 +7,7 @@ import (
 	"image/gif"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -44,6 +45,10 @@ func ImageFileName(imageTitle string, imageId bson.ObjectID, setIndex int, fileE
 }
 
 func RetrieveLocalImage(path string, name string, low bool) (image.Image, *gif.GIF, error) {
+
+	if name != filepath.Base(name) {
+		return nil, nil, fmt.Errorf("invalid file name")
+	}
 
 	var FullPath string
 	if low {

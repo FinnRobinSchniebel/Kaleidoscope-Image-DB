@@ -230,8 +230,8 @@ func DeleteAutoTagHandler(c *fiber.Ctx) error {
 }
 
 type setTagOverridesRequest struct {
-	IDs       []string `json:"ids"`
-	Overrides []string `json:"overrides"`
+	IDs       []string  `json:"ids"`
+	Overrides *[]string `json:"overrides"` //nil when the field is absent; an empty list clears overrides
 }
 
 // PATCH /api/imagesets/tagoverrides
@@ -247,16 +247,17 @@ func SetTagOverridesHandler(c *fiber.Ctx) error {
 	if len(body.IDs) == 0 {
 		return c.Status(http.StatusBadRequest).SendString("ids is required")
 	}
-	if len(body.Overrides) == 0 {
+	if body.Overrides == nil {
 		return c.Status(http.StatusBadRequest).SendString("overrides is required")
 	}
-	for _, entry := range body.Overrides {
+	overrides := *body.Overrides
+	for _, entry := range overrides {
 		if _, _, ok := ParseTagRuleOverrideEntry(entry); !ok {
 			return c.Status(http.StatusBadRequest).SendString("invalid override entry: " + entry)
 		}
 	}
 
-	updated, err := SetTagOverrides(userID.Hex(), body.IDs, body.Overrides)
+	updated, err := SetTagOverrides(userID.Hex(), body.IDs, overrides)
 	if err != nil {
 		status, msg := imageset.ImageSetErrorResponse(err)
 		return c.Status(status).SendString(msg)
