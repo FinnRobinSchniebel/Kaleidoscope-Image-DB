@@ -8,7 +8,6 @@ import (
 	"image/gif"
 	"io"
 	"log"
-	"maps"
 	"mime"
 	"mime/multipart"
 	"os"
@@ -33,6 +32,9 @@ type AutoTagger interface {
 	// Untracked) against its current Sources, mutating AutoTags/Tags in
 	// place. Does not persist set - callers own the eventual save.
 	RecomputeSystemTags(userID string, set *ImageSetMongo) error
+	// RefreshUntaggedCount recounts userID's Untagged AutoTag from the
+	// database. Call after a write that changed any set's tags.
+	RefreshUntaggedCount(userID string) error
 	// ResolveTagTerm resolves term (a tag name or partial name from a search
 	// query) to the ids of every AutoTag whose Name contains it. If the
 	// reserved Untagged AutoTag matches by name, its id is excluded from ids
@@ -141,6 +143,8 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	}
 	//add userId (done as seperate step to avoid exploits if changes are made)
 	imageSet.KscopeUserId = userId
+	// generated here rather than by the insert, so files can be named before the set is stored
+	imageSet.ID = bson.NewObjectID()
 
 	//check media count first to avoid empty imagsets in db
 	if len(media) == 0 {
@@ -159,34 +163,30 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 		return nil, "", fmt.Errorf("creating author directory: %w", err)
 	}
 
-	imageSet.DateAdded = time.Now()
-
-	//add to DB
-	insertResult, err := Collection.InsertOne(context.Background(), imageSet)
-
-	CreatedSuccessfully := false
-
-	if err != nil {
-		return nil, "", fmt.Errorf("inserting image set: %w", err)
-	}
-	//In case the creation fails, remove the entry to avoid empty data
+	// The insert below is the commit point. Until then nothing is stored, so a
+	// failure only has to undo the files and counts recorded in imageSet.
+	committed := false
 	defer func() {
-		if CreatedSuccessfully {
-			return
-		}
-		err = DeleteImageSetInDB(insertResult.InsertedID.(bson.ObjectID))
-		if err != nil {
-			log.Printf("------ Warning: %s ------", err.Error())
+		if !committed {
+			undoNewImageSet(imageSet)
 		}
 	}()
 
-	imageSet.ID = insertResult.InsertedID.(bson.ObjectID)
-
-	for idx, src := range imageSet.Sources {
-		fetched := src.Tags
-		imageSet.Sources[idx].Tags = nil // nothing recorded for this source yet - every fetched tag is new
-		if err := Tagger.ProcessSourceTags(userId, imageSet, idx, fetched); err != nil {
+	// Cleared up front so imageSet only ever holds tags ProcessSourceTags has recorded.
+	fetched := make([][]SourceTag, len(imageSet.Sources))
+	for idx := range imageSet.Sources {
+		fetched[idx] = imageSet.Sources[idx].Tags
+		imageSet.Sources[idx].Tags = nil
+	}
+	for idx := range imageSet.Sources {
+		if err := Tagger.ProcessSourceTags(userId, imageSet, idx, fetched[idx]); err != nil {
 			return nil, "", fmt.Errorf("processing source tags: %w", err)
+		}
+	}
+	if len(imageSet.Sources) == 0 {
+		// ProcessSourceTags never ran, and it is what normally recomputes system tags
+		if err := Tagger.RecomputeSystemTags(userId, imageSet); err != nil {
+			return nil, "", fmt.Errorf("computing system tags: %w", err)
 		}
 	}
 
@@ -246,18 +246,18 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 
 	}
 
-	//Note: could be go functioned but that may create a race condition if image is viewed before the save finishes
-	CreateThumbnailForNew(imageSet.Path, imageSet.Image[0].Name, imageSet.Title, imageSet.ID)
-
 	log.Print("Files Uploaded")
 
-	// Leaves out thumbnail, which CreateThumbnailForNew has already written.
-	fields := bson.M{"sources": imageSet.Sources, "images": imageSet.Image}
-	maps.Copy(fields, tagFields(imageSet))
-	if err := updateSetFields(imageSet.ID, fields); err != nil {
-		return nil, "", err
+	imageSet.DateAdded = time.Now()
+	if _, err := Collection.InsertOne(context.Background(), imageSet); err != nil {
+		return nil, "", fmt.Errorf("inserting image set: %w", err)
 	}
-	CreatedSuccessfully = true
+	committed = true
+	refreshUntagged(userId)
+
+	// After the insert: it writes the thumbnail name to the stored set, and only logs on failure.
+	//Note: could be go functioned but that may create a race condition if image is viewed before the save finishes
+	CreateThumbnailForNew(imageSet.Path, imageSet.Image[0].Name, imageSet.Title, imageSet.ID)
 
 	log.Println("---Upload complete---")
 	//non-empty hashHits signals a successful add with duplicate images detected
@@ -266,6 +266,18 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 	}
 
 	return nil, imageSet.ID.Hex(), nil
+}
+
+// undoNewImageSet reverses a failed AddImageSet that was never stored: the
+// image files saved so far and the tag counts recorded for its sources, both
+// read from set. Errors are logged, not returned.
+func undoNewImageSet(set *ImageSetMongo) {
+	if err := DeleteFilesFromInfoList(set.Path, set.Image); err != nil {
+		log.Printf("------ Warning: removing files of failed upload: %s ------", err)
+	}
+	if err := Tagger.RecordDeletion(set.KscopeUserId, set.Sources, set.Tags); err != nil {
+		log.Printf("------ Warning: undoing tag counts of failed upload: %s ------", err)
+	}
 }
 
 func CreateThumbnailForNew(path string, existingFileName string, title string, id bson.ObjectID) {

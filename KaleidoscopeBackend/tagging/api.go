@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 
 	"github.com/gofiber/fiber/v2"
@@ -229,18 +230,31 @@ func DeleteAutoTagHandler(c *fiber.Ctx) error {
 	return c.SendStatus(http.StatusOK)
 }
 
-type setTagOverridesRequest struct {
+type tagOverridesRequest struct {
 	IDs       []string  `json:"ids"`
-	Overrides *[]string `json:"overrides"` //nil when the field is absent; an empty list clears overrides
+	Overrides *[]string `json:"overrides"` //nil when the field is absent
 }
 
-// PATCH /api/imagesets/tagoverrides
-func SetTagOverridesHandler(c *fiber.Ctx) error {
+type tagOverridesUpdate func(userID string, admin bool, ids []bson.ObjectID, overrides []string) ([]string, error)
+
+// PUT /api/imagesets/tagoverrides - replaces each set's overrides
+func ReplaceTagOverridesHandler(c *fiber.Ctx) error {
+	return handleTagOverrides(c, false, ReplaceTagOverrides)
+}
+
+// PATCH /api/imagesets/tagoverrides - adds or flips overrides, never removes one
+func AddTagOverridesHandler(c *fiber.Ctx) error {
+	return handleTagOverrides(c, true, AddTagOverrides)
+}
+
+// handleTagOverrides parses and validates a tag override request, then runs
+// update on the unique ids. requireOverrides rejects an empty overrides list.
+func handleTagOverrides(c *fiber.Ctx, requireOverrides bool, update tagOverridesUpdate) error {
 	userID, err := userIDFromLocals(c)
 	if err != nil {
 		return c.Status(http.StatusUnauthorized).SendString(err.Error())
 	}
-	var body setTagOverridesRequest
+	var body tagOverridesRequest
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(http.StatusBadRequest).SendString(err.Error())
 	}
@@ -251,13 +265,31 @@ func SetTagOverridesHandler(c *fiber.Ctx) error {
 		return c.Status(http.StatusBadRequest).SendString("overrides is required")
 	}
 	overrides := *body.Overrides
-	for _, entry := range overrides {
-		if _, _, ok := ParseTagRuleOverrideEntry(entry); !ok {
-			return c.Status(http.StatusBadRequest).SendString("invalid override entry: " + entry)
+	if requireOverrides && len(overrides) == 0 {
+		return c.Status(http.StatusBadRequest).SendString("overrides must not be empty")
+	}
+	if err := validateOverrideEntries(overrides); err != nil {
+		return c.Status(http.StatusBadRequest).SendString(err.Error())
+	}
+
+	seen := make(map[bson.ObjectID]bool, len(body.IDs))
+	ids := make([]bson.ObjectID, 0, len(body.IDs))
+	for _, raw := range body.IDs {
+		id, err := bson.ObjectIDFromHex(raw)
+		if err != nil {
+			return c.Status(http.StatusBadRequest).SendString("invalid id: " + raw)
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
 		}
 	}
 
-	updated, err := SetTagOverrides(userID.Hex(), body.IDs, overrides)
+	uid := userID.Hex()
+	updated, err := update(uid, authutil.IsAdmin(uid), ids, overrides)
+	if errors.Is(err, ErrUnknownOverrideTag) {
+		return c.Status(http.StatusBadRequest).SendString(err.Error())
+	}
 	if err != nil {
 		status, msg := imageset.ImageSetErrorResponse(err)
 		return c.Status(status).SendString(msg)

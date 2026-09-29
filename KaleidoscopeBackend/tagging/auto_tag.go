@@ -3,6 +3,7 @@ package tagging
 import (
 	"context"
 	"fmt"
+	"log"
 	"slices"
 
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
@@ -45,7 +46,12 @@ func autoTag(userID bson.ObjectID, set *imageset.ImageSetMongo, sourceName strin
 // system_tags.go) against set's current Sources on every call, not just
 // when fetched contains something new, so callers never need a separate
 // call to keep those in sync after a source-tag fetch.
-func ProcessSourceTags(userID string, set *imageset.ImageSetMongo, sourceIdx int, fetched []imageset.SourceTag) error {
+//
+// On error, the count writes that already succeeded are reversed and set is
+// restored to its state before the call. Translation pushes and system tag
+// creation are kept on purpose; a step that fails partway can still leave
+// part of its own write applied.
+func ProcessSourceTags(userID string, set *imageset.ImageSetMongo, sourceIdx int, fetched []imageset.SourceTag) (err error) {
 	defer lockUserTags(userID)()
 
 	uid, err := bson.ObjectIDFromHex(userID)
@@ -53,15 +59,41 @@ func ProcessSourceTags(userID string, set *imageset.ImageSetMongo, sourceIdx int
 		return fmt.Errorf("parsing user id: %w", err)
 	}
 	src := &set.Sources[sourceIdx]
-	added, err := reconcileSourceTags(uid, src, fetched)
+	srcTags, autoTags, tags := slices.Clone(src.Tags), slices.Clone(set.AutoTags), slices.Clone(set.Tags)
+
+	var added []imageset.SourceTag // non-empty once source tag usage was recorded
+	var tagsAfterAutoTag []string   // non-nil once autoTag's count change landed
+	defer func() {
+		if err == nil {
+			return
+		}
+		if tagsAfterAutoTag != nil {
+			if uerr := adjustAutoTagCounts(uid, tagCountDeltas(tagsAfterAutoTag, tags)); uerr != nil {
+				log.Printf("------ Warning: undoing auto tag counts for user [%s]: %s ------", userID, uerr)
+			}
+		}
+		if len(added) > 0 {
+			if uerr := decrementSourceTagUsage(uid, []imageset.SourceInfo{{Name: src.Name, Tags: added}}); uerr != nil {
+				log.Printf("------ Warning: undoing source tag counts for user [%s]: %s ------", userID, uerr)
+			}
+		}
+		src.Tags, set.AutoTags, set.Tags = srcTags, autoTags, tags
+	}()
+
+	added, err = reconcileSourceTags(uid, src, fetched)
 	if err != nil {
 		return err
 	}
 	if len(added) > 0 {
-		if err := autoTag(uid, set, src.Name, added); err != nil {
+		if err = autoTag(uid, set, src.Name, added); err != nil {
 			return err
 		}
+		tagsAfterAutoTag = slices.Clone(set.Tags)
+		if tagsAfterAutoTag == nil {
+			tagsAfterAutoTag = []string{}
+		}
 	}
+	// last count write, so nothing after it can need undoing
 	return RecomputeSystemTags(userID, set)
 }
 
@@ -123,6 +155,14 @@ func (AutoTagFunc) RecordDeletion(userID string, sources []imageset.SourceInfo, 
 
 func (AutoTagFunc) RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 	return RecomputeSystemTags(userID, set)
+}
+
+func (AutoTagFunc) RefreshUntaggedCount(userID string) error {
+	uid, err := bson.ObjectIDFromHex(userID)
+	if err != nil {
+		return fmt.Errorf("parsing user id: %w", err)
+	}
+	return refreshUntaggedCount(uid)
 }
 
 func (AutoTagFunc) ResolveTagTerm(userID string, term string) ([]string, bool, error) {

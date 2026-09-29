@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/gif"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -86,6 +87,8 @@ func RetrieveLocalImage(path string, name string, low bool) (image.Image, *gif.G
 
 }
 
+// DeleteFilesFromInfoList removes each entry's full-res and low-res file.
+// A file that is already gone counts as removed, so a retry can finish.
 func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 	var errList error
 	for _, entry := range info {
@@ -94,7 +97,7 @@ func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 		}
 
 		err := os.Remove(path + entry.Name)
-		if err != nil {
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			fmt.Printf("Failed to Find File: %s\n", entry.Name)
 			errList = errors.Join(errList, err)
 		}
@@ -105,12 +108,30 @@ func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 		}
 
 		err := os.Remove(path + LowResPathAppend + entry.LowResName)
-		if err != nil {
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			fmt.Printf("Failed to Find File: %s\n", entry.LowResName)
 			errList = errors.Join(errList, err)
 		}
 	}
 	return errList
+}
+
+// DeleteThumbnailFile removes a set's thumbnail from path's low-res folder.
+// An empty or already-missing file is fine; a name with a path component is
+// logged and skipped, never followed.
+func DeleteThumbnailFile(path, name string) error {
+	if name == "" {
+		return nil
+	}
+	if name != filepath.Base(name) {
+		log.Printf("------ Warning: not deleting thumbnail with a path component: %q ------", name)
+		return nil
+	}
+	err := os.Remove(path + LowResPathAppend + name)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func CheckImageSetFileDeletionPermissions(entryToDelete ImageSetMongo) error {

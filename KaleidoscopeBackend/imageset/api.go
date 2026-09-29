@@ -22,6 +22,8 @@ func ImageSetErrorResponse(err error) (int, string) {
 	switch {
 	case errors.Is(err, bson.ErrInvalidHex):
 		return fiber.StatusBadRequest, "invalid image set id"
+	case errors.Is(err, ErrSetsNotFound):
+		return fiber.StatusNotFound, err.Error()
 	case errors.Is(err, mongo.ErrNoDocuments):
 		return fiber.StatusNotFound, "image set not found"
 	case errors.Is(err, ErrAccessDenied):
@@ -196,30 +198,12 @@ func DeleteImageSets(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).SendString("no user ID provided")
 	}
 
-	var UnauthorizedImageIDs []bson.ObjectID
-
-	//If user is not admin check for authority to do deletions to avoid users trying to delete other peoples images
-	if !authutil.IsAdmin(userID) {
-		//check if user can access the images and remove any images that would not be valid
-		iSets, err := GetFromID(userID, paramid...)
-		if err != nil {
-			status, msg := ImageSetErrorResponse(err)
-			return c.Status(status).SendString(msg)
-		}
-		if len(iSets) != len(paramid) {
-			return c.Status(fiber.StatusInternalServerError).SendString("something has gone wrong with getting image sets from the IDs")
-		}
-
-		for index := range iSets {
-			if iSets[index].KscopeUserId != userID {
-				UnauthorizedImageIDs = append(UnauthorizedImageIDs, iSets[index].ID)
-				//Must remove unauthorized items to avoid deletion during next step
-				paramid = append(paramid[:index], paramid[(index+1):]...)
-			}
-		}
-	}
+	// ownership is enforced by DeleteImageSetInDB's query, so a set that is
+	// missing and one owned by someone else are reported the same way
+	admin := authutil.IsAdmin(userID)
 
 	var DeletedList []string
+	var NotFoundIDs []string
 
 	var errList error
 	for _, id := range paramid {
@@ -231,7 +215,11 @@ func DeleteImageSets(c *fiber.Ctx) error {
 			continue
 		}
 
-		err = DeleteImageSetInDB(ObjId)
+		err = DeleteImageSetInDB(ObjId, userID, admin)
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			NotFoundIDs = append(NotFoundIDs, id)
+			continue
+		}
 		if err != nil {
 			errList = errors.Join(errList, err)
 			continue
@@ -245,12 +233,12 @@ func DeleteImageSets(c *fiber.Ctx) error {
 	}
 
 	res := fiber.Map{
-		"deleted":      DeletedList,
-		"unauthorized": UnauthorizedImageIDs,
-		"errors":       errorText,
+		"deleted":   DeletedList,
+		"not_found": NotFoundIDs,
+		"errors":    errorText,
 	}
 
-	if DeletedList != nil && (errList != nil || UnauthorizedImageIDs != nil) {
+	if DeletedList != nil && (errList != nil || NotFoundIDs != nil) {
 		return c.Status(fiber.StatusPartialContent).JSON(res)
 	}
 

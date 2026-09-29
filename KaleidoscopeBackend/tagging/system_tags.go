@@ -115,15 +115,14 @@ func ensureSystemAutoTags(userID bson.ObjectID, names []string) (map[string]bson
 
 // RecomputeSystemTags reconciles set's Lost Media/Untracked membership
 // against its current Sources, mutating set.AutoTags/set.Tags in place and
-// adjusting stored counts, then refreshes Untagged's Count. Like
+// adjusting stored counts; the count adjustment is its last write. Like
 // ProcessSourceTags, it does not persist set; callers must write
-// autotags/tags themselves.
+// autotags/tags themselves, then refresh Untagged (RefreshUntaggedCount).
 func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 	uid, err := bson.ObjectIDFromHex(userID)
 	if err != nil {
 		return fmt.Errorf("parsing user id: %w", err)
 	}
-
 	want := map[string]bool{
 		lostMediaTagName: isLostMedia(set.Sources),
 		untrackedTagName: isUntracked(userID, set.Sources),
@@ -147,11 +146,9 @@ func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 		}
 	}
 	if changed {
-		if err := rebuildTagsAndAdjustCounts(uid, set); err != nil {
-			return err
-		}
+		return rebuildTagsAndAdjustCounts(uid, set)
 	}
-	return refreshUntaggedCount(uid)
+	return nil
 }
 
 // RecomputeUntrackedForService re-evaluates the Untracked system tag on
