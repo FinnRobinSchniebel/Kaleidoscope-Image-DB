@@ -75,6 +75,11 @@ func tagFields(set *ImageSetMongo) bson.M {
 	return bson.M{"autotags": autoTags, "tags": set.Tags}
 }
 
+// EmptyTagsFilter matches image sets whose tags field is null, missing or [].
+func EmptyTagsFilter() bson.M {
+	return bson.M{"tags": bson.M{"$in": bson.A{nil, bson.A{}}}}
+}
+
 // UpdateTagTranslations applies EN to every image set (userID's own) with a
 // source named sourceName carrying a tag matching each entry's Default
 // (case/whitespace-insensitive, same identity NormalizeTagText defines),
@@ -419,7 +424,7 @@ func buildTagCondition(userID, term string) (bson.M, error) {
 		or = append(or, bson.M{"tags": bson.M{"$in": ids}})
 	}
 	if matchEmpty {
-		or = append(or, bson.M{"tags": nil}, bson.M{"tags": bson.M{"$size": 0}})
+		or = append(or, EmptyTagsFilter())
 	}
 	switch len(or) {
 	case 0:

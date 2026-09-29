@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"slices"
 
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/services"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 // RegistrationHookFunc implements services.RegistrationListener, keeping the
@@ -127,7 +127,7 @@ func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 		lostMediaTagName: isLostMedia(set.Sources),
 		untrackedTagName: isUntracked(userID, set.Sources),
 	}
-	ids, err := ensureSystemAutoTags(uid, systemAutoTagNames)
+	ids, err := ensureSystemAutoTags(uid, slices.Collect(maps.Keys(want)))
 	if err != nil {
 		return err
 	}
@@ -151,10 +151,35 @@ func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 	return nil
 }
 
+// refreshUntaggedCount recomputes and stores Untagged's Count for userID.
+func refreshUntaggedCount(userID bson.ObjectID) error {
+	filter := imageset.EmptyTagsFilter()
+	filter["kscope_userid"] = userID.Hex()
+	n, err := imageset.Collection.CountDocuments(context.Background(), filter)
+	if err != nil {
+		return fmt.Errorf("counting untagged image sets: %w", err)
+	}
+	setCount := bson.M{"$set": bson.M{"count": int(n)}}
+	res, err := AutoTagsDB.UpdateOne(context.Background(), bson.M{"user_id": userID, "name": untaggedTagName}, setCount)
+	if err != nil {
+		return fmt.Errorf("updating untagged count: %w", err)
+	}
+	if res.MatchedCount > 0 {
+		return nil
+	}
+	ids, err := ensureSystemAutoTags(userID, []string{untaggedTagName})
+	if err != nil {
+		return err
+	}
+	if _, err := AutoTagsDB.UpdateByID(context.Background(), ids[untaggedTagName], setCount); err != nil {
+		return fmt.Errorf("updating untagged count: %w", err)
+	}
+	return nil
+}
+
 // RecomputeUntrackedForService re-evaluates the Untracked system tag on
 // every image set owned by userID that has a source named serviceName,
-// since that source's registration status just changed. Mirrors
-// applyAutoTagToSets' query-diff-bulk-write shape.
+// since that source's registration status just changed.
 func RecomputeUntrackedForService(userID, serviceName string) error {
 	uid, err := bson.ObjectIDFromHex(userID)
 	if err != nil {
@@ -181,45 +206,12 @@ func RecomputeUntrackedForService(userID, serviceName string) error {
 	}
 	untrackedID := ids[untrackedTagName]
 
-	var models []mongo.WriteModel
-	combinedDeltas := make(map[bson.ObjectID]int)
-	for _, set := range sets {
-		want := isUntracked(userID, set.Sources)
-		has := slices.Contains(set.AutoTags, untrackedID)
-		if want == has {
-			continue
-		}
-		newAutoTags := slices.Clone(set.AutoTags)
-		op := "$pull"
-		if want {
-			op = "$addToSet"
-			newAutoTags = append(newAutoTags, untrackedID)
-		} else {
-			newAutoTags = slices.DeleteFunc(newAutoTags, func(id bson.ObjectID) bool { return id == untrackedID })
-		}
-		// TODO: tags is computed from this set's state as of the Find above, so a
-		// concurrent write to this set's autotags/tag_rule_overrides between that
-		// Find and this BulkWrite can get overwritten with a stale value here,
-		// unlike the atomic $addToSet/$pull alongside it. Narrow window, self-heals
-		// on the next relevant write; low priority, see read-modify-write-race-review
-		// skill. count (also derived from this snapshot, via $inc) does not self-heal
-		// the same way.
-		tags := ApplyTagRuleOverrides(newAutoTags, set.TagRuleOverrides)
-		addDeltas(combinedDeltas, tagCountDeltas(set.Tags, tags))
-		models = append(models, mongo.NewUpdateOneModel().
-			SetFilter(bson.M{"_id": set.ID}).
-			SetUpdate(bson.M{op: bson.M{"autotags": untrackedID}, "$set": bson.M{"tags": tags}}))
-	}
-	if len(models) == 0 {
-		return nil
-	}
-	if _, err := imageset.Collection.BulkWrite(context.Background(), models); err != nil {
+	if err := setAutoTagOnSets(uid, untrackedID, sets, func(s imageset.ImageSetMongo) bool {
+		return isUntracked(userID, s.Sources)
+	}); err != nil {
 		return fmt.Errorf("updating untracked tag for service %q: %w", serviceName, err)
 	}
-	if err := adjustAutoTagCounts(uid, combinedDeltas); err != nil {
-		return err
-	}
-	return refreshUntaggedCount(uid)
+	return nil
 }
 
 // ResolveTagTerm resolves term (a tag name or partial name from a search

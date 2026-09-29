@@ -218,10 +218,7 @@ func patchCountDeltas(states []imageset.SetTagState, includes, excludes []string
 // owner's Untagged count.
 func applyOwnerCounts(deltas map[bson.ObjectID]map[bson.ObjectID]int) error {
 	for owner, d := range deltas {
-		if err := adjustAutoTagCounts(owner, d); err != nil {
-			return err
-		}
-		if err := refreshUntaggedCount(owner); err != nil {
+		if err := applyCountDeltas(owner, d); err != nil {
 			return err
 		}
 	}

@@ -23,7 +23,7 @@ func autoTagErrorResponse(err error, fallback string) (int, string) {
 		return fiber.StatusNotFound, err.Error()
 	case errors.Is(err, ErrAutoTagNameExists):
 		return fiber.StatusConflict, err.Error()
-	case errors.Is(err, ErrAutoTagNameReserved):
+	case errors.Is(err, ErrAutoTagNameReserved), errors.Is(err, ErrAutoTagNameRequired):
 		return fiber.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrSystemAutoTagImmutable):
 		return fiber.StatusForbidden, err.Error()
@@ -171,9 +171,6 @@ func CreateAutoTagHandler(c *fiber.Ctx) error {
 	var body createAutoTagRequest
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(http.StatusBadRequest).SendString(err.Error())
-	}
-	if body.Name == "" {
-		return c.Status(http.StatusBadRequest).SendString("name is required")
 	}
 	id, err := CreateAutoTag(userID, body.Name, body.SrcTagKeyMatch)
 	if err != nil {
