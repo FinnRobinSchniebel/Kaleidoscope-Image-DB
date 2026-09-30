@@ -52,41 +52,52 @@ func GetThumbnail(c *fiber.Ctx) error {
 		return c.Status(status).SendString(msg)
 	}
 
-	//
+	set := iset[0]
 
-	//if no thumbnail exist create one
-	if iset[0].ThumbNail == "" {
-		if len(iset[0].Image) == 0 {
-			return c.Status(fiber.StatusNotFound).SendString("no images in image set at this time. Please wait for uploads to complete. If no upload is in progress, there might be a bug.")
+	if set.ThumbNail != "" {
+		//thumbnail is always considered low res
+		img, _, err := RetrieveLocalImage(set.Path, set.ThumbNail, true)
+		if err == nil {
+			if img == nil {
+				return c.Status(fiber.StatusInternalServerError).SendString("something went wrong with thumbnail retrieve")
+			}
+			//TODO: Change to webP
+			c.Type("png")
+			return png.Encode(c.Response().BodyWriter(), img)
 		}
-		if iset[0].Image[0].Name == "" {
-			return c.Status(fiber.StatusInternalServerError).SendString("the image set image link is missing. This is not supposed to happen.")
+		if !errors.Is(err, ErrImageFileMissing) {
+			return fmt.Errorf("failed to retrieve thumbnail: %w", err)
 		}
-		img, _, _, err := GenerateLowResFromHigh(iset[0].Path, iset[0].Image[0].Name, 256, 256)
-		if err != nil {
-			return fmt.Errorf("failed to generate thumbnail: %w", err)
-		}
-
-		//save async
-		go SaveThumbnailLocal(iset[0].Path, iset[0].Title, img, iset[0].ID, 0)
-
-		//TODO: Change to webP
-		c.Type("png")
-		return png.Encode(c.Response().BodyWriter(), img)
-
+		log.Printf("------ Warning: thumbnail of set %s is missing on disk, regenerating ------", set.ID.Hex())
 	}
 
-	//thumbnail is always considered low res
-	img, _, err := RetrieveLocalImage(iset[0].Path, iset[0].ThumbNail, true)
+	//no thumbnail yet, or its file is gone: create one
+	if len(set.Image) == 0 {
+		return c.Status(fiber.StatusNotFound).SendString("no images in image set at this time. Please wait for uploads to complete. If no upload is in progress, there might be a bug.")
+	}
+	if set.Image[0].Name == "" {
+		return c.Status(fiber.StatusInternalServerError).SendString("the image set image link is missing. This is not supposed to happen.")
+	}
+	return serveGenerated(c, set, 0, 256, 256, func(img image.Image) {
+		SaveThumbnailLocal(set.Path, set.Title, img, set.ID, 0)
+	})
+}
+
+// serveGenerated generates a sizeX by sizeY copy of set's image index, sends
+// it as png, and runs cache on it in the background.
+func serveGenerated(c *fiber.Ctx, set ImageSetMongo, index, sizeX, sizeY int, cache func(image.Image)) error {
+	img, _, _, err := GenerateLowResFromHigh(set.Path, set.Image[index].Name, sizeX, sizeY)
+	if errors.Is(err, ErrImageFileMissing) {
+		return c.Status(fiber.StatusNotFound).SendString("image file is missing")
+	}
 	if err != nil {
-		return fmt.Errorf("failed to retrieve thumbnail: %w", err)
+		return c.Status(fiber.StatusInternalServerError).SendString("failed to generate image: " + err.Error())
 	}
-	if img == nil {
-		return c.Status(fiber.StatusInternalServerError).SendString("something went wrong with thumbnail retrieve")
-	}
+
+	go cache(img)
+
 	c.Type("png")
 	return png.Encode(c.Response().BodyWriter(), img)
-
 }
 
 // This api Call is to get info about the Image.
@@ -374,33 +385,36 @@ func GetImageFromID(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).SendString("index out of bounds")
 	}
 
-	var imageLink string
+	set := iset[0]
+	index := requestParams.IndexList
 
 	var retImage image.Image
 	var retGif *gif.GIF
 
 	if requestParams.LowRes {
 
-		imageLink = iset[0].Image[requestParams.IndexList].LowResName
+		imageLink := strings.TrimSpace(set.Image[index].LowResName)
 		log.Println("res link: " + imageLink)
-		if imageLink == "" || imageLink == " " {
-			retImage, _, _, err = GenerateLowResFromHigh(iset[0].Path, iset[0].Image[requestParams.IndexList].Name, 720, 0)
-
-			if err != nil {
-				return c.Status(fiber.StatusInternalServerError).SendString("failed to create low res image: " + err.Error())
-			}
-			//todo save image
-			go AddLowresToSetAndStorage(iset[0].Path, iset[0].Title, retImage, iset[0], requestParams.IndexList)
-
-		} else {
-			retImage, retGif, err = RetrieveLocalImage(iset[0].Path, imageLink, true)
-			if err != nil {
+		if imageLink != "" {
+			retImage, retGif, err = RetrieveLocalImage(set.Path, imageLink, true)
+			if err != nil && !errors.Is(err, ErrImageFileMissing) {
 				return fmt.Errorf("could not retrieve low res: %w", err)
 			}
+			if err != nil {
+				log.Printf("------ Warning: low res %s of set %s is missing on disk, regenerating ------", imageLink, set.ID.Hex())
+			}
+		}
+		if imageLink == "" || err != nil {
+			return serveGenerated(c, set, index, 720, 0, func(img image.Image) {
+				AddLowresToSetAndStorage(set.Path, set.Title, img, set, index)
+			})
 		}
 
 	} else {
-		retImage, retGif, err = RetrieveLocalImage(iset[0].Path, iset[0].Image[requestParams.IndexList].Name, false)
+		retImage, retGif, err = RetrieveLocalImage(set.Path, set.Image[index].Name, false)
+		if errors.Is(err, ErrImageFileMissing) {
+			return c.Status(fiber.StatusNotFound).SendString("image file is missing")
+		}
 		if err != nil {
 			return fmt.Errorf("could not retrieve image: %w", err)
 		}

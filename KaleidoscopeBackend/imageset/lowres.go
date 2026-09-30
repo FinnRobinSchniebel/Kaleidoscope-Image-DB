@@ -1,10 +1,13 @@
 package imageset
 
 import (
-	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"image"
 	"image/draw"
+	"image/png"
+	"io"
 	"log"
 	"math"
 	"os"
@@ -21,12 +24,10 @@ func SaveThumbnailLocal(path string, title string, img image.Image, ImageSetID b
 
 	lowresFullPath := path + LowResPathAppend
 
-	if path == "" || title == "" {
-		log.Println("No file name or path given to save thumbnail file with")
+	if path == "" {
+		log.Println("No path given to save thumbnail file with")
 		return
 	}
-
-	name := "thumbnail_" + title
 
 	err := os.MkdirAll(lowresFullPath, 0700)
 	if err != nil {
@@ -34,33 +35,27 @@ func SaveThumbnailLocal(path string, title string, img image.Image, ImageSetID b
 		return
 	}
 
-	filename, _, err := SaveImage(img, lowresFullPath, name, ImageSetID, generatedFromIndex, "png")
+	filename := ImageFileName("thumbnail_"+title, ImageSetID, generatedFromIndex, "png")
+	saveGeneratedPNG(lowresFullPath, filename, img, bson.M{"_id": ImageSetID}, "thumbnail")
+}
+
+// saveGeneratedPNG records filename as field on the set matched by filter,
+// then writes img to dir under that name. Name first: a crash in between
+// leaves a name with no file, which the next request regenerates, never a
+// file no set knows about.
+func saveGeneratedPNG(dir, filename string, img image.Image, filter bson.M, field string) {
+	matched, err := recordGeneratedFile(filter, field, filename)
 	if err != nil {
-		log.Println("Add Lowres: could not save image: " + err.Error())
+		log.Printf("------ Warning: %s (nothing written) ------", err)
 		return
 	}
-
-	filter := bson.M{"_id": ImageSetID}
-
-	update := bson.M{
-		"$set": bson.M{
-			"thumbnail": filename,
-		},
+	if !matched {
+		return // set deleted, or the image moved
 	}
-	result, err := Collection.UpdateOne(context.Background(), filter, update)
-	if err != nil || result.ModifiedCount == 0 {
-		if err != nil {
-			log.Println("Mango Error: " + err.Error())
-		}
-		err = os.Remove(fmt.Sprintf("%s%s", lowresFullPath, filename))
-		if err != nil {
-			log.Println("Add Lowres: could not make changes to db...\n COULD NOT remove image from disk: " + err.Error())
-		} else {
-			log.Println("Add Lowres: could not make changes to db...\n removed image from disk")
-		}
-		return
+	encode := func(w io.Writer) error { return png.Encode(w, img) }
+	if err := writeFileAtomic(dir, filename, encode); err != nil {
+		log.Printf("------ Warning: writing %s %s: %s (regenerated on next request) ------", field, filename, err)
 	}
-
 }
 
 //full res can be over 1080p
@@ -86,6 +81,9 @@ func GenerateLowResFromHigh(path string, imageName string, sizeX int, sizeY int)
 	//open file
 	openFullresImage, err := source.Open()
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, "", 0, fmt.Errorf("%w: %s", ErrImageFileMissing, imageName)
+		}
 		return nil, "", 0, fmt.Errorf("failed to open image from storage")
 	}
 	defer openFullresImage.Close()
@@ -179,13 +177,11 @@ func ResizeAndCropCenter(src image.Image, targetW, targetH int) image.Image {
 // such as ImageInfo.Name) - "low_" is prepended here to derive the file name.
 func AddLowresToSetAndStorage(path string, title string, img image.Image, imageset ImageSetMongo, index int) {
 
-	if index < 0 || index > len(imageset.Image) {
+	if index < 0 || index >= len(imageset.Image) {
 		log.Println("Add Lowres: index out of bounds")
 		return
 	}
 	lowresFullPath := path + LowResPathAppend
-
-	name := "low_" + title
 
 	err := os.MkdirAll(lowresFullPath, 0700)
 	if err != nil {
@@ -193,31 +189,8 @@ func AddLowresToSetAndStorage(path string, title string, img image.Image, images
 		return
 	}
 
-	filename, _, err := SaveImage(img, lowresFullPath, name, imageset.ID, index, "png")
-	if err != nil {
-		log.Println("Add Lowres: could not save image: " + err.Error())
-		return
-	}
-
-	filter := bson.M{"_id": imageset.ID}
-
-	update := bson.M{
-		"$set": bson.M{
-			fmt.Sprintf("images.%d.low_images", index): filename,
-		},
-	}
-	result, err := Collection.UpdateOne(context.Background(), filter, update)
-	if err != nil || result.ModifiedCount == 0 {
-		if err != nil {
-			log.Println("Mango Error: " + err.Error())
-		}
-		err = os.Remove(fmt.Sprintf("%s%s", lowresFullPath, filename))
-		if err != nil {
-			log.Println("Add Lowres: could not make changes to db...\n COULD NOT remove image from disk: " + err.Error())
-		} else {
-			log.Println("Add Lowres: could not make changes to db...\n removed image from disk")
-		}
-		return
-	}
-
+	filename := ImageFileName("low_"+title, imageset.ID, index, "png")
+	//also requires the index to still hold the same image, so a shifted array can't take the name
+	filter := bson.M{"_id": imageset.ID, fmt.Sprintf("images.%d.images", index): imageset.Image[index].Name}
+	saveGeneratedPNG(lowresFullPath, filename, img, filter, fmt.Sprintf("images.%d.low_images", index))
 }

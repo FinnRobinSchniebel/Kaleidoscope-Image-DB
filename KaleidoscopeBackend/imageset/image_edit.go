@@ -8,8 +8,10 @@ import (
 	_ "image/jpeg"
 	"image/png"
 	_ "image/png"
+	"io"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/ajdnik/imghash"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -36,31 +38,23 @@ func SaveImage(imageToSave image.Image, path string, title string, id bson.Objec
 	}
 	/**		save file 	**/
 	fileName := ImageFileName(title, id, index, fileType)
-	fullPath := fmt.Sprintf("%s%s", path, fileName)
-	log.Print("FilePath: " + fullPath)
+	log.Print("FilePath: " + path + fileName)
 
-	OutputFile, err := os.Create(fullPath)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create file: %s", fullPath)
-	}
-
+	var encode func(io.Writer) error
 	switch fileType {
 	case "png", "PNG":
-		err = png.Encode(OutputFile, imageToSave)
+		encode = func(w io.Writer) error { return png.Encode(w, imageToSave) }
 	case "jpeg", "jpg":
-		err = jpeg.Encode(OutputFile, imageToSave, &jpeg.Options{Quality: 100})
+		encode = func(w io.Writer) error { return jpeg.Encode(w, imageToSave, &jpeg.Options{Quality: 100}) }
 	case "gif":
-		os.Remove(fullPath)
-		log.Println("warning: this function does not create with gifs and will transform it into png")
-		err = png.Encode(OutputFile, imageToSave)
+		// TODO: gif writing belongs here once supported; use SaveGif until then
+		return "", "", fmt.Errorf("SaveImage does not write gifs yet")
 	default:
-		os.Remove(fullPath)
 		return "", "", fmt.Errorf("file type could not be determined")
 	}
 
-	if err != nil {
-		os.Remove(fullPath)
-		return "", "", fmt.Errorf("could not write the image to the server file")
+	if err := writeFileAtomic(path, fileName, encode); err != nil {
+		return "", "", fmt.Errorf("could not write the image to the server file: %w", err)
 	}
 
 	/** 	get hash 	**/
@@ -69,6 +63,25 @@ func SaveImage(imageToSave image.Image, path string, title string, id bson.Objec
 
 	return fileName, ihash, nil
 
+}
+
+// writeFileAtomic writes to a file in tempDir, then renames it to dir/name,
+// so readers never see a partial file.
+func writeFileAtomic(dir, name string, encode func(io.Writer) error) error {
+	tmp, err := os.CreateTemp(tempDir(), "kscope-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op after a successful rename
+
+	if err := encode(tmp); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), filepath.Join(dir, name))
 }
 
 // HashImage computes the same perceptual hash stored in ImageInfo.ImageHash,
@@ -95,26 +108,19 @@ func SaveGif(imageToSave *gif.GIF, path string, title string, id bson.ObjectID, 
 		fmt.Printf("File or directory exists at: %s\n", BackendVolumeLocation)
 	}
 
-	fileName := ImageFileName(title, id, index, "gif")
-	fullPath := fmt.Sprintf("%s%s", path, fileName)
-	log.Print("FilePath: " + fullPath)
-
-	OutputFile, err := os.Create(fullPath)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create file")
-	}
-	//err =// imageToSave.i
-	err = gif.EncodeAll(OutputFile, imageToSave)
-
-	if err != nil {
-		os.Remove(fullPath)
-		return "", "", fmt.Errorf("could not write the image to the server file")
-	}
-
-	/** 	get hash 	**/
 	if len(imageToSave.Image) == 0 {
 		return "", "", fmt.Errorf("empty gif")
 	}
+
+	fileName := ImageFileName(title, id, index, "gif")
+	log.Print("FilePath: " + path + fileName)
+
+	encode := func(w io.Writer) error { return gif.EncodeAll(w, imageToSave) }
+	if err := writeFileAtomic(path, fileName, encode); err != nil {
+		return "", "", fmt.Errorf("could not write the image to the server file: %w", err)
+	}
+
+	/** 	get hash 	**/
 	ihash := HashImage(imageToSave.Image[0])
 	fmt.Printf("Image Saved\n Hashed to: %v\n", ihash)
 

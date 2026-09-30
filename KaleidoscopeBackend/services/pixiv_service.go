@@ -455,13 +455,11 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string, isPrivate bool
 		attributed[i] = i
 	}
 
-	caption := pixivIllustCaption(illust)
-
 	src := imageset.SourceInfo{
 		Name:            pixivServiceName,
 		SourceID:        strconv.FormatUint(illust.ID, 10),
 		Title:           illust.Title,
-		Description:     caption,
+		Description:     pixivIllustCaption(illust),
 		SourceAuthor:    illust.User.Name,
 		AuthorID:        strconv.FormatUint(illust.User.ID, 10),
 		Tags:            pixivIllustTags(illust, isPrivate),
@@ -471,14 +469,13 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string, isPrivate bool
 		LastImageUpdate: illust.CreateDate,
 	}
 
-	return &imageset.ImageSetMongo{
-		Title:        illust.Title,
+	set := &imageset.ImageSetMongo{
 		Sources:      []imageset.SourceInfo{src},
-		Authors:      []string{illust.User.Name},
-		Description:  caption,
 		Itype:        string(illust.Type),
 		KscopeUserId: userId,
 	}
+	imageset.DeriveFromSources(set)
+	return set
 }
 
 // pixivIllustTags returns the illust's tags: Default is always the untranslated

@@ -3,6 +3,7 @@ package imageset
 import (
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -84,16 +85,38 @@ func CleanImagSetForFrontEnd(iSet ...ImageSetMongo) []ImageSetMongo {
 	return iSet
 }
 
-// SetImportDescription mirrors description onto the set and onto every
-// current entry in Sources. Use for a set's first import, before it has an
-// existing Description to preserve.
-func SetImportDescription(a *ImageSetMongo, description string) {
-	if description == "" {
-		return
+// JoinDescriptions appends next to current after a blank line; an empty side
+// is dropped.
+func JoinDescriptions(current, next string) string {
+	if next == "" {
+		return current
 	}
-	a.Description = description
-	for i := range a.Sources {
-		a.Sources[i].Description = description
+	if current == "" {
+		return next
+	}
+	return current + "\n\n" + next
+}
+
+// DeriveFromSources fills a new set's Title, Authors and Description from its
+// Sources, whose own Descriptions must already be set. Only for a set's first
+// import: it overwrites those fields.
+func DeriveFromSources(a *ImageSetMongo) {
+	a.Title = ""
+	for _, s := range a.Sources {
+		if s.Title != "" {
+			a.Title = s.Title
+			break
+		}
+	}
+	a.Authors = nil
+	for _, s := range a.Sources {
+		if s.SourceAuthor != "" && !slices.Contains(a.Authors, s.SourceAuthor) {
+			a.Authors = append(a.Authors, s.SourceAuthor)
+		}
+	}
+	a.Description = ""
+	for _, s := range a.Sources {
+		a.Description = JoinDescriptions(a.Description, s.Description)
 	}
 }
 
@@ -103,14 +126,7 @@ func SetImportDescription(a *ImageSetMongo, description string) {
 func AppendSource(a *ImageSetMongo, source SourceInfo, description string) {
 	source.Description = description
 	a.Sources = append(a.Sources, source)
-	if description == "" {
-		return
-	}
-	if a.Description == "" {
-		a.Description = description
-	} else {
-		a.Description = a.Description + "\n\n" + description
-	}
+	a.Description = JoinDescriptions(a.Description, description)
 }
 
 // UpdateSourceDescription updates only Sources[i].Description, leaving the

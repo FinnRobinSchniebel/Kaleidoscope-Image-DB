@@ -49,6 +49,9 @@ func readSecret(name string) (string, error) {
 
 func main() {
 	imageset.BackendVolumeLocation = os.Getenv("BACKEND_VOLUME_LOCATION")
+	if err := imageset.ResetTempDir(); err != nil {
+		log.Fatal(err)
+	}
 
 	SecretKey, err := readSecret("jwt_secret")
 	if err != nil {

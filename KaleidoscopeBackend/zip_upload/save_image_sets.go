@@ -38,9 +38,10 @@ func SaveImageSets(basePath string, cleanupPath string, fileIsetData []ImageSetF
 
 		hits, iSetDbId, err := imageset.AddImageSet(&fileIsetData[setIndex].Iset, MedSour, user)
 
+		//AddImageSet undoes its own partial writes, so the remaining groups can still be imported
 		if err != nil {
-			log.Print(err)
-			return
+			log.Printf("------ Warning: zip import [%s]: group %q failed: %s ------", user, fileIsetData[setIndex].Key, err)
+			continue
 		}
 		result[iSetDbId] = hits
 		count++

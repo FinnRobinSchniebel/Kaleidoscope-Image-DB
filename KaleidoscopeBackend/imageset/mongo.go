@@ -75,6 +75,17 @@ func tagFields(set *ImageSetMongo) bson.M {
 	return bson.M{"autotags": autoTags, "tags": set.Tags}
 }
 
+// recordGeneratedFile sets field to filename on the set matched by filter and
+// reports whether a set matched. Matched but unchanged still counts: a
+// concurrent request recorded the same name.
+func recordGeneratedFile(filter bson.M, field, filename string) (matched bool, err error) {
+	result, err := Collection.UpdateOne(context.Background(), filter, bson.M{"$set": bson.M{field: filename}})
+	if err != nil {
+		return false, fmt.Errorf("recording %s %s: %w", field, filename, err)
+	}
+	return result.MatchedCount > 0, nil
+}
+
 // EmptyTagsFilter matches image sets whose tags field is null, missing or [].
 func EmptyTagsFilter() bson.M {
 	return bson.M{"tags": bson.M{"$in": bson.A{nil, bson.A{}}}}
@@ -263,7 +274,7 @@ func DeleteImageSetInDB(id bson.ObjectID, userID string, admin bool) error {
 	if err := DeleteFilesFromInfoList(entryToDelete.Path, entryToDelete.Image); err != nil {
 		return fmt.Errorf("deleting image files: %w", err)
 	}
-	if err := DeleteThumbnailFile(entryToDelete.Path, entryToDelete.ThumbNail); err != nil {
+	if err := DeleteLowResFile(entryToDelete.Path, entryToDelete.ThumbNail); err != nil {
 		return fmt.Errorf("deleting thumbnail file: %w", err)
 	}
 
