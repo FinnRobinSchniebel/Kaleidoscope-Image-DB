@@ -33,16 +33,62 @@ func EnsureIndexes(ctx context.Context) error {
 	return err
 }
 
-// UpdateImageSet overwrites the stored document with a's current contents.
-func UpdateImageSet(a *ImageSetMongo) error {
-	result, err := Collection.UpdateByID(context.Background(), a.ID, bson.M{"$set": a})
+// updateSourceFields only writes if Sources[index] still holds the same
+// source (by name and source_id), so a shifted array can't redirect the write.
+// Keys in fields are full paths, e.g. "sources.2.last_checked". A write that
+// includes "tags" refreshes the owner's Untagged count afterwards.
+func updateSourceFields(set *ImageSetMongo, index int, fields bson.M) error {
+	src := set.Sources[index]
+	prefix := fmt.Sprintf("sources.%d.", index)
+	filter := bson.M{
+		"_id":                set.ID,
+		prefix + "name":      src.Name,
+		prefix + "source_id": src.SourceID,
+	}
+	result, err := Collection.UpdateOne(context.Background(), filter, bson.M{"$set": fields})
 	if err != nil {
-		return fmt.Errorf("updating image set: %w", err)
+		return fmt.Errorf("updating image set source: %w", err)
 	}
 	if result.MatchedCount == 0 {
-		return errors.New("update matched no image set")
+		return fmt.Errorf("update matched no image set with source %s/%s at index %d", src.Name, src.SourceID, index)
+	}
+	if _, tagsChanged := fields["tags"]; tagsChanged {
+		refreshUntagged(set.KscopeUserId)
 	}
 	return nil
+}
+
+// refreshUntagged recounts userID's Untagged tag after a write that changed
+// tags. The write has already landed, so a failure is only logged.
+func refreshUntagged(userID string) {
+	if err := Tagger.RefreshUntaggedCount(userID); err != nil {
+		log.Printf("------ Warning: refreshing untagged count for user [%s]: %s ------", userID, err)
+	}
+}
+
+// tagFields never writes autotags as null: $addToSet/$pull elsewhere reject it.
+func tagFields(set *ImageSetMongo) bson.M {
+	autoTags := set.AutoTags
+	if autoTags == nil {
+		autoTags = []bson.ObjectID{}
+	}
+	return bson.M{"autotags": autoTags, "tags": set.Tags}
+}
+
+// recordGeneratedFile sets field to filename on the set matched by filter and
+// reports whether a set matched. Matched but unchanged still counts: a
+// concurrent request recorded the same name.
+func recordGeneratedFile(filter bson.M, field, filename string) (matched bool, err error) {
+	result, err := Collection.UpdateOne(context.Background(), filter, bson.M{"$set": bson.M{field: filename}})
+	if err != nil {
+		return false, fmt.Errorf("recording %s %s: %w", field, filename, err)
+	}
+	return result.MatchedCount > 0, nil
+}
+
+// EmptyTagsFilter matches image sets whose tags field is null, missing or [].
+func EmptyTagsFilter() bson.M {
+	return bson.M{"tags": bson.M{"$in": bson.A{nil, bson.A{}}}}
 }
 
 // UpdateTagTranslations applies EN to every image set (userID's own) with a
@@ -89,7 +135,7 @@ type SearchParams struct {
 	Authors []string `json:"authors"` //from author: prefix
 	Sources []string `json:"sources"` //from source: prefix
 
-	SearchTags    bool `json:"searchTags"`    //gates bare-word-vs-tag matching only, never explicit tag: terms
+	SearchTags    bool `json:"searchTags"` //gates bare-word-vs-tag matching only, never explicit tag: terms
 	SearchTitles  bool `json:"searchTitles"`
 	SearchAuthors bool `json:"searchAuthors"`
 	SearchSources bool `json:"searchSources"`
@@ -170,9 +216,9 @@ func GetFromID(usr string, id ...string) ([]ImageSetMongo, error) {
 
 	var iSets []ImageSetMongo
 
-	var entry ImageSetMongo
-
 	for _, ObjId := range IdBson {
+		// declared per pass: Decode reuses a struct's slice memory, which would be shared with earlier results
+		var entry ImageSetMongo
 		err := Collection.FindOne(context.Background(), bson.D{{"_id", ObjId}}).Decode(&entry)
 		if err != nil {
 			// mongo.ErrNoDocuments stays matchable through the wrap so callers
@@ -198,57 +244,166 @@ func GetFromID(usr string, id ...string) ([]ImageSetMongo, error) {
 	return iSets, nil
 }
 
-/*
-takes in a imageset ID and deletes the imageset from the mongo db and removes all files from storage
-*/
-func DeleteImageSetInDB(id bson.ObjectID) error {
-	var entryToDelete ImageSetMongo
+// ownedFilter matches the image sets in ids, restricted to userID's own sets
+// unless admin is set.
+func ownedFilter(ids []bson.ObjectID, userID string, admin bool) bson.M {
+	filter := bson.M{"_id": bson.M{"$in": ids}}
+	if !admin {
+		filter["kscope_userid"] = userID
+	}
+	return filter
+}
 
-	//check if entry exists and get it as a struct for processing
-	err := Collection.FindOne(context.Background(), bson.D{{"_id", id}}).Decode(&entryToDelete)
-	if err != nil {
-		log.Println("Failed to find file!")
+// DeleteImageSetInDB deletes the set, its image files and its recorded tag
+// counts. Non-admins can only delete their own sets; a set that is missing or
+// not theirs returns mongo.ErrNoDocuments either way. Files go first, so a
+// failed file removal leaves the document for a retry to finish.
+func DeleteImageSetInDB(id bson.ObjectID, userID string, admin bool) error {
+	filter := ownedFilter([]bson.ObjectID{id}, userID, admin)
+
+	var entryToDelete ImageSetMongo
+	if err := Collection.FindOne(context.Background(), filter).Decode(&entryToDelete); err != nil {
 		return err
 	}
 	var imageNames []string
 	for i := range entryToDelete.Image {
 		imageNames = append(imageNames, entryToDelete.Image[i].Name)
 	}
-
 	log.Println("Image links to delete:" + strings.Join(imageNames, ", "))
 
-	//delete the entry
-	result, err := Collection.DeleteOne(context.Background(), bson.D{{"_id", id}})
-	if err != nil || result.DeletedCount == 0 {
-		log.Println("Failed to delete file")
-		return err
+	if err := DeleteFilesFromInfoList(entryToDelete.Path, entryToDelete.Image); err != nil {
+		return fmt.Errorf("deleting image files: %w", err)
+	}
+	if err := DeleteLowResFile(entryToDelete.Path, entryToDelete.ThumbNail); err != nil {
+		return fmt.Errorf("deleting thumbnail file: %w", err)
 	}
 
-	//delete files
-	var errList error
-
-	err = DeleteFilesFromInfoList(entryToDelete.Path, entryToDelete.Image)
+	result, err := Collection.DeleteOne(context.Background(), filter)
 	if err != nil {
-		errList = errors.Join(errList, err)
+		return fmt.Errorf("deleting image set: %w", err)
+	}
+	if result.DeletedCount == 0 {
+		// a concurrent delete removed it first and records the counts itself
+		return mongo.ErrNoDocuments
 	}
 
-	//note: also undoes counts from AddImageSet's rollback path, since they are recorded before insert
-	err = Tagger.RecordDeletion(entryToDelete.KscopeUserId, entryToDelete.Sources, entryToDelete.Tags)
-	if err != nil {
-		errList = errors.Join(errList, err)
-	}
-
-	// err = DeleteFileList(entryToDelete.Path, entryToDelete.LowImage)
-	// if err != nil {
-	// 	errList = errors.Join(errList, err)
-	// }
-
-	if errList != nil {
-		return errList
+	refreshUntagged(entryToDelete.KscopeUserId)
+	if err := Tagger.RecordDeletion(entryToDelete.KscopeUserId, entryToDelete.Sources, entryToDelete.Tags); err != nil {
+		return fmt.Errorf("undoing tag counts: %w", err)
 	}
 
 	log.Print("---delete complete--- ")
+	return nil
+}
 
+// ErrSetsNotFound is returned by TagStatesForSets when some ids are missing
+// or not the caller's. Callers map it to HTTP 404.
+var ErrSetsNotFound = errors.New("image sets not found")
+
+// SetTagState is the tag-related slice of an image set that tag override
+// updates need to read.
+type SetTagState struct {
+	ID           bson.ObjectID   `bson:"_id"`
+	KscopeUserId string          `bson:"kscope_userid"`
+	Tags         []string        `bson:"tags"`
+	AutoTags     []bson.ObjectID `bson:"autotags"`
+}
+
+// TagStatesForSets returns the tag state of every set in ids, restricted to
+// userID's own sets unless admin is set. Returns ErrSetsNotFound naming any
+// id that didn't match.
+func TagStatesForSets(ids []bson.ObjectID, userID string, admin bool) ([]SetTagState, error) {
+	opts := options.Find().SetProjection(bson.M{"kscope_userid": 1, "tags": 1, "autotags": 1})
+	cursor, err := Collection.Find(context.Background(), ownedFilter(ids, userID, admin), opts)
+	if err != nil {
+		return nil, fmt.Errorf("finding image sets: %w", err)
+	}
+	defer cursor.Close(context.Background())
+
+	var states []SetTagState
+	if err := cursor.All(context.Background(), &states); err != nil {
+		return nil, fmt.Errorf("finding image sets: %w", err)
+	}
+
+	found := make(map[bson.ObjectID]bool, len(states))
+	for _, s := range states {
+		found[s.ID] = true
+	}
+	var missing []string
+	for _, id := range ids {
+		if !found[id] {
+			missing = append(missing, id.Hex())
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("%w: %s", ErrSetsNotFound, strings.Join(missing, ", "))
+	}
+	return states, nil
+}
+
+// SaveTagOverrides sets every set in tagsByID to overrides and its own tags,
+// in one bulk write. The ids must already be ownership-checked (see
+// TagStatesForSets). Nil overrides are stored as an empty list.
+func SaveTagOverrides(overrides []string, tagsByID map[bson.ObjectID][]string) error {
+	if len(tagsByID) == 0 {
+		return nil
+	}
+	if overrides == nil {
+		overrides = []string{}
+	}
+	models := make([]mongo.WriteModel, 0, len(tagsByID))
+	for id, tags := range tagsByID {
+		models = append(models, mongo.NewUpdateOneModel().
+			SetFilter(bson.M{"_id": id}).
+			SetUpdate(bson.M{"$set": bson.M{"tag_rule_overrides": overrides, "tags": tags}}))
+	}
+	if _, err := Collection.BulkWrite(context.Background(), models); err != nil {
+		return fmt.Errorf("saving tag overrides: %w", err)
+	}
+	return nil
+}
+
+// OverrideMerge is one MergeTagOverrides change: entries are dropped from
+// and added to tag_rule_overrides, and ids added to and dropped from tags.
+type OverrideMerge struct {
+	Drop     []string
+	Add      []string
+	TagsAdd  []string
+	TagsDrop []string
+}
+
+// MergeTagOverrides applies m to every set in ids (userID's own unless
+// admin) in one update, atomic per set: tag_rule_overrides becomes its
+// entries minus m.Drop, plus m.Add without duplicates, and tags becomes tags
+// plus m.TagsAdd minus m.TagsDrop.
+func MergeTagOverrides(ids []bson.ObjectID, userID string, admin bool, m OverrideMerge) error {
+	arrayOrEmpty := func(field string) bson.D {
+		return bson.D{{Key: "$ifNull", Value: bson.A{field, bson.A{}}}}
+	}
+	literal := func(values []string) bson.D {
+		if values == nil {
+			values = []string{}
+		}
+		return bson.D{{Key: "$literal", Value: values}}
+	}
+
+	keptOverrides := bson.D{{Key: "$filter", Value: bson.D{
+		{Key: "input", Value: arrayOrEmpty("$tag_rule_overrides")},
+		{Key: "cond", Value: bson.D{{Key: "$not", Value: bson.A{
+			bson.D{{Key: "$in", Value: bson.A{"$$this", literal(m.Drop)}}},
+		}}}},
+	}}}
+	update := mongo.Pipeline{{{Key: "$set", Value: bson.D{
+		{Key: "tag_rule_overrides", Value: bson.D{{Key: "$setUnion", Value: bson.A{keptOverrides, literal(m.Add)}}}},
+		{Key: "tags", Value: bson.D{{Key: "$setDifference", Value: bson.A{
+			bson.D{{Key: "$setUnion", Value: bson.A{arrayOrEmpty("$tags"), literal(m.TagsAdd)}}},
+			literal(m.TagsDrop),
+		}}}},
+	}}}}
+
+	if _, err := Collection.UpdateMany(context.Background(), ownedFilter(ids, userID, admin), update); err != nil {
+		return fmt.Errorf("merging tag overrides: %w", err)
+	}
 	return nil
 }
 
@@ -280,7 +435,7 @@ func buildTagCondition(userID, term string) (bson.M, error) {
 		or = append(or, bson.M{"tags": bson.M{"$in": ids}})
 	}
 	if matchEmpty {
-		or = append(or, bson.M{"tags": nil}, bson.M{"tags": bson.M{"$size": 0}})
+		or = append(or, EmptyTagsFilter())
 	}
 	switch len(or) {
 	case 0:

@@ -3,6 +3,7 @@ package imageset
 import (
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -84,16 +85,39 @@ func CleanImagSetForFrontEnd(iSet ...ImageSetMongo) []ImageSetMongo {
 	return iSet
 }
 
-// SetImportDescription mirrors description onto the set and onto every
-// current entry in Sources. Use for a set's first import, before it has an
-// existing Description to preserve.
-func SetImportDescription(a *ImageSetMongo, description string) {
-	if description == "" {
-		return
+// JoinDescriptions appends next to current after a blank line; an empty side
+// is dropped.
+func JoinDescriptions(current, next string) string {
+	if next == "" {
+		return current
 	}
-	a.Description = description
-	for i := range a.Sources {
-		a.Sources[i].Description = description
+	if current == "" {
+		return next
+	}
+	return current + "\n\n" + next
+}
+
+// DeriveFromSources fills an empty Title and Description from the set's
+// Sources and adds any source author missing from Authors; it never
+// overwrites. Sources' own Descriptions must already be set.
+func DeriveFromSources(a *ImageSetMongo) {
+	if a.Title == "" {
+		for _, s := range a.Sources {
+			if s.Title != "" {
+				a.Title = s.Title
+				break
+			}
+		}
+	}
+	for _, s := range a.Sources {
+		if s.SourceAuthor != "" && !slices.Contains(a.Authors, s.SourceAuthor) {
+			a.Authors = append(a.Authors, s.SourceAuthor)
+		}
+	}
+	if a.Description == "" {
+		for _, s := range a.Sources {
+			a.Description = JoinDescriptions(a.Description, s.Description)
+		}
 	}
 }
 
@@ -103,14 +127,7 @@ func SetImportDescription(a *ImageSetMongo, description string) {
 func AppendSource(a *ImageSetMongo, source SourceInfo, description string) {
 	source.Description = description
 	a.Sources = append(a.Sources, source)
-	if description == "" {
-		return
-	}
-	if a.Description == "" {
-		a.Description = description
-	} else {
-		a.Description = a.Description + "\n\n" + description
-	}
+	a.Description = JoinDescriptions(a.Description, description)
 }
 
 // UpdateSourceDescription updates only Sources[i].Description, leaving the
@@ -119,18 +136,10 @@ func UpdateSourceDescription(a *ImageSetMongo, i int, description string) {
 	a.Sources[i].Description = description
 }
 
-// only checks if the base info is the same. It does not check attribution and tags
-func SourceInfoEqual(a, b SourceInfo) bool {
-	if a.Name != b.Name ||
-
-		a.Title != b.Title ||
-		a.SourceAuthor != b.SourceAuthor ||
-		a.SourceID != b.SourceID ||
-		a.AuthorID != b.AuthorID ||
-		!a.Date.Equal(b.Date) {
-		return false
-	}
-	return true
+// SameSource reports whether a and b are the same source: same Name and
+// SourceID.
+func SameSource(a, b SourceInfo) bool {
+	return a.Name == b.Name && a.SourceID == b.SourceID
 }
 
 func PrintISet(a *ImageSetMongo) {

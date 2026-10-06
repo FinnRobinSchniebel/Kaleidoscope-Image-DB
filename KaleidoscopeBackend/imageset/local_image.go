@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"image"
 	"image/gif"
+	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -16,6 +19,28 @@ import (
 var BackendVolumeLocation string
 
 var LowResPathAppend = "low/"
+
+// tempDir holds in-progress file writes. It is on the volume so renaming a
+// finished file out of it stays atomic (a rename can't cross filesystems).
+func tempDir() string {
+	return filepath.Join(BackendVolumeLocation, ".tmp")
+}
+
+// ResetTempDir empties tempDir. Call once at startup, before anything writes:
+// whatever is left there is a write a crash interrupted.
+func ResetTempDir() error {
+	if err := os.RemoveAll(tempDir()); err != nil {
+		return fmt.Errorf("clearing temp folder: %w", err)
+	}
+	if err := os.MkdirAll(tempDir(), 0700); err != nil {
+		return fmt.Errorf("creating temp folder: %w", err)
+	}
+	return nil
+}
+
+// ErrImageFileMissing is returned when a stored image name has no file on
+// disk. A cached low-res or thumbnail can be regenerated; a full-res can't.
+var ErrImageFileMissing = errors.New("image file missing")
 
 func CheckImageSize(m MediaSource) error {
 	//image is larger then a 500mb
@@ -26,24 +51,38 @@ func CheckImageSize(m MediaSource) error {
 
 }
 
+// maxFileNameBytes caps a whole file name; ext4 allows 255 bytes.
+const maxFileNameBytes = 240
+
+// ImageFileName builds "<id>_<title>_<index>.<ext>", shortening only the
+// title so the name never exceeds maxFileNameBytes.
 func ImageFileName(imageTitle string, imageId bson.ObjectID, setIndex int, fileEnding string) string {
+	prefix := imageId.Hex() + "_"
+	suffix := fmt.Sprintf("_%d.%s", setIndex, fileEnding)
+	budget := maxFileNameBytes - len(prefix) - len(suffix)
+	return prefix + truncateUTF8(cleanInvalidFileSymbols(imageTitle), budget) + suffix
+}
 
-	var fileName string
-	imageTitle = cleanInvalidFileSymbols(imageTitle)
-	imageIDString := cleanInvalidFileSymbols(imageId.Hex())
-	//test if file name is to long
-	if nameLen := len(imageTitle + "_" + imageIDString); nameLen > 240 {
-		fileName = fmt.Sprintf("%s_%s", imageTitle[0:nameLen-(nameLen-240)], imageIDString)
-	} else {
-		fileName = fmt.Sprintf("%s_%s", imageIDString, imageTitle)
+// truncateUTF8 cuts s to at most max bytes without splitting a character.
+func truncateUTF8(s string, max int) string {
+	if max <= 0 {
+		return ""
 	}
-
-	// db folder/ first_author / "File Name"?_id_"image set index".format
-	fileName = fmt.Sprintf("%s_%d.%s", fileName, setIndex, fileEnding)
-	return fileName
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 func RetrieveLocalImage(path string, name string, low bool) (image.Image, *gif.GIF, error) {
+
+	if name != filepath.Base(name) {
+		return nil, nil, fmt.Errorf("invalid file name")
+	}
 
 	var FullPath string
 	if low {
@@ -54,8 +93,11 @@ func RetrieveLocalImage(path string, name string, low bool) (image.Image, *gif.G
 
 	f, err := os.Open(FullPath)
 	if err != nil {
-		log.Printf("failed to open: %s", fmt.Sprintf("%s%s", path, name))
-		return nil, nil, fmt.Errorf("no file found")
+		log.Printf("failed to open: %s", FullPath)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, fmt.Errorf("%w: %s", ErrImageFileMissing, name)
+		}
+		return nil, nil, fmt.Errorf("could not open image file")
 	}
 	defer f.Close()
 
@@ -81,6 +123,8 @@ func RetrieveLocalImage(path string, name string, low bool) (image.Image, *gif.G
 
 }
 
+// DeleteFilesFromInfoList removes each entry's full-res and low-res file.
+// A file that is already gone counts as removed, so a retry can finish.
 func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 	var errList error
 	for _, entry := range info {
@@ -89,7 +133,7 @@ func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 		}
 
 		err := os.Remove(path + entry.Name)
-		if err != nil {
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			fmt.Printf("Failed to Find File: %s\n", entry.Name)
 			errList = errors.Join(errList, err)
 		}
@@ -100,12 +144,30 @@ func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 		}
 
 		err := os.Remove(path + LowResPathAppend + entry.LowResName)
-		if err != nil {
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			fmt.Printf("Failed to Find File: %s\n", entry.LowResName)
 			errList = errors.Join(errList, err)
 		}
 	}
 	return errList
+}
+
+// DeleteLowResFile removes name (a low-res copy or the thumbnail) from path's
+// low-res folder. An empty or already-missing file is fine; a name with a
+// path component is logged and skipped, never followed.
+func DeleteLowResFile(path, name string) error {
+	if name == "" {
+		return nil
+	}
+	if name != filepath.Base(name) {
+		log.Printf("------ Warning: not deleting thumbnail with a path component: %q ------", name)
+		return nil
+	}
+	err := os.Remove(path + LowResPathAppend + name)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func CheckImageSetFileDeletionPermissions(entryToDelete ImageSetMongo) error {
@@ -145,7 +207,7 @@ func MakeFileDirectoryFromAuthor(userId string, FirstAuthorName string) (string,
 		fileAuthorName = FirstAuthorName
 
 	} else {
-		fileAuthorName = "unknown"
+		fileAuthorName = unknownAuthor
 	}
 
 	filePath := BackendVolumeLocation + "/" + userId + "/" + fileAuthorName + "/"
@@ -176,6 +238,7 @@ func cleanInvalidFileSymbols(name string) string {
 		"<", "",
 		">", "",
 		"/", "",
+		"\x00", "",
 	)
 	return r.Replace(name)
 }

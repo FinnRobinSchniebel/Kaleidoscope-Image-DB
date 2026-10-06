@@ -3,7 +3,9 @@ package zipupload
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"fmt"
+	"image"
 	"log"
+	"maps"
 	"mime/multipart"
 	"os"
 	"path/filepath"
@@ -16,9 +18,13 @@ import (
 )
 
 type ImageSetFileBundle struct {
+	Key      string //grouping folder path, for reporting
 	Iset     imageset.ImageSetMongo
 	FilePath []string
 }
+
+// uploadSourceName names the source of files that don't say where they came from.
+const uploadSourceName = "upload"
 
 func ProcessZip(fileHeader *multipart.FileHeader, ruleLayers []string, fileLayer string, groupingIndex int, user string) (status int, collisions map[int][]imageset.CollisionResponsePair, skipped []string, errors []string, err error) {
 
@@ -27,7 +33,7 @@ func ProcessZip(fileHeader *multipart.FileHeader, ruleLayers []string, fileLayer
 		return fiber.StatusBadRequest, nil, nil, nil, fmt.Errorf("Too many folder Layers.")
 	}
 	//only greater than since it could be the file level
-	if groupingIndex > len(ruleLayers) {
+	if groupingIndex < 0 || groupingIndex > len(ruleLayers) {
 		return fiber.StatusBadRequest, nil, nil, nil, fmt.Errorf("Grouping index is out of bounds. Please select a valid group index")
 	}
 
@@ -74,12 +80,13 @@ func ProcessZip(fileHeader *multipart.FileHeader, ruleLayers []string, fileLayer
 		}
 	}()
 
-	cont, err := ValidateAndParseFolder(folderPathName, ruleLayers, fileLayer, groupingIndex)
+	cont, skippedFiles, err := ValidateAndParseFolder(folderPathName, ruleLayers, fileLayer, groupingIndex)
 	if err != nil {
 		return fiber.StatusBadRequest, nil, nil, nil, fmt.Errorf("failed to parse files: %s", err.Error())
 	}
 
 	ISets, skipped, errors, err := createImageSetsFromParsedZipData(folderPathName, cont)
+	skipped = append(skippedFiles, skipped...)
 
 	//log.Print(cont, err)
 	log.Print("Sets Print: ")
@@ -128,105 +135,167 @@ func createImageSetsFromParsedZipData(BaseFolderPath string, parsedDataMap map[s
 
 	var skippedList []string
 	var errorList []string
-	var err error
 	var result []ImageSetFileBundle
 
-	//for each item in the Data map make them a separate ImageSet
-	for groupingKey := range parsedDataMap {
-
-		//temp variable to keep track of titles
-		var titles []string
-
-		containsImage := false
-		for i := range parsedDataMap[groupingKey] {
-			if IsValidImageExtension(parsedDataMap[groupingKey][i].FileType) {
-				containsImage = true
-				break
-			}
+	//for each item in the Data map make them a separate ImageSet (sorted so results are stable)
+	for _, groupingKey := range slices.Sorted(maps.Keys(parsedDataMap)) {
+		bundle, skipped, errs := buildImageSetBundle(BaseFolderPath, groupingKey, parsedDataMap[groupingKey])
+		skippedList = append(skippedList, skipped...)
+		errorList = append(errorList, errs...)
+		if bundle != nil {
+			result = append(result, *bundle)
 		}
-		//skip all that don't have a valid file format for supported images/video
-		if !containsImage {
-			skippedList = append(skippedList, groupingKey)
+	}
+	return result, skippedList, errorList, nil
+}
+
+// buildImageSetBundle turns one group's files into an image set whose parsed
+// fields belong to its sources. A nil bundle means the whole group was skipped:
+// a work is never imported with pieces missing.
+func buildImageSetBundle(basePath string, key string, entries []ParsedFolderInfo) (*ImageSetFileBundle, []string, []string) {
+	var skipped []string
+	var errorList []string
+	var set imageset.ImageSetMongo
+	var paths []string
+	var descriptions []ParsedFolderInfo //.txt files, attached once every source exists
+
+	for _, entry := range entries {
+		if entry.Conflict != "" {
+			return nil, append(skipped, fmt.Sprintf("%s (%s in %s)", key, entry.Conflict, entry.Path)), errorList
+		}
+
+		if entry.FileType == ".txt" {
+			descriptions = append(descriptions, entry)
 			continue
 		}
 
-		//for each Item in the imageSet check its contents for info and text file discription
-		var newISet imageset.ImageSetMongo
-		var Paths []string
-		var description string //accumulated across any .txt files in the group
-
-		for dataIndex := range parsedDataMap[groupingKey] {
-
-			//If it is a text file add the contents as a description to the image Set
-			if parsedDataMap[groupingKey][dataIndex].FileType == ".txt" {
-				disc, err := readTxtAsDescription(BaseFolderPath, parsedDataMap[groupingKey][dataIndex].Path)
-				if err != nil {
-					errorList = append(errorList, "Could Not read: "+parsedDataMap[groupingKey][dataIndex].Path+" error: "+err.Error())
-				} else {
-					if description == "" {
-						description = disc
-					} else {
-						description = description + "\n\n" + disc
-					}
-				}
-				continue
-			}
-
-			Author := parsedDataMap[groupingKey][dataIndex].Values["Author"]
-
-			//TODO: Will be removed and replaced when better author attribution is there
-			if !slices.Contains(newISet.Authors, Author) && Author != "" {
-				newISet.Authors = append(newISet.Authors, Author)
-			}
-
-			//Combine all titles into one string (a duplicate exists separated in sources so this one can be changed by the user)
-			newTitle := parsedDataMap[groupingKey][dataIndex].Values["Title"]
-			if !slices.Contains(titles, newTitle) {
-				titles = append(titles, newTitle)
-				if newISet.Title != "" {
-					newISet.Title = newISet.Title + " | "
-				}
-				newISet.Title = newISet.Title + newTitle
-			}
-
-			var newSource imageset.SourceInfo
-			newSource.Name = parsedDataMap[groupingKey][dataIndex].Values["Source"]
-			newSource.SourceID = parsedDataMap[groupingKey][dataIndex].Values["ID"]
-			newSource.AuthorID = parsedDataMap[groupingKey][dataIndex].Values["AuthorId"]
-			newSource.Title = parsedDataMap[groupingKey][dataIndex].Values["Title"]
-			newSource.SourceAuthor = Author
-			newSource.AttributedTo = append(newSource.AttributedTo, dataIndex)
-			Paths = append(Paths, parsedDataMap[groupingKey][dataIndex].Path)
-
-			//add Date to data set (accepts format with - and _)
-			if parsedDataMap[groupingKey][dataIndex].Values["Date"] != "" {
-				newSource.Date, err = dateParse(parsedDataMap[groupingKey][dataIndex].Values["Date"])
-				if err != nil {
-					log.Print("Could not parse date: " + parsedDataMap[groupingKey][dataIndex].Values["Date"])
-					errorList = append(errorList, err.Error())
-				}
-			}
-
-			//add new source entry if needed else add index to the existing source
-			containsSourceAt := false
-			for i := range newISet.Sources {
-				if imageset.SourceInfoEqual(newSource, newISet.Sources[i]) {
-					newISet.Sources[i].AttributedTo = append(newISet.Sources[i].AttributedTo, dataIndex)
-					containsSourceAt = true
-					break
-				}
-			}
-			if !containsSourceAt {
-				newISet.Sources = append(newISet.Sources, newSource)
-			}
+		if !IsValidImageExtension(entry.FileType) {
+			skipped = append(skipped, entry.Path+" (not an image)")
+			continue
+		}
+		if err := probeImage(filepath.Join(basePath, entry.Path)); err != nil {
+			return nil, append(skipped, fmt.Sprintf("%s (unreadable image %s)", key, entry.Path)), errorList
 		}
 
-		imageset.SetImportDescription(&newISet, description)
+		source, err := sourceFromValues(entry.Values)
+		if err != nil {
+			errorList = append(errorList, err.Error())
+		}
 
-		Combined := ImageSetFileBundle{Iset: newISet, FilePath: Paths}
-		result = append(result, Combined)
+		//index among this set's images only, so .txt and skipped files never shift attribution
+		imageIndex := len(paths)
+		paths = append(paths, entry.Path)
+
+		//a group is one work from one source; its files may only add details the others left empty
+		switch {
+		case len(set.Sources) == 0:
+			source.AttributedTo = []int{imageIndex}
+			set.Sources = []imageset.SourceInfo{source}
+		case imageset.SameSource(source, set.Sources[0]):
+			if conflict := mergeSourceFields(&set.Sources[0], source); conflict != "" {
+				return nil, append(skipped, fmt.Sprintf("%s (%s in %s)", key, conflict, entry.Path)), errorList
+			}
+			set.Sources[0].AttributedTo = append(set.Sources[0].AttributedTo, imageIndex)
+		default:
+			//a set built from several different sources is not supported
+			return nil, append(skipped, fmt.Sprintf("%s (combines different sources: %s and %s in %s)",
+				key, sourceLabel(set.Sources[0]), sourceLabel(source), entry.Path)), errorList
+		}
 	}
-	return result, skippedList, errorList, nil
+
+	if len(paths) == 0 {
+		return nil, append(skipped, key+" (no images)"), errorList
+	}
+
+	for _, entry := range descriptions {
+		text, err := readTxtAsDescription(basePath, entry.Path)
+		if err != nil {
+			errorList = append(errorList, "Could Not read: "+entry.Path+" error: "+err.Error())
+			continue
+		}
+		//the group's only source is the one every description belongs to
+		set.Sources[0].Description = imageset.JoinDescriptions(set.Sources[0].Description, text)
+	}
+
+	imageset.DeriveFromSources(&set)
+	return &ImageSetFileBundle{Key: key, Iset: set, FilePath: paths}, skipped, errorList
+}
+
+// mergeSourceFields fills dst's empty Title, Author, AuthorId and Date from
+// src. Returns a description of the first field where both are set but
+// differ, or "" when they agree.
+func mergeSourceFields(dst *imageset.SourceInfo, src imageset.SourceInfo) string {
+	textFields := []struct {
+		name string
+		dst  *string
+		src  string
+	}{
+		{"Title", &dst.Title, src.Title},
+		{"Author", &dst.SourceAuthor, src.SourceAuthor},
+		{"AuthorId", &dst.AuthorID, src.AuthorID},
+	}
+	for _, f := range textFields {
+		switch {
+		case f.src == "" || f.src == *f.dst:
+		case *f.dst == "":
+			*f.dst = f.src
+		default:
+			return fmt.Sprintf("conflicting [%s] %q vs %q", f.name, *f.dst, f.src)
+		}
+	}
+
+	switch {
+	case src.Date.IsZero() || src.Date.Equal(dst.Date):
+	case dst.Date.IsZero():
+		dst.Date = src.Date
+	default:
+		return fmt.Sprintf("conflicting [Date] %s vs %s", dst.Date.Format(time.DateOnly), src.Date.Format(time.DateOnly))
+	}
+	return ""
+}
+
+// sourceLabel names a source for messages: "pixiv/42", or just "upload" without an id.
+func sourceLabel(s imageset.SourceInfo) string {
+	if s.SourceID == "" {
+		return s.Name
+	}
+	return s.Name + "/" + s.SourceID
+}
+
+// sourceFromValues builds a source from one file's parsed fields. LastChecked
+// is left zero so a matching service sync still fills in missing metadata.
+func sourceFromValues(values map[string]string) (imageset.SourceInfo, error) {
+	source := imageset.SourceInfo{
+		Name:         values["Source"],
+		SourceID:     values["ID"],
+		AuthorID:     values["AuthorId"],
+		Title:        values["Title"],
+		SourceAuthor: values["Author"],
+	}
+	if source.Name == "" {
+		source.Name = uploadSourceName
+	}
+
+	//add Date to data set (accepts format with - and _)
+	if date := values["Date"]; date != "" {
+		parsed, err := dateParse(date)
+		if err != nil {
+			return source, fmt.Errorf("could not parse date %q: %w", date, err)
+		}
+		source.Date = parsed
+	}
+	return source, nil
+}
+
+// probeImage reports whether path decodes as a supported image.
+func probeImage(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, _, err = image.DecodeConfig(f)
+	return err
 }
 
 func dateParse(Date string) (time.Time, error) {

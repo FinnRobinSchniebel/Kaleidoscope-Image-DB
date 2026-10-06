@@ -29,3 +29,5 @@ const PixivQpT = 1        //number of queries between delays
 
 //Accept-Language sent on every pixiv App API request, so Pixiv returns translated tag names (Tag.TranslatedName)
 const pixivAcceptLanguage = "en"
+
+const pixivPrivatedTag = "privated" //synthetic source tag (not from Pixiv) for sets bookmarked as private

@@ -88,19 +88,26 @@ func recordSourceTagUsage(userID bson.ObjectID, source string, sourceTags []imag
 }
 
 // decrementSourceTagUsage lowers Count for every tag across sources, clamped
-// at 0. Docs are kept at 0 rather than deleted so AutoTag matches referencing
-// them never dangle.
+// at 0, once per unique tag within each source (mirroring
+// recordSourceTagUsage). Docs are kept at 0 rather than deleted so AutoTag
+// matches referencing them never dangle.
 func decrementSourceTagUsage(userID bson.ObjectID, sources []imageset.SourceInfo) error {
 	var models []mongo.WriteModel
 	for _, src := range sources {
+		seen := make(map[string]struct{}, len(src.Tags))
 		for _, t := range src.Tags {
+			key := sourceTagKey(userID, src.Name, t.Default)
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
 			pipeline := mongo.Pipeline{
 				bson.D{{Key: "$set", Value: bson.D{{Key: "count", Value: bson.D{{Key: "$max", Value: bson.A{
 					bson.D{{Key: "$subtract", Value: bson.A{"$count", 1}}}, 0,
 				}}}}}}},
 			}
 			models = append(models, mongo.NewUpdateOneModel().
-				SetFilter(bson.M{"_id": sourceTagKey(userID, src.Name, t.Default)}).
+				SetFilter(bson.M{"_id": key}).
 				SetUpdate(pipeline))
 		}
 	}

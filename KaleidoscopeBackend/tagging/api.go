@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 
 	"github.com/gofiber/fiber/v2"
@@ -22,7 +23,7 @@ func autoTagErrorResponse(err error, fallback string) (int, string) {
 		return fiber.StatusNotFound, err.Error()
 	case errors.Is(err, ErrAutoTagNameExists):
 		return fiber.StatusConflict, err.Error()
-	case errors.Is(err, ErrAutoTagNameReserved):
+	case errors.Is(err, ErrAutoTagNameReserved), errors.Is(err, ErrAutoTagNameRequired):
 		return fiber.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrSystemAutoTagImmutable):
 		return fiber.StatusForbidden, err.Error()
@@ -171,9 +172,6 @@ func CreateAutoTagHandler(c *fiber.Ctx) error {
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(http.StatusBadRequest).SendString(err.Error())
 	}
-	if body.Name == "" {
-		return c.Status(http.StatusBadRequest).SendString("name is required")
-	}
 	id, err := CreateAutoTag(userID, body.Name, body.SrcTagKeyMatch)
 	if err != nil {
 		status, msg := autoTagErrorResponse(err, "could not create auto tag")
@@ -229,34 +227,66 @@ func DeleteAutoTagHandler(c *fiber.Ctx) error {
 	return c.SendStatus(http.StatusOK)
 }
 
-type setTagOverridesRequest struct {
-	IDs       []string `json:"ids"`
-	Overrides []string `json:"overrides"`
+type tagOverridesRequest struct {
+	IDs       []string  `json:"ids"`
+	Overrides *[]string `json:"overrides"` //nil when the field is absent
 }
 
-// PATCH /api/imagesets/tagoverrides
-func SetTagOverridesHandler(c *fiber.Ctx) error {
+type tagOverridesUpdate func(userID string, admin bool, ids []bson.ObjectID, overrides []string) ([]string, error)
+
+// PUT /api/imagesets/tagoverrides - replaces each set's overrides
+func ReplaceTagOverridesHandler(c *fiber.Ctx) error {
+	return handleTagOverrides(c, false, ReplaceTagOverrides)
+}
+
+// PATCH /api/imagesets/tagoverrides - adds or flips overrides, never removes one
+func AddTagOverridesHandler(c *fiber.Ctx) error {
+	return handleTagOverrides(c, true, AddTagOverrides)
+}
+
+// handleTagOverrides parses and validates a tag override request, then runs
+// update on the unique ids. requireOverrides rejects an empty overrides list.
+func handleTagOverrides(c *fiber.Ctx, requireOverrides bool, update tagOverridesUpdate) error {
 	userID, err := userIDFromLocals(c)
 	if err != nil {
 		return c.Status(http.StatusUnauthorized).SendString(err.Error())
 	}
-	var body setTagOverridesRequest
+	var body tagOverridesRequest
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(http.StatusBadRequest).SendString(err.Error())
 	}
 	if len(body.IDs) == 0 {
 		return c.Status(http.StatusBadRequest).SendString("ids is required")
 	}
-	if len(body.Overrides) == 0 {
+	if body.Overrides == nil {
 		return c.Status(http.StatusBadRequest).SendString("overrides is required")
 	}
-	for _, entry := range body.Overrides {
-		if _, _, ok := ParseTagRuleOverrideEntry(entry); !ok {
-			return c.Status(http.StatusBadRequest).SendString("invalid override entry: " + entry)
+	overrides := *body.Overrides
+	if requireOverrides && len(overrides) == 0 {
+		return c.Status(http.StatusBadRequest).SendString("overrides must not be empty")
+	}
+	if err := validateOverrideEntries(overrides); err != nil {
+		return c.Status(http.StatusBadRequest).SendString(err.Error())
+	}
+
+	seen := make(map[bson.ObjectID]bool, len(body.IDs))
+	ids := make([]bson.ObjectID, 0, len(body.IDs))
+	for _, raw := range body.IDs {
+		id, err := bson.ObjectIDFromHex(raw)
+		if err != nil {
+			return c.Status(http.StatusBadRequest).SendString("invalid id: " + raw)
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
 		}
 	}
 
-	updated, err := SetTagOverrides(userID.Hex(), body.IDs, body.Overrides)
+	uid := userID.Hex()
+	updated, err := update(uid, authutil.IsAdmin(uid), ids, overrides)
+	if errors.Is(err, ErrUnknownOverrideTag) {
+		return c.Status(http.StatusBadRequest).SendString(err.Error())
+	}
 	if err != nil {
 		status, msg := imageset.ImageSetErrorResponse(err)
 		return c.Status(status).SendString(msg)

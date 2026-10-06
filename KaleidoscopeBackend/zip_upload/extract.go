@@ -1,6 +1,7 @@
 package zipupload
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -31,15 +32,13 @@ func Unzip(src, dest string) (string, error) {
 	}
 
 	// Closure to address file descriptors issue with all the deferred .Close() methods
-	extractAndWriteFile := func(f *zip.File) error {
+	extractAndWriteFile := func(f *zip.File) (err error) {
 		rc, err := f.Open()
 		if err != nil {
 			return err
 		}
 		defer func() {
-			if err := rc.Close(); err != nil {
-				panic(err)
-			}
+			err = errors.Join(err, rc.Close())
 		}()
 
 		path := filepath.Join(extractRoot, f.Name)
@@ -53,17 +52,16 @@ func Unzip(src, dest string) (string, error) {
 			os.MkdirAll(path, f.Mode())
 		} else {
 			os.MkdirAll(filepath.Dir(path), f.Mode())
-			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+			var out *os.File
+			out, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
 			if err != nil {
 				return err
 			}
 			defer func() {
-				if err := f.Close(); err != nil {
-					panic(err)
-				}
+				err = errors.Join(err, out.Close())
 			}()
 
-			_, err = io.Copy(f, rc)
+			_, err = io.Copy(out, rc)
 			if err != nil {
 				return err
 			}

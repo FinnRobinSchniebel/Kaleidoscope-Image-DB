@@ -1,6 +1,7 @@
 package zipupload
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -49,19 +50,24 @@ type ParsedFolderInfo struct {
 	Values   map[string]string //parsed values [Key: Filed, value: extracted]
 	FileType string            //file ending with dot (.png)
 	Path     string            //relative to base extracted folder
+	Conflict string            //set when a field was captured twice with different values; the file's group is skipped
 }
+
+// errFieldConflict marks a field captured more than once for one file with different values.
+var errFieldConflict = errors.New("conflicting values")
 
 // This function makes sure the parsing template and folder structure are the same, and parses it.
 // Note: ParsedFolderInfo Path is relative to base file (root + Path for full)
-// IMPORTANT: No validation of groupinglayer being smaller then groupingLayer. That should have been done at API Validation
-func ValidateAndParseFolder(rootPath string, folderTemplates []string, fileTemplate string, groupingLayer int) (map[string][]ParsedFolderInfo, error) {
+// groupingLayer must be in [0, len(folderTemplates)] (checked by ProcessZip). Files that sit above
+// it are returned in skipped rather than grouped.
+func ValidateAndParseFolder(rootPath string, folderTemplates []string, fileTemplate string, groupingLayer int) (results map[string][]ParsedFolderInfo, skipped []string, err error) {
 
 	// Build folder patterns
 	folderPatterns := []*LayerPattern{}
 	for _, t := range folderTemplates {
 		newPattern, err := buildLayerPattern(t)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		folderPatterns = append(folderPatterns, newPattern)
 	}
@@ -69,10 +75,10 @@ func ValidateAndParseFolder(rootPath string, folderTemplates []string, fileTempl
 	// Build file pattern
 	filePattern, err := buildLayerPattern(fileTemplate)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	results := map[string][]ParsedFolderInfo{}
+	results = map[string][]ParsedFolderInfo{}
 	// seen := map[string]bool{}
 
 	//get folder itself as a seperate part to add later
@@ -110,26 +116,24 @@ func ValidateAndParseFolder(rootPath string, folderTemplates []string, fileTempl
 		log.Print("Parts: ")
 		log.Print(pathParts)
 
+		//a file above the grouping layer belongs to no group; one at the grouping layer itself is a collapsed folder
+		if len(pathParts) <= groupingLayer {
+			skipped = append(skipped, relativePath+" (above grouping level)")
+			return nil
+		}
+
 		//combine up-to path part to create grouping key (sicne grouping Layer is an index, it is inclusive)
-		//IMPORTANT: No validation of groupinglayer being smaller then groupingLayer. That should have been done at API input Validation
 		var matchPath string
 		for i := 0; i <= groupingLayer; i++ {
 			matchPath += pathParts[i]
-			if i < groupingLayer-1 {
+			if i < groupingLayer {
 				matchPath += "/"
 			}
 		}
 
-		if filepath.Ext(relativePath) == ".txt" {
-			currentPathContent := ParsedFolderInfo{
-				Path:     relativePath,
-				FileType: filepath.Ext(fullPath),
-			}
-			results[matchPath] = append(results[matchPath], currentPathContent)
-			return nil
-		}
-
 		RegexMatches := map[string]string{}
+		var conflict string
+		isTxt := filepath.Ext(relativePath) == ".txt"
 
 		for depth, part := range pathParts {
 
@@ -137,23 +141,33 @@ func ValidateAndParseFolder(rootPath string, folderTemplates []string, fileTempl
 
 			isFile := depth == len(pathParts)-1
 
+			//a description's own name isn't parsed; it only takes its folders' fields (e.g. Source, ID)
+			if isFile && isTxt {
+				break
+			}
+
 			// Normalize PathPartName (strip extension for files)
 			PathPartName := part
 			if isFile {
 				PathPartName = strings.TrimSuffix(PathPartName, filepath.Ext(PathPartName))
 			}
 
+			//a file sitting where a folder belongs (collapsed) is named like that folder, so only its template applies
+			pattern := filePattern
 			if depth < len(folderPatterns) {
-				log.Print("Folder part Template: " + folderPatterns[depth].RawTemplate)
-				if err = MatchReg(folderPatterns[depth], PathPartName, RegexMatches); err != nil {
-					return err
-				}
+				pattern = folderPatterns[depth]
+				log.Print("Folder part Template: " + pattern.RawTemplate)
+			} else if !isFile {
+				continue
 			}
 
-			if isFile {
-				if err = MatchReg(filePattern, PathPartName, RegexMatches); err != nil {
-					return err
-				}
+			matchErr := MatchReg(pattern, PathPartName, RegexMatches)
+			if errors.Is(matchErr, errFieldConflict) {
+				conflict = matchErr.Error()
+				break
+			}
+			if matchErr != nil {
+				return matchErr
 			}
 		}
 
@@ -161,13 +175,14 @@ func ValidateAndParseFolder(rootPath string, folderTemplates []string, fileTempl
 			Path:     relativePath,
 			Values:   RegexMatches,
 			FileType: filepath.Ext(fullPath),
+			Conflict: conflict,
 		}
 
 		results[matchPath] = append(results[matchPath], currentPathContent)
 		return nil
 	})
 	if err != nil {
-		return results, err
+		return results, skipped, err
 	}
 
 	for key := range results {
@@ -175,7 +190,7 @@ func ValidateAndParseFolder(rootPath string, folderTemplates []string, fileTempl
 
 	}
 
-	return results, nil
+	return results, skipped, nil
 }
 
 func sortParsedInfo(a, b ParsedFolderInfo) int {
@@ -221,7 +236,11 @@ func MatchReg(pattern *LayerPattern, PathSeg string, result map[string]string) e
 	}
 
 	for i, field := range pattern.Fields {
-		result[field] = match[i+1]
+		value := match[i+1]
+		if old, ok := result[field]; ok && old != value {
+			return fmt.Errorf("%w for field [%s]: %q vs %q", errFieldConflict, field, old, value)
+		}
+		result[field] = value
 	}
 
 	return nil

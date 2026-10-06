@@ -49,6 +49,9 @@ func readSecret(name string) (string, error) {
 
 func main() {
 	imageset.BackendVolumeLocation = os.Getenv("BACKEND_VOLUME_LOCATION")
+	if err := imageset.ResetTempDir(); err != nil {
+		log.Fatal(err)
+	}
 
 	SecretKey, err := readSecret("jwt_secret")
 	if err != nil {
@@ -166,7 +169,8 @@ func StartAPI() {
 	app.Get("/api/imagesets", authutil.AuthSessionToken, imageset.GetImageSetById)
 	app.Post("/api/imagesets", authutil.AuthSessionToken, imageset.PostImageSet)
 	app.Delete("/api/imagesets", authutil.AuthSessionToken, imageset.DeleteImageSets)
-	app.Patch("/api/imagesets/tagoverrides", authutil.AuthSessionToken, tagging.SetTagOverridesHandler)
+	app.Put("/api/imagesets/tagoverrides", authutil.AuthSessionToken, tagging.ReplaceTagOverridesHandler)
+	app.Patch("/api/imagesets/tagoverrides", authutil.AuthSessionToken, tagging.AddTagOverridesHandler)
 	//TODO: Edit imageset api
 	//TODO: MarkForDepetion api
 
