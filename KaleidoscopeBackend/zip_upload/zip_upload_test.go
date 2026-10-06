@@ -122,14 +122,22 @@ func TestParseRepeatedFieldMustAgree(t *testing.T) {
 
 func TestBuildImageSetBundle(t *testing.T) {
 	root := newZipRoot(t)
-	writeFiles(t, root, "g/notes.txt", "g/1.png", "g/data.json", "g/2.png", "g/3.png")
+	writeFiles(t, root, "g/notes.txt", "g/1.png", "g/data.json", "g/2.png", "g/3.png", "g/more.txt")
 
+	work := func(extra map[string]string) map[string]string {
+		values := map[string]string{"Source": "pixiv", "ID": "42"}
+		for k, v := range extra {
+			values[k] = v
+		}
+		return values
+	}
 	entries := []ParsedFolderInfo{
-		{Path: "g/notes.txt", FileType: ".txt"},
-		{Path: "g/1.png", FileType: ".png", Values: map[string]string{"Title": "First", "Author": "alice"}},
-		{Path: "g/data.json", FileType: ".json", Values: map[string]string{}},
-		{Path: "g/2.png", FileType: ".png", Values: map[string]string{"Title": "Second", "Author": "alice", "Source": "pixiv", "ID": "42"}},
-		{Path: "g/3.png", FileType: ".png", Values: map[string]string{"Title": "First", "Author": "alice"}},
+		{Path: "g/notes.txt", FileType: ".txt", Values: work(nil)},
+		{Path: "g/1.png", FileType: ".png", Values: work(map[string]string{"Title": "First", "Author": "alice"})},
+		{Path: "g/data.json", FileType: ".json", Values: work(nil)},
+		{Path: "g/2.png", FileType: ".png", Values: work(nil)},
+		{Path: "g/3.png", FileType: ".png", Values: work(map[string]string{"Title": "First", "AuthorId": "9"})},
+		{Path: "g/more.txt", FileType: ".txt", Values: map[string]string{}},
 	}
 	bundle, skipped, errs := buildImageSetBundle(root, "art/g", entries)
 	if bundle == nil {
@@ -140,29 +148,23 @@ func TestBuildImageSetBundle(t *testing.T) {
 	if !slices.Equal(skipped, []string{"g/data.json (not an image)"}) {
 		t.Errorf("skipped = %v", skipped)
 	}
-	if set.Title != "First" {
-		t.Errorf("Title = %q, want the first source's title", set.Title)
+	if len(set.Sources) != 1 {
+		t.Fatalf("Sources = %+v, want one", set.Sources)
 	}
-	if !slices.Equal(set.Authors, []string{"alice"}) {
-		t.Errorf("Authors = %v, want [alice]", set.Authors)
+	src := set.Sources[0]
+	if src.Name != "pixiv" || src.SourceID != "42" || !slices.Equal(src.AttributedTo, []int{0, 1, 2}) {
+		t.Errorf("source = %s/%s %v, want pixiv/42 [0 1 2]", src.Name, src.SourceID, src.AttributedTo)
 	}
-	if set.Description != "text" {
-		t.Errorf("Description = %q, want the .txt contents", set.Description)
+	if src.Title != "First" || src.SourceAuthor != "alice" || src.AuthorID != "9" {
+		t.Errorf("source fields = %q/%q/%q, want files to fill each other's empty fields", src.Title, src.SourceAuthor, src.AuthorID)
 	}
-	if len(set.Sources) != 2 {
-		t.Fatalf("Sources = %+v, want 2", set.Sources)
+	if src.Description != "text\n\ntext" || set.Description != src.Description {
+		t.Errorf("descriptions = source %q, set %q; want both .txt files on the one source", src.Description, set.Description)
 	}
-	first, second := set.Sources[0], set.Sources[1]
-	if first.Name != uploadSourceName || !slices.Equal(first.AttributedTo, []int{0, 2}) {
-		t.Errorf("first source = %s %v, want %s [0 2]", first.Name, first.AttributedTo, uploadSourceName)
+	if set.Title != "First" || !slices.Equal(set.Authors, []string{"alice"}) {
+		t.Errorf("set Title = %q, Authors = %v", set.Title, set.Authors)
 	}
-	if second.Name != "pixiv" || second.SourceID != "42" || !slices.Equal(second.AttributedTo, []int{1}) {
-		t.Errorf("second source = %s/%s %v, want pixiv/42 [1]", second.Name, second.SourceID, second.AttributedTo)
-	}
-	if first.Description != "text" || second.Description != "" {
-		t.Errorf("descriptions = %q / %q, want the .txt only on the matching upload source", first.Description, second.Description)
-	}
-	if !first.LastChecked.IsZero() || !second.LastChecked.IsZero() {
+	if !src.LastChecked.IsZero() {
 		t.Error("zip sources must not get a LastChecked")
 	}
 	if !slices.Equal(bundle.FilePath, []string{"g/1.png", "g/2.png", "g/3.png"}) {
@@ -170,33 +172,30 @@ func TestBuildImageSetBundle(t *testing.T) {
 	}
 }
 
-func TestBuildImageSetBundleAttachesDescriptionsByNameAndID(t *testing.T) {
+func TestBuildImageSetBundleSkipsGroupWithOneWorkPerSource(t *testing.T) {
 	root := newZipRoot(t)
-	writeFiles(t, root, "g/1.png", "g/2.png", "g/pixiv.txt", "g/other.txt")
+	writeFiles(t, root, "g/1.png", "g/2.png")
 
-	entries := []ParsedFolderInfo{
-		{Path: "g/pixiv.txt", FileType: ".txt", Values: map[string]string{"Source": "pixiv", "ID": "42"}},
-		{Path: "g/other.txt", FileType: ".txt", Values: map[string]string{"Source": "pixiv", "ID": "99"}},
-		{Path: "g/1.png", FileType: ".png", Values: map[string]string{"Title": "A"}},
-		{Path: "g/2.png", FileType: ".png", Values: map[string]string{"Title": "A", "Source": "pixiv", "ID": "42"}},
+	tests := []struct {
+		name   string
+		second map[string]string
+		reason string
+	}{
+		{"different sources", map[string]string{"Source": "pixiv", "ID": "42"}, "combines different sources: upload and pixiv/42 in g/2.png"},
+		{"conflicting titles", map[string]string{"Title": "B"}, `conflicting [Title] "A" vs "B" in g/2.png`},
 	}
-	bundle, _, errs := buildImageSetBundle(root, "art/g", entries)
-	if bundle == nil {
-		t.Fatal("group skipped")
-	}
-	upload, pixiv := bundle.Iset.Sources[0], bundle.Iset.Sources[1]
-
-	if pixiv.Description != "text" {
-		t.Errorf("pixiv/42 description = %q, want its .txt", pixiv.Description)
-	}
-	if upload.Description != "text" {
-		t.Errorf("unmatched .txt should fall back to the first source, got %q", upload.Description)
-	}
-	if len(errs) != 1 || !strings.Contains(errs[0], "g/other.txt") {
-		t.Errorf("errors = %v, want the unmatched .txt reported", errs)
-	}
-	if bundle.Iset.Description != "text\n\ntext" {
-		t.Errorf("set Description = %q, want both source descriptions joined", bundle.Iset.Description)
+	for _, tt := range tests {
+		entries := []ParsedFolderInfo{
+			{Path: "g/1.png", FileType: ".png", Values: map[string]string{"Title": "A"}},
+			{Path: "g/2.png", FileType: ".png", Values: tt.second},
+		}
+		bundle, skipped, _ := buildImageSetBundle(root, "art/g", entries)
+		if bundle != nil {
+			t.Errorf("%s: group was imported", tt.name)
+		}
+		if len(skipped) != 1 || !strings.Contains(skipped[0], tt.reason) {
+			t.Errorf("%s: skipped = %v, want %q", tt.name, skipped, tt.reason)
+		}
 	}
 }
 

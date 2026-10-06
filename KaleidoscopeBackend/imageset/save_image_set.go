@@ -115,6 +115,9 @@ func (m MultipartSource) Remove() bool {
 	return true
 }
 
+// unknownAuthor stands in for a set's author until a source provides one.
+const unknownAuthor = "unknown"
+
 // ErrNoMedia is returned by AddImageSet when the request contained no media
 // files. Callers map it to HTTP 400.
 var ErrNoMedia = errors.New("no media attached")
@@ -139,7 +142,7 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 
 	//set the author in case of none given to avoid issues with file path creation
 	if len(imageSet.Authors) == 0 || (imageSet.Authors[0] == "") {
-		imageSet.Authors = []string{"unknown"}
+		imageSet.Authors = []string{unknownAuthor}
 	}
 	//add userId (done as seperate step to avoid exploits if changes are made)
 	imageSet.KscopeUserId = userId

@@ -97,26 +97,27 @@ func JoinDescriptions(current, next string) string {
 	return current + "\n\n" + next
 }
 
-// DeriveFromSources fills a new set's Title, Authors and Description from its
-// Sources, whose own Descriptions must already be set. Only for a set's first
-// import: it overwrites those fields.
+// DeriveFromSources fills an empty Title and Description from the set's
+// Sources and adds any source author missing from Authors; it never
+// overwrites. Sources' own Descriptions must already be set.
 func DeriveFromSources(a *ImageSetMongo) {
-	a.Title = ""
-	for _, s := range a.Sources {
-		if s.Title != "" {
-			a.Title = s.Title
-			break
+	if a.Title == "" {
+		for _, s := range a.Sources {
+			if s.Title != "" {
+				a.Title = s.Title
+				break
+			}
 		}
 	}
-	a.Authors = nil
 	for _, s := range a.Sources {
 		if s.SourceAuthor != "" && !slices.Contains(a.Authors, s.SourceAuthor) {
 			a.Authors = append(a.Authors, s.SourceAuthor)
 		}
 	}
-	a.Description = ""
-	for _, s := range a.Sources {
-		a.Description = JoinDescriptions(a.Description, s.Description)
+	if a.Description == "" {
+		for _, s := range a.Sources {
+			a.Description = JoinDescriptions(a.Description, s.Description)
+		}
 	}
 }
 
@@ -135,18 +136,10 @@ func UpdateSourceDescription(a *ImageSetMongo, i int, description string) {
 	a.Sources[i].Description = description
 }
 
-// only checks if the base info is the same. It does not check attribution and tags
-func SourceInfoEqual(a, b SourceInfo) bool {
-	if a.Name != b.Name ||
-
-		a.Title != b.Title ||
-		a.SourceAuthor != b.SourceAuthor ||
-		a.SourceID != b.SourceID ||
-		a.AuthorID != b.AuthorID ||
-		!a.Date.Equal(b.Date) {
-		return false
-	}
-	return true
+// SameSource reports whether a and b are the same source: same Name and
+// SourceID.
+func SameSource(a, b SourceInfo) bool {
+	return a.Name == b.Name && a.SourceID == b.SourceID
 }
 
 func PrintISet(a *ImageSetMongo) {

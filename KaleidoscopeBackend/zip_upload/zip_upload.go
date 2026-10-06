@@ -186,18 +186,20 @@ func buildImageSetBundle(basePath string, key string, entries []ParsedFolderInfo
 		imageIndex := len(paths)
 		paths = append(paths, entry.Path)
 
-		//add new source entry if needed else add index to the existing source
-		containsSourceAt := false
-		for i := range set.Sources {
-			if imageset.SourceInfoEqual(source, set.Sources[i]) {
-				set.Sources[i].AttributedTo = append(set.Sources[i].AttributedTo, imageIndex)
-				containsSourceAt = true
-				break
-			}
-		}
-		if !containsSourceAt {
+		//a group is one work from one source; its files may only add details the others left empty
+		switch {
+		case len(set.Sources) == 0:
 			source.AttributedTo = []int{imageIndex}
-			set.Sources = append(set.Sources, source)
+			set.Sources = []imageset.SourceInfo{source}
+		case imageset.SameSource(source, set.Sources[0]):
+			if conflict := mergeSourceFields(&set.Sources[0], source); conflict != "" {
+				return nil, append(skipped, fmt.Sprintf("%s (%s in %s)", key, conflict, entry.Path)), errorList
+			}
+			set.Sources[0].AttributedTo = append(set.Sources[0].AttributedTo, imageIndex)
+		default:
+			//a set built from several different sources is not supported
+			return nil, append(skipped, fmt.Sprintf("%s (combines different sources: %s and %s in %s)",
+				key, sourceLabel(set.Sources[0]), sourceLabel(source), entry.Path)), errorList
 		}
 	}
 
@@ -211,25 +213,53 @@ func buildImageSetBundle(basePath string, key string, entries []ParsedFolderInfo
 			errorList = append(errorList, "Could Not read: "+entry.Path+" error: "+err.Error())
 			continue
 		}
-		i := descriptionSourceIndex(set.Sources, entry.Values)
-		if i < 0 {
-			i = 0
-			errorList = append(errorList, entry.Path+" matched no source by name and id, added to the first source")
-		}
-		set.Sources[i].Description = imageset.JoinDescriptions(set.Sources[i].Description, text)
+		//the group's only source is the one every description belongs to
+		set.Sources[0].Description = imageset.JoinDescriptions(set.Sources[0].Description, text)
 	}
 
 	imageset.DeriveFromSources(&set)
 	return &ImageSetFileBundle{Key: key, Iset: set, FilePath: paths}, skipped, errorList
 }
 
-// descriptionSourceIndex returns the first source with the same name and id
-// as a .txt file's parsed fields, or -1.
-func descriptionSourceIndex(sources []imageset.SourceInfo, values map[string]string) int {
-	owner, _ := sourceFromValues(values) // a bad date doesn't affect name/id; the images already report it
-	return slices.IndexFunc(sources, func(s imageset.SourceInfo) bool {
-		return s.Name == owner.Name && s.SourceID == owner.SourceID
-	})
+// mergeSourceFields fills dst's empty Title, Author, AuthorId and Date from
+// src. Returns a description of the first field where both are set but
+// differ, or "" when they agree.
+func mergeSourceFields(dst *imageset.SourceInfo, src imageset.SourceInfo) string {
+	textFields := []struct {
+		name string
+		dst  *string
+		src  string
+	}{
+		{"Title", &dst.Title, src.Title},
+		{"Author", &dst.SourceAuthor, src.SourceAuthor},
+		{"AuthorId", &dst.AuthorID, src.AuthorID},
+	}
+	for _, f := range textFields {
+		switch {
+		case f.src == "" || f.src == *f.dst:
+		case *f.dst == "":
+			*f.dst = f.src
+		default:
+			return fmt.Sprintf("conflicting [%s] %q vs %q", f.name, *f.dst, f.src)
+		}
+	}
+
+	switch {
+	case src.Date.IsZero() || src.Date.Equal(dst.Date):
+	case dst.Date.IsZero():
+		dst.Date = src.Date
+	default:
+		return fmt.Sprintf("conflicting [Date] %s vs %s", dst.Date.Format(time.DateOnly), src.Date.Format(time.DateOnly))
+	}
+	return ""
+}
+
+// sourceLabel names a source for messages: "pixiv/42", or just "upload" without an id.
+func sourceLabel(s imageset.SourceInfo) string {
+	if s.SourceID == "" {
+		return s.Name
+	}
+	return s.Name + "/" + s.SourceID
 }
 
 // sourceFromValues builds a source from one file's parsed fields. LastChecked

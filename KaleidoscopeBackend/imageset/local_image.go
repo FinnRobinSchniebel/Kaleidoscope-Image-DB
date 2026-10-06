@@ -207,7 +207,7 @@ func MakeFileDirectoryFromAuthor(userId string, FirstAuthorName string) (string,
 		fileAuthorName = FirstAuthorName
 
 	} else {
-		fileAuthorName = "unknown"
+		fileAuthorName = unknownAuthor
 	}
 
 	filePath := BackendVolumeLocation + "/" + userId + "/" + fileAuthorName + "/"

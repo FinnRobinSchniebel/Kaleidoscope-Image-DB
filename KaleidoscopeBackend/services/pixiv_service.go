@@ -3,6 +3,7 @@ package services
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -618,7 +619,7 @@ func imageHashesDiffer(illust *pixivmodel.Illust, set *imageset.ImageSetMongo, a
 // downloadPixivImage fetches a single Pixiv image URL into dir and returns the
 // local file path. Pixiv image servers require Referer: https://www.pixiv.net/
 // which differs from the App API host used by the library's own downloader.
-func downloadPixivImage(url, dir string) (string, error) {
+func downloadPixivImage(url, dir string) (_ string, err error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
@@ -641,9 +642,11 @@ func downloadPixivImage(url, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() {
+		err = errors.Join(err, f.Close())
+	}()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	if _, err = io.Copy(f, resp.Body); err != nil {
 		return "", err
 	}
 	return dest, nil

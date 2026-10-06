@@ -5,11 +5,8 @@ import (
 	"testing"
 )
 
-func TestDeriveFromSources(t *testing.T) {
+func TestDeriveFromSourcesNewSet(t *testing.T) {
 	set := ImageSetMongo{
-		Title:       "stale",
-		Authors:     []string{"stale"},
-		Description: "stale",
 		Sources: []SourceInfo{
 			{Title: "", SourceAuthor: "bob", Description: "one"},
 			{Title: "First", SourceAuthor: "alice"},
@@ -33,12 +30,39 @@ func TestDeriveFromSources(t *testing.T) {
 	}
 }
 
+func TestDeriveFromSourcesKeepsExistingValues(t *testing.T) {
+	set := ImageSetMongo{
+		Title:       "Mine",
+		Authors:     []string{"me"},
+		Description: "my notes",
+		Sources:     []SourceInfo{{Title: "Theirs", SourceAuthor: "alice", Description: "caption"}},
+	}
+	DeriveFromSources(&set)
+
+	if set.Title != "Mine" || set.Description != "my notes" {
+		t.Errorf("Title = %q, Description = %q; existing values were overwritten", set.Title, set.Description)
+	}
+	if !slices.Equal(set.Authors, []string{"me", "alice"}) {
+		t.Errorf("Authors = %v, want [me alice]", set.Authors)
+	}
+}
+
 func TestDeriveFromSourcesEmpty(t *testing.T) {
 	set := ImageSetMongo{Sources: []SourceInfo{{}}}
 	DeriveFromSources(&set)
 
 	if set.Title != "" || set.Authors != nil || set.Description != "" {
 		t.Errorf("got Title=%q Authors=%v Description=%q, want all empty", set.Title, set.Authors, set.Description)
+	}
+}
+
+func TestSameSource(t *testing.T) {
+	a := SourceInfo{Name: "pixiv", SourceID: "42", Title: "A", SourceAuthor: "x"}
+	if !SameSource(a, SourceInfo{Name: "pixiv", SourceID: "42", Title: "B"}) {
+		t.Error("same name and id with a different title should be the same source")
+	}
+	if SameSource(a, SourceInfo{Name: "pixiv", SourceID: "43"}) || SameSource(a, SourceInfo{Name: "upload", SourceID: "42"}) {
+		t.Error("a different name or id should be a different source")
 	}
 }
 

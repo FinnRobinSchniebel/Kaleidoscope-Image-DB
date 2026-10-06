@@ -3,31 +3,17 @@ package imageset
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// ApplySourceMetadataUpdate updates Sources[index]'s title, description and tags from
-// newSrc and saves them. The set's own Title only follows a non-empty new source title,
-// and only if it still matched the old one, so a user's custom title is never
-// overwritten. Callers must confirm the source's images are unchanged first; images
-// are never touched here.
+// ApplySourceMetadataUpdate updates Sources[index]'s metadata and tags from newSrc
+// and saves them (see applySourceMetadata for which fields and when). Callers must
+// confirm the source's images are unchanged first; images are never touched here.
 func ApplySourceMetadataUpdate(ISet *ImageSetMongo, index int, newSrc SourceInfo, checkedAt time.Time, userId string) error {
-	old := ISet.Sources[index]
-	fields := bson.M{}
-
-	if newSrc.Title != old.Title {
-		if ISet.Title == old.Title && newSrc.Title != "" {
-			ISet.Title = newSrc.Title
-			fields["title"] = ISet.Title
-		}
-		ISet.Sources[index].Title = newSrc.Title
-	}
-
-	if newSrc.Description != old.Description {
-		UpdateSourceDescription(ISet, index, newSrc.Description)
-	}
+	fields := applySourceMetadata(ISet, index, newSrc)
 
 	// Must precede ProcessSourceTags: its system-tag recompute reads SourceMissing.
 	ISet.Sources[index].Date = newSrc.Date
@@ -43,6 +29,68 @@ func ApplySourceMetadataUpdate(ISet *ImageSetMongo, index int, newSrc SourceInfo
 	fields[fmt.Sprintf("sources.%d", index)] = ISet.Sources[index]
 	maps.Copy(fields, tagFields(ISet))
 	return updateSourceFields(ISet, index, fields)
+}
+
+// applySourceMetadata copies newSrc's non-empty title, description, author and
+// author id onto set.Sources[index]; an empty value never overwrites. The set's
+// own Title and Authors follow only while they still carry the old source value,
+// so a user's edits are kept, and the set's Description is never touched.
+// Returns the set-level fields it changed.
+func applySourceMetadata(set *ImageSetMongo, index int, newSrc SourceInfo) bson.M {
+	old := set.Sources[index]
+	src := &set.Sources[index]
+	fields := bson.M{}
+
+	if newSrc.Title != "" && newSrc.Title != old.Title {
+		if set.Title == old.Title {
+			set.Title = newSrc.Title
+			fields["title"] = set.Title
+		}
+		src.Title = newSrc.Title
+	}
+	if newSrc.Description != "" && newSrc.Description != old.Description {
+		UpdateSourceDescription(set, index, newSrc.Description)
+	}
+	if newSrc.SourceAuthor != "" && newSrc.SourceAuthor != old.SourceAuthor {
+		if followAuthor(set, old.SourceAuthor, newSrc.SourceAuthor) {
+			fields["authors"] = set.Authors
+		}
+		src.SourceAuthor = newSrc.SourceAuthor
+	}
+	if newSrc.AuthorID != "" {
+		src.AuthorID = newSrc.AuthorID
+	}
+	return fields
+}
+
+// followAuthor moves set.Authors from a source's old author name to newName:
+// in place while the list still has oldName (just removing oldName if newName
+// is already listed), or, when the source had no author, by adding newName
+// (replacing a lone unknownAuthor placeholder). A list that no longer has
+// oldName was edited and is left alone. Reports whether it changed.
+func followAuthor(set *ImageSetMongo, oldName, newName string) bool {
+	if slices.Contains(set.Authors, newName) {
+		i := slices.Index(set.Authors, oldName)
+		if oldName == "" || i < 0 {
+			return false
+		}
+		set.Authors = slices.Delete(set.Authors, i, i+1)
+		return true
+	}
+	if oldName == "" {
+		if len(set.Authors) == 1 && set.Authors[0] == unknownAuthor {
+			set.Authors[0] = newName
+		} else {
+			set.Authors = append(set.Authors, newName)
+		}
+		return true
+	}
+	i := slices.Index(set.Authors, oldName)
+	if i < 0 {
+		return false
+	}
+	set.Authors[i] = newName
+	return true
 }
 
 // MarkSourcePendingImageChange records that Sources[index]'s images no longer match
