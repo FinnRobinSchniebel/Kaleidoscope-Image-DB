@@ -175,6 +175,12 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 		}
 	}()
 
+	imageSet.DateAdded = time.Now()
+	for idx := range imageSet.Sources {
+		imageSet.Sources[idx].LastImageUpdate = imageSet.DateAdded
+		imageSet.Sources[idx].LastAppliedUpdate = imageSet.DateAdded
+	}
+
 	// Cleared up front so imageSet only ever holds tags ProcessSourceTags has recorded.
 	fetched := make([][]SourceTag, len(imageSet.Sources))
 	for idx := range imageSet.Sources {
@@ -251,7 +257,6 @@ func AddImageSet(imageSet *ImageSetMongo, media []MediaSource, userId string) (C
 
 	log.Print("Files Uploaded")
 
-	imageSet.DateAdded = time.Now()
 	if _, err := Collection.InsertOne(context.Background(), imageSet); err != nil {
 		return nil, "", fmt.Errorf("inserting image set: %w", err)
 	}

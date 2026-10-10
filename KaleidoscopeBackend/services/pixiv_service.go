@@ -2,6 +2,7 @@ package services
 
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 
 	pixiv "github.com/ryohidaka/go-pixiv"
 	pixivmodel "github.com/ryohidaka/go-pixiv/models/appmodel"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // PixivSession holds active API clients for a user.
@@ -65,16 +67,19 @@ func openPixivSession(userId string) (*PixivSession, error) {
 	var session *PixivSession
 	err := DefaultScheduler.WithUserLock(pixivServiceName, userId, func() error {
 		creds, err := GetServiceCredentials(userId, pixivServiceName)
+		if errors.Is(err, ErrServiceNotConnected) {
+			return fmt.Errorf("%w: %w", notification.ErrServiceSignIn, err)
+		}
 		if err != nil {
-			return fmt.Errorf("pixiv credentials not found: %w", err)
+			return fmt.Errorf("reading pixiv credentials: %w", err)
 		}
 		if creds.Key1 == "" {
-			return fmt.Errorf("pixiv requires an APP refresh token (Key1)")
+			return fmt.Errorf("%w: pixiv requires an APP refresh token (Key1)", notification.ErrServiceSignIn)
 		}
 
 		app, err := newPixivApp(creds.Key1)
 		if err != nil {
-			return fmt.Errorf("pixiv APP API: %w", err)
+			return fmt.Errorf("%w: pixiv APP API: %w", notification.ErrServiceSignIn, err)
 		}
 
 		session = &PixivSession{App: app}
@@ -135,7 +140,7 @@ func (p *PixivProvider) OnCredentialsRemoved(userId string) {
 	InvalidatePixivSession(userId)
 }
 
-func (p *PixivProvider) Sync(userId string, done func()) error {
+func (p *PixivProvider) Sync(userId string, done func(error)) error {
 	return SyncPixivBookmarks(userId, done)
 }
 
@@ -144,57 +149,62 @@ func (p *PixivProvider) Sync(userId string, done func()) error {
 // SyncPixivBookmarks starts a bookmark sync by enqueuing the first page task
 // into the scheduler. Subsequent pages are chained automatically, one task per
 // scheduler turn, queued behind the previous page's new-item save tasks.
-// Only calls Done when the sync fails before starting.
+// Only calls done itself when the sync fails before starting.
 // Return does not mean the sync has finished, chained tasks must call done on fail or finish.
 // Prerequisites: Key1 = refresh token, UserName = numeric Pixiv UID.
-func SyncPixivBookmarks(userId string, done func()) error {
+func SyncPixivBookmarks(userId string, done func(error)) (err error) {
+	defer func() {
+		if err != nil {
+			done(err)
+		}
+	}()
+
 	sess, err := GetPixivSession(userId)
 	if err != nil {
-		done()
 		return err
 	}
 	if sess.App == nil {
-		done()
-		return fmt.Errorf("pixiv bookmark sync requires App API (store a refresh token in Key1)")
+		return fmt.Errorf("%w: pixiv bookmark sync requires App API (store a refresh token in Key1)", notification.ErrServiceSignIn)
 	}
 
 	creds, err := GetServiceCredentials(userId, pixivServiceName)
+	if errors.Is(err, ErrServiceNotConnected) {
+		return fmt.Errorf("%w: %w", notification.ErrServiceSignIn, err)
+	}
 	if err != nil {
-		done()
 		return err
 	}
 	if creds.UserName == "" {
-		done()
-		return fmt.Errorf("pixiv user ID not set – store your numeric Pixiv UID in the UserName field")
+		return fmt.Errorf("%w: pixiv user ID not set – store your numeric Pixiv UID in the UserName field", notification.ErrServiceSettings)
 	}
 	pixivUID, err := strconv.ParseUint(creds.UserName, 10, 64)
 	if err != nil {
-		done()
-		return fmt.Errorf("invalid pixiv UID %q: %w", creds.UserName, err)
+		return fmt.Errorf("%w: invalid pixiv UID %q: %w", notification.ErrServiceSettings, creds.UserName, err)
 	}
 
 	if err := enqueueBookmarkPage(userId, pixivUID, pixiv.Public, 0, done); err != nil {
-		done()
-		return err
+		return fmt.Errorf("%w: %w", notification.ErrSyncStopped, err)
 	}
 	return nil
 }
 
 // enqueueBookmarkPage adds a single bookmark-page task to the scheduler.
 // maxBookmarkID == 0  is  first page
-func enqueueBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int, done func()) error {
-	return DefaultScheduler.Enqueue(pixivServiceName, userId, func() error {
-		return processBookmarkPage(userId, pixivUID, restrict, maxBookmarkID, done)
+func enqueueBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int, done func(error)) error {
+	return DefaultScheduler.Enqueue(pixivServiceName, userId, func() ([]notification.ItemResult, error) {
+		return processBookmarkPage(userId, pixivUID, restrict, maxBookmarkID, done), nil
 	})
 }
 
 // processBookmarkPage fetches one page of bookmarks, processes its items, then
 // enqueues the next page task. Public pages are followed by private pages.
-func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int, done func()) error {
+// Returns the page's item results; new items report from their own save task.
+// A failure is handed to done rather than returned, so it's logged only once.
+func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int, done func(error)) []notification.ItemResult {
 	sess, err := GetPixivSession(userId)
 	if err != nil {
-		finishPixivSync(userId, done)
-		return fmt.Errorf("pixiv session: %w", err)
+		finishPixivSync(userId, done, fmt.Errorf("pixiv session: %w", err))
+		return nil
 	}
 
 	opts := pixiv.UserBookmarksIllustOptions{Restrict: &restrict}
@@ -204,12 +214,13 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 
 	illusts, next, err := sess.App.UserBookmarksIllust(pixivUID, opts)
 	if err != nil {
-		finishPixivSync(userId, done)
-		return fmt.Errorf("UserBookmarksIllust (restrict=%s after=%d): %w", restrict, maxBookmarkID, err)
+		finishPixivSync(userId, done, fmt.Errorf("%w: UserBookmarksIllust (restrict=%s after=%d): %w", notification.ErrServiceRequest, restrict, maxBookmarkID, err))
+		return nil
 	}
 
+	var results []notification.ItemResult
 	if len(illusts) > 0 {
-		processBookmarkItems(userId, illusts, restrict == pixiv.Private)
+		results = processBookmarkItems(userId, illusts, restrict == pixiv.Private)
 	}
 
 	// Chain to the next page, or move from public to private, or finish.
@@ -221,19 +232,19 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 		nextErr = enqueueBookmarkPage(userId, pixivUID, pixiv.Private, 0, done)
 	} else {
 		log.Printf("pixiv sync [%s]: bookmark pages done, finishing queued saves", userId)
-		finishPixivSync(userId, done)
+		finishPixivSync(userId, done, nil)
 	}
 
 	if nextErr != nil {
-		finishPixivSync(userId, done)
-		return nextErr
+		finishPixivSync(userId, done, fmt.Errorf("%w: %w", notification.ErrSyncStopped, nextErr))
 	}
-	return nil
+	return results
 }
 
 // processBookmarkItems uses the page's DB snapshot only to decide what to do;
-// every write re-reads its set first.
-func processBookmarkItems(userId string, illusts []pixivmodel.Illust, isPrivate bool) {
+// every write re-reads its set first. Returns one result per item, except new
+// items that were queued: their save task reports them.
+func processBookmarkItems(userId string, illusts []pixivmodel.Illust, isPrivate bool) []notification.ItemResult {
 	sourceIDs := make([]string, len(illusts))
 	for i, il := range illusts {
 		sourceIDs[i] = strconv.FormatUint(il.ID, 10)
@@ -242,45 +253,59 @@ func processBookmarkItems(userId string, illusts []pixivmodel.Illust, isPrivate 
 	existing, err := imageset.GetImageSetsBySourceIDs(userId, pixivServiceName, sourceIDs)
 	if err != nil {
 		// Can't tell new from existing, so skip rather than re-import duplicates.
-		log.Printf("pixiv sync [%s]: DB lookup failed, skipping page: %v", userId, err)
-		return
+		err = fmt.Errorf("%w: looking up stored sets: %w", notification.ErrLibraryAccess, err)
+		results := make([]notification.ItemResult, len(sourceIDs))
+		for i, id := range sourceIDs {
+			results[i] = notification.FailedItem(userId, id, bson.NilObjectID, err)
+		}
+		return results
 	}
 
+	results := make([]notification.ItemResult, 0, len(illusts))
 	for _, il := range illusts {
 		idStr := strconv.FormatUint(il.ID, 10)
 		set, exists := existing[idStr]
 
 		// Must stay first: placeholder entries look changed to every later check.
 		if !il.Visible {
-			if exists && illustRemoved(il) {
-				markPixivSourceMissing(userId, il.ID)
+			switch {
+			case !illustRemoved(il):
+				results = append(results, notification.ItemResult{Kind: notification.ItemSkipped, Ref: idStr, Reason: "hidden by the account's filter"})
+			case exists:
+				results = append(results, markPixivSourceMissing(userId, il.ID))
+			default:
+				results = append(results, notification.ItemResult{Kind: notification.ItemSkipped, Ref: idStr, Reason: "removed at source"})
 			}
 			continue
 		}
 
 		if !exists {
-			enqueueNewIllust(userId, il, isPrivate)
+			if err := enqueueNewIllust(userId, il, isPrivate); err != nil {
+				err = fmt.Errorf("%w: queueing the download: %w", notification.ErrSyncStopped, err)
+				results = append(results, notification.FailedItem(userId, idStr, bson.NilObjectID, err))
+			}
 			continue
 		}
 
 		src, idx := sourceByID(set, idStr)
-		if idx >= 0 && pixivSourceStale(il, src, isPrivate) {
-			if err := applyPixivSourceUpdate(userId, &il, isPrivate); err != nil {
-				log.Printf("pixiv sync [%s]: updating illust %d: %v", userId, il.ID, err)
-			}
+		if idx < 0 || !pixivSourceStale(il, src, isPrivate) {
+			results = append(results, notification.ItemResult{Kind: notification.ItemUnchanged, Ref: idStr})
+			continue
 		}
+		results = append(results, applyPixivSourceUpdate(userId, &il, isPrivate))
 	}
+	return results
 }
 
-// finishPixivSync queues done behind the user's pending save tasks, or calls
-// it directly if queueing fails.
-func finishPixivSync(userId string, done func()) {
-	if err := DefaultScheduler.Enqueue(pixivServiceName, userId, func() error {
-		log.Printf("pixiv sync [%s]: bookmark sync complete", userId)
-		done()
-		return nil
-	}); err != nil {
-		done()
+// finishPixivSync queues done(err) behind the user's pending save tasks, or
+// calls it directly, with the queueing error added, if queueing fails.
+func finishPixivSync(userId string, done func(error), err error) {
+	if queueErr := DefaultScheduler.Enqueue(pixivServiceName, userId, func() ([]notification.ItemResult, error) {
+		log.Printf("pixiv sync [%s]: bookmark sync ended", userId)
+		done(err)
+		return nil, nil
+	}); queueErr != nil {
+		done(errors.Join(err, fmt.Errorf("%w: %w", notification.ErrSyncStopped, queueErr)))
 	}
 }
 
@@ -290,7 +315,7 @@ func finishPixivSync(userId string, done func()) {
 func pixivSourceStale(il pixivmodel.Illust, src imageset.SourceInfo, isPrivate bool) bool {
 	return src.LastChecked.IsZero() ||
 		src.SourceMissing ||
-		!il.CreateDate.Equal(src.Date) ||
+		!imageset.SourceDateMatches(src.Date, il.CreateDate) ||
 		tagsChanged(src.Tags, pixivIllustTags(&il, isPrivate))
 }
 
@@ -316,70 +341,84 @@ func sourceByID(set *imageset.ImageSetMongo, sourceID string) (src imageset.Sour
 // ----- Per-illust work ----
 
 // enqueueNewIllust is queued rather than run inline because it downloads images.
-func enqueueNewIllust(userId string, illust pixivmodel.Illust, isPrivate bool) {
-	if err := DefaultScheduler.Enqueue(pixivServiceName, userId, func() error {
-		return savePixivIllust(userId, &illust, isPrivate)
-	}); err != nil {
-		log.Printf("pixiv: failed to enqueue illust %d: %v", illust.ID, err)
-	}
+// Its task reports the illust as added or failed.
+func enqueueNewIllust(userId string, illust pixivmodel.Illust, isPrivate bool) error {
+	ref := strconv.FormatUint(illust.ID, 10)
+	return DefaultScheduler.Enqueue(pixivServiceName, userId, func() ([]notification.ItemResult, error) {
+		setID, err := savePixivIllust(userId, &illust, isPrivate)
+		if err != nil {
+			return []notification.ItemResult{notification.FailedItem(userId, ref, bson.NilObjectID, err)}, nil
+		}
+		return []notification.ItemResult{{Kind: notification.ItemAdded, Ref: ref, SetID: setID}}, nil
+	})
 }
 
 // markPixivSourceMissing re-reads the set right before writing, to keep the
-// window for overwriting a concurrent edit small.
-func markPixivSourceMissing(userId string, illustID uint64) {
+// window for overwriting a concurrent edit small. Only a source that wasn't
+// missing yet is reported as missing.
+func markPixivSourceMissing(userId string, illustID uint64) notification.ItemResult {
 	sourceID := strconv.FormatUint(illustID, 10)
 	set, ok, err := imageset.GetImageSetBySourceID(userId, pixivServiceName, sourceID)
-	if err != nil || !ok {
-		log.Printf("pixiv sync [%s]: looking up removed illust %d: ok=%t err=%v", userId, illustID, ok, err)
-		return
+	if err != nil {
+		return notification.FailedItem(userId, sourceID, bson.NilObjectID, fmt.Errorf("%w: looking up removed illust: %w", notification.ErrLibraryAccess, err))
 	}
-	if _, idx := sourceByID(set, sourceID); idx >= 0 {
-		if err := imageset.MarkSourceMissing(set, idx, time.Now()); err != nil {
-			log.Printf("pixiv sync [%s]: marking illust %d missing: %v", userId, illustID, err)
-		}
+	if !ok {
+		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "removed at source"}
+	}
+	_, idx := sourceByID(set, sourceID)
+	if idx < 0 {
+		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: sourceID}
+	}
+
+	newlyMissing, err := imageset.MarkSourceMissing(set, idx, time.Now())
+	switch {
+	case err != nil:
+		return notification.FailedItem(userId, sourceID, set.ID, fmt.Errorf("%w: marking missing: %w", notification.ErrLibraryAccess, err))
+	case newlyMissing:
+		return notification.ItemResult{Kind: notification.ItemMissing, Ref: sourceID, SetID: set.ID}
+	default:
+		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: sourceID}
 	}
 }
 
-// tagsChanged compares by normalized Default text only; EN/translation
-// differences don't count as a change.
+// tagsChanged reports whether want has a tag missing from have, compared by
+// normalized Default text only. Stored tags are add-only, so a tag the source
+// dropped isn't a change.
 func tagsChanged(have, want []imageset.SourceTag) bool {
 	haveSet := make(map[string]struct{}, len(have))
 	for _, t := range have {
 		haveSet[imageset.NormalizeTagText(t.Default)] = struct{}{}
 	}
-	wantSet := make(map[string]struct{}, len(want))
 	for _, t := range want {
-		key := imageset.NormalizeTagText(t.Default)
-		wantSet[key] = struct{}{}
-		if _, ok := haveSet[key]; !ok {
+		if _, ok := haveSet[imageset.NormalizeTagText(t.Default)]; !ok {
 			return true
 		}
 	}
-	return len(haveSet) != len(wantSet)
+	return false
 }
 
 // savePixivIllust must run serially (as a scheduler task): AddImageSet's
-// duplicate-hash check relies on it.
-func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) error {
+// duplicate-hash check relies on it. Returns the new set's ID.
+func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) (bson.ObjectID, error) {
 	illustID := illust.ID
 
 	// Download all pages to a temporary directory, then pass them to AddImageSet.
 	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("pixiv_%d_*", illustID))
 	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
+		return bson.NilObjectID, fmt.Errorf("%w: create temp dir: %w", notification.ErrSaveFailed, err)
 	}
 	defer os.RemoveAll(tmpDir)
 
 	urls := illustImageURLs(illust)
 	if len(urls) == 0 {
-		return fmt.Errorf("illust %d: no downloadable image URLs", illustID)
+		return bson.NilObjectID, fmt.Errorf("%w: illust %d: no downloadable image URLs", notification.ErrDownloadFailed, illustID)
 	}
 
 	media := make([]imageset.MediaSource, 0, len(urls))
 	for _, url := range urls {
 		path, err := downloadPixivImage(url, tmpDir)
 		if err != nil {
-			return fmt.Errorf("download %s: %w", url, err)
+			return bson.NilObjectID, fmt.Errorf("%w: download %s: %w", notification.ErrDownloadFailed, url, err)
 		}
 		media = append(media, imageset.DiskSource{Path: path})
 	}
@@ -387,11 +426,11 @@ func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) e
 	iset := buildPixivImageSet(illust, userId, isPrivate)
 	_, _, err = imageset.AddImageSet(iset, media, userId)
 	if err != nil {
-		return fmt.Errorf("AddImageSet for illust %d: %w", illustID, err)
+		return bson.NilObjectID, fmt.Errorf("%w: AddImageSet for illust %d: %w", notification.ErrSaveFailed, illustID, err)
 	}
 
 	log.Printf("pixiv: saved illust %d (%q)", illustID, illust.Title)
-	return nil
+	return iset.ID, nil
 }
 
 // illustImageURLs returns the original-resolution download URLs for every page
@@ -457,17 +496,16 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string, isPrivate bool
 	}
 
 	src := imageset.SourceInfo{
-		Name:            pixivServiceName,
-		SourceID:        strconv.FormatUint(illust.ID, 10),
-		Title:           illust.Title,
-		Description:     pixivIllustCaption(illust),
-		SourceAuthor:    illust.User.Name,
-		AuthorID:        strconv.FormatUint(illust.User.ID, 10),
-		Tags:            pixivIllustTags(illust, isPrivate),
-		Date:            illust.CreateDate,
-		AttributedTo:    attributed,
-		LastChecked:     time.Now(),
-		LastImageUpdate: illust.CreateDate,
+		Name:         pixivServiceName,
+		SourceID:     strconv.FormatUint(illust.ID, 10),
+		Title:        illust.Title,
+		Description:  pixivIllustCaption(illust),
+		SourceAuthor: illust.User.Name,
+		AuthorID:     strconv.FormatUint(illust.User.ID, 10),
+		Tags:         pixivIllustTags(illust, isPrivate),
+		Date:         illust.CreateDate,
+		AttributedTo: attributed,
+		LastChecked:  time.Now(),
 	}
 
 	set := &imageset.ImageSetMongo{
@@ -524,19 +562,20 @@ func pixivSourceInfo(illust *pixivmodel.Illust, old imageset.SourceInfo, isPriva
 
 // applyPixivSourceUpdate applies illust's metadata to its stored set,
 // re-reading the set right before writing to keep the window for overwriting
-// a concurrent edit small.
-func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust, isPrivate bool) error {
+// a concurrent edit small. A re-apply of identical values reports unchanged, and
+// a set the user changed since the page was read is skipped.
+func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust, isPrivate bool) notification.ItemResult {
 	sourceID := strconv.FormatUint(illust.ID, 10)
 	set, ok, err := imageset.GetImageSetBySourceID(userId, pixivServiceName, sourceID)
 	if err != nil {
-		return fmt.Errorf("look up existing set for illust %d: %w", illust.ID, err)
+		return notification.FailedItem(userId, sourceID, bson.NilObjectID, fmt.Errorf("%w: looking up the stored set: %w", notification.ErrLibraryAccess, err))
 	}
 	if !ok {
-		return fmt.Errorf("illust %d: flagged as changed but no existing set found", illust.ID)
+		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "the set changed during the sync"}
 	}
 	_, idx := sourceByID(set, sourceID)
 	if idx < 0 {
-		return fmt.Errorf("illust %d: source vanished from its own set between sync passes", illust.ID)
+		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, SetID: set.ID, Reason: "the set changed during the sync"}
 	}
 
 	// Re-enabling this downloads images, so the CreateDate-changed case must
@@ -553,11 +592,15 @@ func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust, isPrivate 
 	// }
 
 	newSrc := pixivSourceInfo(illust, set.Sources[idx], isPrivate)
-	if err := imageset.ApplySourceMetadataUpdate(set, idx, newSrc, checkedAt, userId); err != nil {
-		return fmt.Errorf("applying metadata update for illust %d: %w", illust.ID, err)
+	changed, err := imageset.ApplySourceMetadataUpdate(set, idx, newSrc, checkedAt, userId)
+	if err != nil {
+		return notification.FailedItem(userId, sourceID, set.ID, fmt.Errorf("%w: applying metadata update: %w", notification.ErrLibraryAccess, err))
+	}
+	if !changed {
+		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: sourceID}
 	}
 	log.Printf("pixiv: updated illust %d (%q)", illust.ID, illust.Title)
-	return nil
+	return notification.ItemResult{Kind: notification.ItemUpdated, Ref: sourceID, SetID: set.ID}
 }
 
 // imagesChanged reports whether illust's images likely differ from what's stored

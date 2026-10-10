@@ -2,6 +2,7 @@ package zipupload
 
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"fmt"
 	"image"
 	"log"
@@ -22,9 +23,6 @@ type ImageSetFileBundle struct {
 	Iset     imageset.ImageSetMongo
 	FilePath []string
 }
-
-// uploadSourceName names the source of files that don't say where they came from.
-const uploadSourceName = "upload"
 
 func ProcessZip(fileHeader *multipart.FileHeader, ruleLayers []string, fileLayer string, groupingIndex int, user string) (status int, collisions map[int][]imageset.CollisionResponsePair, skipped []string, errors []string, err error) {
 
@@ -85,15 +83,22 @@ func ProcessZip(fileHeader *multipart.FileHeader, ruleLayers []string, fileLayer
 		return fiber.StatusBadRequest, nil, nil, nil, fmt.Errorf("failed to parse files: %s", err.Error())
 	}
 
-	ISets, skipped, errors, err := createImageSetsFromParsedZipData(folderPathName, cont)
-	skipped = append(skippedFiles, skipped...)
+	ISets, skippedGroups, errors, err := createImageSetsFromParsedZipData(folderPathName, cont)
+	skips := append(skippedFiles, skippedGroups...)
+	for _, s := range skips {
+		skipped = append(skipped, skipMessage(s))
+	}
+
+	report := notification.NewImportReport(filepath.Base(fileHeader.Filename))
+	report.Record(skips...)
+	report.Notes = errors
 
 	//log.Print(cont, err)
 	log.Print("Sets Print: ")
 
 	delegatedCleanup = true
 
-	go SaveImageSets(folderPathName, unzipTempDir, ISets, user)
+	go SaveImageSets(folderPathName, unzipTempDir, ISets, user, report)
 
 	//cleanup
 	//err = RemoveTempZip(pathName)
@@ -131,9 +136,9 @@ func RemoveTempZip(filePath string) error {
 //takes in only the parsed Map
 // Returns the image sets created from the maps, the skipped items list, the error List, and an error if fatal error occurs
 
-func createImageSetsFromParsedZipData(BaseFolderPath string, parsedDataMap map[string][]ParsedFolderInfo) ([]ImageSetFileBundle, []string, []string, error) {
+func createImageSetsFromParsedZipData(BaseFolderPath string, parsedDataMap map[string][]ParsedFolderInfo) ([]ImageSetFileBundle, []notification.ItemResult, []string, error) {
 
-	var skippedList []string
+	var skippedList []notification.ItemResult
 	var errorList []string
 	var result []ImageSetFileBundle
 
@@ -152,8 +157,8 @@ func createImageSetsFromParsedZipData(BaseFolderPath string, parsedDataMap map[s
 // buildImageSetBundle turns one group's files into an image set whose parsed
 // fields belong to its sources. A nil bundle means the whole group was skipped:
 // a work is never imported with pieces missing.
-func buildImageSetBundle(basePath string, key string, entries []ParsedFolderInfo) (*ImageSetFileBundle, []string, []string) {
-	var skipped []string
+func buildImageSetBundle(basePath string, key string, entries []ParsedFolderInfo) (*ImageSetFileBundle, []notification.ItemResult, []string) {
+	var skipped []notification.ItemResult
 	var errorList []string
 	var set imageset.ImageSetMongo
 	var paths []string
@@ -161,7 +166,7 @@ func buildImageSetBundle(basePath string, key string, entries []ParsedFolderInfo
 
 	for _, entry := range entries {
 		if entry.Conflict != "" {
-			return nil, append(skipped, fmt.Sprintf("%s (%s in %s)", key, entry.Conflict, entry.Path)), errorList
+			return nil, append(skipped, notification.ItemResult{Kind: notification.ItemSkipped, Ref: key, Reason: fmt.Sprintf("%s in %s", entry.Conflict, entry.Path)}), errorList
 		}
 
 		if entry.FileType == ".txt" {
@@ -170,11 +175,11 @@ func buildImageSetBundle(basePath string, key string, entries []ParsedFolderInfo
 		}
 
 		if !IsValidImageExtension(entry.FileType) {
-			skipped = append(skipped, entry.Path+" (not an image)")
+			skipped = append(skipped, notification.ItemResult{Kind: notification.ItemSkipped, Ref: entry.Path, Reason: "not an image"})
 			continue
 		}
 		if err := probeImage(filepath.Join(basePath, entry.Path)); err != nil {
-			return nil, append(skipped, fmt.Sprintf("%s (unreadable image %s)", key, entry.Path)), errorList
+			return nil, append(skipped, notification.ItemResult{Kind: notification.ItemSkipped, Ref: key, Reason: "unreadable image " + entry.Path}), errorList
 		}
 
 		source, err := sourceFromValues(entry.Values)
@@ -193,24 +198,25 @@ func buildImageSetBundle(basePath string, key string, entries []ParsedFolderInfo
 			set.Sources = []imageset.SourceInfo{source}
 		case imageset.SameSource(source, set.Sources[0]):
 			if conflict := mergeSourceFields(&set.Sources[0], source); conflict != "" {
-				return nil, append(skipped, fmt.Sprintf("%s (%s in %s)", key, conflict, entry.Path)), errorList
+
+				return nil, append(skipped, notification.ItemResult{Kind: notification.ItemSkipped, Ref: key, Reason: fmt.Sprintf("%s in %s", conflict, entry.Path)}), errorList
 			}
 			set.Sources[0].AttributedTo = append(set.Sources[0].AttributedTo, imageIndex)
 		default:
 			//a set built from several different sources is not supported
-			return nil, append(skipped, fmt.Sprintf("%s (combines different sources: %s and %s in %s)",
-				key, sourceLabel(set.Sources[0]), sourceLabel(source), entry.Path)), errorList
+			return nil, append(skipped, notification.ItemResult{Kind: notification.ItemSkipped, Ref: key, Reason: fmt.Sprintf("combines different sources: %s and %s in %s", sourceLabel(set.Sources[0]), sourceLabel(source), entry.Path)}), errorList
 		}
 	}
 
 	if len(paths) == 0 {
-		return nil, append(skipped, key+" (no images)"), errorList
+		return nil, append(skipped, notification.ItemResult{Kind: notification.ItemSkipped, Ref: key, Reason: "no images"}), errorList
 	}
 
 	for _, entry := range descriptions {
 		text, err := readTxtAsDescription(basePath, entry.Path)
 		if err != nil {
-			errorList = append(errorList, "Could Not read: "+entry.Path+" error: "+err.Error())
+			log.Printf("zip import: reading %s: %v", entry.Path, err)
+			errorList = append(errorList, "couldn't read "+entry.Path)
 			continue
 		}
 		//the group's only source is the one every description belongs to
@@ -254,6 +260,11 @@ func mergeSourceFields(dst *imageset.SourceInfo, src imageset.SourceInfo) string
 	return ""
 }
 
+// skipMessage formats a skip for the upload response as "ref (reason)".
+func skipMessage(r notification.ItemResult) string {
+	return fmt.Sprintf("%s (%s)", r.Ref, r.Reason)
+}
+
 // sourceLabel names a source for messages: "pixiv/42", or just "upload" without an id.
 func sourceLabel(s imageset.SourceInfo) string {
 	if s.SourceID == "" {
@@ -266,21 +277,18 @@ func sourceLabel(s imageset.SourceInfo) string {
 // is left zero so a matching service sync still fills in missing metadata.
 func sourceFromValues(values map[string]string) (imageset.SourceInfo, error) {
 	source := imageset.SourceInfo{
-		Name:         values["Source"],
+		Name:         imageset.NormalizeSourceName(values["Source"]),
 		SourceID:     values["ID"],
 		AuthorID:     values["AuthorId"],
 		Title:        values["Title"],
 		SourceAuthor: values["Author"],
-	}
-	if source.Name == "" {
-		source.Name = uploadSourceName
 	}
 
 	//add Date to data set (accepts format with - and _)
 	if date := values["Date"]; date != "" {
 		parsed, err := dateParse(date)
 		if err != nil {
-			return source, fmt.Errorf("could not parse date %q: %w", date, err)
+			return source, fmt.Errorf("couldn't read [Date] %q (expected MM-DD-YYYY)", date)
 		}
 		source.Date = parsed
 	}
@@ -302,7 +310,11 @@ func dateParse(Date string) (time.Time, error) {
 	Date = strings.ReplaceAll(Date, "+", "") // in case they left it in
 	Date = strings.ReplaceAll(Date, "_", "-")
 	Date = strings.ReplaceAll(Date, "/", "-")
-	return time.Parse("01-02-2006", Date)
+	parsed, err := time.Parse("01-02-2006", Date)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return imageset.DayOnlyDate(parsed), nil
 }
 
 func IsValidImageExtension(filename string) bool {

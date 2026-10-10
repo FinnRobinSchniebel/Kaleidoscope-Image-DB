@@ -3,6 +3,8 @@ package imageset
 import (
 	"slices"
 	"testing"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestDeriveFromSourcesNewSet(t *testing.T) {
@@ -12,6 +14,7 @@ func TestDeriveFromSourcesNewSet(t *testing.T) {
 			{Title: "First", SourceAuthor: "alice"},
 			{Title: "Second", SourceAuthor: "bob", Description: "two"},
 			{Title: "Third", SourceAuthor: ""},
+			{Title: "Fourth", SourceAuthor: unknownAuthor},
 		},
 	}
 	DeriveFromSources(&set)
@@ -42,8 +45,8 @@ func TestDeriveFromSourcesKeepsExistingValues(t *testing.T) {
 	if set.Title != "Mine" || set.Description != "my notes" {
 		t.Errorf("Title = %q, Description = %q; existing values were overwritten", set.Title, set.Description)
 	}
-	if !slices.Equal(set.Authors, []string{"me", "alice"}) {
-		t.Errorf("Authors = %v, want [me alice]", set.Authors)
+	if !slices.Equal(set.Authors, []string{"alice"}) {
+		t.Errorf("Authors = %v, want [alice]: Authors come only from sources", set.Authors)
 	}
 }
 
@@ -51,8 +54,41 @@ func TestDeriveFromSourcesEmpty(t *testing.T) {
 	set := ImageSetMongo{Sources: []SourceInfo{{}}}
 	DeriveFromSources(&set)
 
-	if set.Title != "" || set.Authors != nil || set.Description != "" {
-		t.Errorf("got Title=%q Authors=%v Description=%q, want all empty", set.Title, set.Authors, set.Description)
+	if set.Title != "" || set.Description != "" {
+		t.Errorf("got Title=%q Description=%q, want both empty", set.Title, set.Description)
+	}
+	if !slices.Equal(set.Authors, []string{unknownAuthor}) {
+		t.Errorf("Authors = %v, want the unknown placeholder", set.Authors)
+	}
+}
+
+func TestNormalizeSourceNameDefaultsEmpty(t *testing.T) {
+	for _, name := range []string{"", "   "} {
+		if got := NormalizeSourceName(name); got != UploadSourceName {
+			t.Errorf("NormalizeSourceName(%q) = %q, want %q", name, got, UploadSourceName)
+		}
+	}
+}
+
+func TestSourceInfoReadsOldDocuments(t *testing.T) {
+	old, err := bson.Marshal(bson.M{"name": "pixiv", "source_id": "42", "pending_image_change": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var src SourceInfo
+	if err := bson.Unmarshal(old, &src); err != nil {
+		t.Fatal(err)
+	}
+	if src.ImageChangeState != ImageChangeNone || !src.LastAppliedUpdate.IsZero() {
+		t.Errorf("old document decoded to state %q, LastAppliedUpdate %v; want none and zero", src.ImageChangeState, src.LastAppliedUpdate)
+	}
+
+	encoded, err := bson.Marshal(SourceInfo{Name: "pixiv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bson.Raw(encoded).LookupErr("image_change_state"); err == nil {
+		t.Error("the none state was stored instead of left out")
 	}
 }
 

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"fmt"
 	"sync"
 	"time"
@@ -9,17 +10,19 @@ import (
 // CREATING A SERVICE
 // This is important information on how to design a service (like the pixiv service) and what needs to be implemented for it to work with the schedulers
 // 1. each service must implement the Service provider interface functions
-// 2. Sync must call the done() function when the sync fails or finishes to allow for a new sync to start for the user. Failure to do so will result in the user being unable to sync again until a server restart
-// 3. Rotation membership (AddUser/RemoveUser), periodic scheduling, and the active-sync guard are all managed centrally by the Scheduler (see RestoreAllSchedules, fireCredentialHook, fireSyncSettingsHook, RemoveService), which schedules jobs using the provider's own Sync method. OnCredentialsUpdated/OnCredentialsRemoved only need to handle service-specific state, e.g. invalidating a cached session.
+// 2. Sync must call done(err) exactly once when the sync finishes (nil) or fails (the error) to allow for a new sync to start for the user and to publish its report. Failure to do so will result in the user being unable to sync again until a server restart
+// 3. Each task returns the results of what it did; the scheduler records them in the sync's report
+// 4. Rotation membership (AddUser/RemoveUser), periodic scheduling, and the active-sync guard are all managed centrally by the Scheduler (see RestoreAllSchedules, fireCredentialHook, fireSyncSettingsHook, RemoveService), which schedules jobs using the provider's own Sync method. OnCredentialsUpdated/OnCredentialsRemoved only need to handle service-specific state, e.g. invalidating a cached session.
 
 // Task is a unit of work submitted to the scheduler by a service integration.
-type Task func() error
+// It returns what it did, for the sync's report; an error is only logged.
+type Task func() ([]notification.ItemResult, error)
 
 // SyncFunc type is used to pass ServiceProvider.Sync(...) function between functions.
 // Warning: This function should not be called outside the manager_services and periodic scheduler!
 // Calling it for a service will begin the sync process for a service.
-// When a sync concludes or fails it MUST call the done function to allow for a new sync to start.
-type SyncFunc func(userId string, done func()) error
+// When a sync concludes or fails it MUST call done exactly once, with nil or the failure.
+type SyncFunc func(userId string, done func(error)) error
 
 // ServiceConfig defines the rate-limiting behaviour for a single API service.
 type ServiceConfig struct {
@@ -31,9 +34,69 @@ type ServiceConfig struct {
 
 type userEntry struct {
 	userId      string
-	tasks       []Task
+	tasks       []queuedTask
 	queriesDone int
 	mu          sync.Mutex
+}
+
+// queuedTask is a task plus the sync it was queued for (nil if none was active).
+type queuedTask struct {
+	task     Task
+	progress *syncProgress
+}
+
+// syncProgress is the in-memory report of one running sync. Results arrive on
+// the service's scheduler goroutine while RemoveService can end the sync from
+// an HTTP goroutine, so every field is guarded by mu. Once published, the
+// report is never changed again.
+type syncProgress struct {
+	mu        sync.Mutex
+	report    *notification.ImportReport
+	executing bool //one of this sync's tasks is running right now
+	published bool
+}
+
+func newSyncProgress(serviceName string) *syncProgress {
+	return &syncProgress{report: notification.NewImportReport(serviceName)}
+}
+
+func (p *syncProgress) taskStarted() {
+	p.mu.Lock()
+	p.executing = true
+	p.mu.Unlock()
+}
+
+// taskFinished adds a task's results and reports whether the sync ended while
+// the task ran, so the report now needs publishing.
+func (p *syncProgress) taskFinished(results []notification.ItemResult) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.executing = false
+	if p.published {
+		return false
+	}
+	p.report.Record(results...)
+	if p.report.Finished.IsZero() {
+		return false
+	}
+	p.published = true
+	return true
+}
+
+// end finishes the report, first call only, and reports whether it can be
+// published now. While a task is executing, taskFinished publishes it instead.
+func (p *syncProgress) end(outcome notification.Outcome, err error) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.report.Finished.IsZero() {
+		return false
+	}
+	p.report.Finish(outcome, err)
+	if p.executing {
+		return false
+	}
+	p.published = true
+	return true
 }
 
 type serviceScheduler struct {
@@ -53,7 +116,7 @@ type ServiceProvider interface {
 	TestCredentials(userId string, creds ExternalApiKeys) error // This function checks if the credentials are valid and the service can be reached
 	OnCredentialsUpdated(userId string, creds ExternalApiKeys)  //handles service-specific cleanup when a credential is changed, e.g. invalidating a cached session. Rescheduling the periodic sync is handled centrally by the Scheduler after this returns.
 	OnCredentialsRemoved(userId string)                         //handles service-specific cleanup when credentials are removed, e.g. invalidating a cached session. Cancelling the periodic sync and clearing the active-sync guard is handled centrally by RemoveService.
-	Sync(userId string, done func()) error                      //sharts the sync process of the service. Its return is not tied to the completion of the sync. done MUST be called whenever a sync completes or fails.
+	Sync(userId string, done func(error)) error                 //starts the sync process of the service. Its return is not tied to the completion of the sync. done MUST be called once whenever a sync completes (nil) or fails (the error).
 }
 
 // Scheduler coordinates task execution across multiple services and users,
@@ -255,7 +318,8 @@ func (s *Scheduler) RemoveUser(serviceName, userId string) error {
 // task chain continuing after RemoveUser has run (e.g. mid-sync credential
 // removal) fails here instead of silently resurrecting the user into
 // rotation. Callers should treat a failure here as "stop chaining" and route
-// it through their normal done()/error handling.
+// it through their normal done()/error handling. The task's results go to the
+// user's sync that is active now, even if a cancel and re-add follow.
 func (s *Scheduler) Enqueue(serviceName, userId string, task Task) error {
 	ss, ok := s.service(serviceName)
 	if !ok {
@@ -269,8 +333,13 @@ func (s *Scheduler) Enqueue(serviceName, userId string, task Task) error {
 		return fmt.Errorf("user %s is not registered for service %q", userId, serviceName)
 	}
 
+	var progress *syncProgress
+	if active, ok := s.activeSyncs.Load(syncKey(serviceName, userId)); ok {
+		progress = active.(*syncProgress)
+	}
+
 	u.mu.Lock()
-	u.tasks = append(u.tasks, task)
+	u.tasks = append(u.tasks, queuedTask{task: task, progress: progress})
 	u.mu.Unlock()
 	return nil
 }
@@ -360,18 +429,51 @@ func (s *Scheduler) SyncUser(serviceName, userId string) error {
 // it must call the done callback it receives exactly once, on every return
 // path, once the run has truly finished (see SyncFunc).
 func (s *Scheduler) runSync(serviceName, userId, kind string, sync SyncFunc) error {
-	key := syncKey(serviceName, userId)
-	if _, alreadyRunning := s.activeSyncs.LoadOrStore(key, struct{}{}); alreadyRunning {
+	progress := newSyncProgress(serviceName)
+	if _, alreadyRunning := s.activeSyncs.LoadOrStore(syncKey(serviceName, userId), progress); alreadyRunning {
 		return fmt.Errorf("%w: %s sync for user %s", ErrSyncInProgress, serviceName, userId)
 	}
-	release := func() { s.activeSyncs.Delete(key) }
+	done := func(err error) { s.completeSync(serviceName, userId, progress, err) }
 
 	if err := SetServiceLastSynced(userId, serviceName, time.Now()); err != nil {
 		fmt.Printf("ERROR: Services: failed to record last synced for user: %s, service: %s: %v", userId, serviceName, err)
 	}
 	fmt.Printf("Running  [%s] sync: User : %s  Service : %s\n", kind, userId, serviceName)
 
-	return sync(userId, release)
+	return sync(userId, done)
+}
+
+// completeSync is a sync's done callback. It ends the report as completed, or
+// failed when err is set (logged here, since the report keeps only its reason),
+// then releases the guard only if it still holds this sync, so a stale sync's
+// done can't end a newer one.
+func (s *Scheduler) completeSync(serviceName, userId string, progress *syncProgress, err error) {
+	outcome := notification.OutcomeCompleted
+	if err != nil {
+		outcome = notification.OutcomeFailed
+		fmt.Printf("ERROR: Services: %s sync for user %s failed: %v\n", serviceName, userId, err)
+	}
+	endSync(userId, progress, outcome, err)
+	s.activeSyncs.CompareAndDelete(syncKey(serviceName, userId), progress)
+}
+
+// cancelSync ends the user's active sync as cancelled without releasing its
+// guard. Its report is published now, or once its executing task finishes.
+func (s *Scheduler) cancelSync(serviceName, userId string) {
+	if active, ok := s.activeSyncs.Load(syncKey(serviceName, userId)); ok {
+		endSync(userId, active.(*syncProgress), notification.OutcomeCancelled, nil)
+	}
+}
+
+// endSync ends progress's report and publishes it, unless one of its tasks is
+// still executing; the run loop publishes it once that task finishes.
+func endSync(userId string, progress *syncProgress, outcome notification.Outcome, err error) {
+	if !progress.end(outcome, err) {
+		return
+	}
+	if err := notification.Publish(userId, progress.report); err != nil {
+		fmt.Printf("ERROR: Services: publishing sync report for user %s: %v\n", userId, err)
+	}
 }
 
 // IsSyncing reports whether a sync for userId on serviceName is currently in progress.
@@ -418,10 +520,12 @@ func (s *Scheduler) AddService(serviceName, userId string, creds ExternalApiKeys
 	return nil
 }
 
-// RemoveService cleans up a user's service. The active-sync guard is cleared
-// last, deliberately: clearing it before credentials are removed would let a
-// new SyncUser call slip through while reading now-stale credentials. Takes
-// the same registration lock as AddService so the two can't interleave.
+// RemoveService cleans up a user's service. A running sync is cancelled first,
+// before RemoveUser drops its queued tasks, so it reports as cancelled. The
+// active-sync guard is cleared last, deliberately: clearing it before
+// credentials are removed would let a new SyncUser call slip through while
+// reading now-stale credentials. Takes the same registration lock as
+// AddService so the two can't interleave.
 func (s *Scheduler) RemoveService(serviceName, userId string) error {
 	p, ok := s.provider(serviceName)
 	if !ok {
@@ -432,6 +536,7 @@ func (s *Scheduler) RemoveService(serviceName, userId string) error {
 	lock.Lock()
 	defer lock.Unlock()
 
+	s.cancelSync(serviceName, userId)
 	p.OnCredentialsRemoved(userId)
 	s.CancelPeriodic(serviceName, userId)
 	_ = s.RemoveUser(serviceName, userId)
@@ -463,7 +568,7 @@ func (ss *serviceScheduler) run() {
 		default:
 		}
 
-		task, userId, ok := ss.nextTask()
+		next, userId, ok := ss.nextTask()
 		if !ok {
 			time.Sleep(50 * time.Millisecond)
 			continue
@@ -473,8 +578,17 @@ func (ss *serviceScheduler) run() {
 			time.Sleep(wait)
 		}
 
-		if err := task(); err != nil {
+		if next.progress != nil {
+			next.progress.taskStarted()
+		}
+		results, err := next.task()
+		if err != nil {
 			fmt.Printf("ERROR: Services: task failed for user %s: %v\n", userId, err)
+		}
+		if next.progress != nil && next.progress.taskFinished(results) {
+			if err := notification.Publish(userId, next.progress.report); err != nil {
+				fmt.Printf("ERROR: Services: publishing sync report for user %s: %v\n", userId, err)
+			}
 		}
 		ss.lastRun = time.Now()
 	}
@@ -483,7 +597,7 @@ func (ss *serviceScheduler) run() {
 // nextTask picks the next task from the front user.
 // When a user exhausts their QueriesPerTurn quota, they are rotated to the back.
 // Users with no pending tasks are skipped (and rotated past).
-func (ss *serviceScheduler) nextTask() (Task, string, bool) {
+func (ss *serviceScheduler) nextTask() (queuedTask, string, bool) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
@@ -497,7 +611,7 @@ func (ss *serviceScheduler) nextTask() (Task, string, bool) {
 			continue
 		}
 
-		task := front.tasks[0]
+		next := front.tasks[0]
 		front.tasks = front.tasks[1:]
 		front.queriesDone++
 		rotate := front.queriesDone >= ss.config.QueriesPerTurn
@@ -510,10 +624,10 @@ func (ss *serviceScheduler) nextTask() (Task, string, bool) {
 			ss.users = append(ss.users[1:], ss.users[0])
 		}
 
-		return task, front.userId, true
+		return next, front.userId, true
 	}
 
-	return nil, "", false
+	return queuedTask{}, "", false
 }
 
 // fireCredentialHook runs the registered provider's service-specific

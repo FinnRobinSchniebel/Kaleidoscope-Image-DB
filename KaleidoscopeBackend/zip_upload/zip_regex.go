@@ -1,6 +1,7 @@
 package zipupload
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"errors"
 	"fmt"
 	"log"
@@ -60,7 +61,7 @@ var errFieldConflict = errors.New("conflicting values")
 // Note: ParsedFolderInfo Path is relative to base file (root + Path for full)
 // groupingLayer must be in [0, len(folderTemplates)] (checked by ProcessZip). Files that sit above
 // it are returned in skipped rather than grouped.
-func ValidateAndParseFolder(rootPath string, folderTemplates []string, fileTemplate string, groupingLayer int) (results map[string][]ParsedFolderInfo, skipped []string, err error) {
+func ValidateAndParseFolder(rootPath string, folderTemplates []string, fileTemplate string, groupingLayer int) (results map[string][]ParsedFolderInfo, skipped []notification.ItemResult, err error) {
 
 	// Build folder patterns
 	folderPatterns := []*LayerPattern{}
@@ -118,7 +119,7 @@ func ValidateAndParseFolder(rootPath string, folderTemplates []string, fileTempl
 
 		//a file above the grouping layer belongs to no group; one at the grouping layer itself is a collapsed folder
 		if len(pathParts) <= groupingLayer {
-			skipped = append(skipped, relativePath+" (above grouping level)")
+			skipped = append(skipped, notification.ItemResult{Kind: notification.ItemSkipped, Ref: relativePath, Reason: "above grouping level"})
 			return nil
 		}
 

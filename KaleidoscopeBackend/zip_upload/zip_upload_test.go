@@ -1,6 +1,8 @@
 package zipupload
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"image"
 	"image/png"
 	"maps"
@@ -9,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeFiles creates each relative path under root: .png paths get a real
@@ -88,8 +91,8 @@ func TestParseSkipsFilesAboveGroupingLevel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(skipped) != 2 {
-		t.Errorf("skipped = %v, want readme.txt and cover.png", skipped)
+	if len(skipped) != 2 || skipped[0].Reason != "above grouping level" {
+		t.Errorf("skipped = %v, want readme.txt and cover.png above the grouping level", skipped)
 	}
 	if len(groups) != 1 {
 		t.Errorf("groups = %v, want only art/a/b", groups)
@@ -115,7 +118,7 @@ func TestParseRepeatedFieldMustAgree(t *testing.T) {
 	if len(sets) != 1 || sets[0].Key != "art/Same/Same" {
 		t.Errorf("sets = %v, want only art/Same/Same", sets)
 	}
-	if len(skipped) != 1 || !strings.HasPrefix(skipped[0], "art/A/B") {
+	if len(skipped) != 1 || skipped[0].Ref != "art/A/B" {
 		t.Errorf("skipped = %v, want the conflicting group", skipped)
 	}
 }
@@ -133,7 +136,7 @@ func TestBuildImageSetBundle(t *testing.T) {
 	}
 	entries := []ParsedFolderInfo{
 		{Path: "g/notes.txt", FileType: ".txt", Values: work(nil)},
-		{Path: "g/1.png", FileType: ".png", Values: work(map[string]string{"Title": "First", "Author": "alice"})},
+		{Path: "g/1.png", FileType: ".png", Values: work(map[string]string{"Title": "First", "Author": "alice", "Source": " Pixiv ", "Date": "08-27-2026"})},
 		{Path: "g/data.json", FileType: ".json", Values: work(nil)},
 		{Path: "g/2.png", FileType: ".png", Values: work(nil)},
 		{Path: "g/3.png", FileType: ".png", Values: work(map[string]string{"Title": "First", "AuthorId": "9"})},
@@ -145,7 +148,7 @@ func TestBuildImageSetBundle(t *testing.T) {
 	}
 	set := bundle.Iset
 
-	if !slices.Equal(skipped, []string{"g/data.json (not an image)"}) {
+	if !slices.Equal(skipped, []notification.ItemResult{{Kind: notification.ItemSkipped, Ref: "g/data.json", Reason: "not an image"}}) {
 		t.Errorf("skipped = %v", skipped)
 	}
 	if len(set.Sources) != 1 {
@@ -157,6 +160,9 @@ func TestBuildImageSetBundle(t *testing.T) {
 	}
 	if src.Title != "First" || src.SourceAuthor != "alice" || src.AuthorID != "9" {
 		t.Errorf("source fields = %q/%q/%q, want files to fill each other's empty fields", src.Title, src.SourceAuthor, src.AuthorID)
+	}
+	if want := imageset.DayOnlyDate(time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)); !src.Date.Equal(want) {
+		t.Errorf("source Date = %v, want the day-only %v", src.Date, want)
 	}
 	if src.Description != "text\n\ntext" || set.Description != src.Description {
 		t.Errorf("descriptions = source %q, set %q; want both .txt files on the one source", src.Description, set.Description)
@@ -193,7 +199,7 @@ func TestBuildImageSetBundleSkipsGroupWithOneWorkPerSource(t *testing.T) {
 		if bundle != nil {
 			t.Errorf("%s: group was imported", tt.name)
 		}
-		if len(skipped) != 1 || !strings.Contains(skipped[0], tt.reason) {
+		if len(skipped) != 1 || skipped[0].Ref != "art/g" || skipped[0].Reason != tt.reason {
 			t.Errorf("%s: skipped = %v, want %q", tt.name, skipped, tt.reason)
 		}
 	}
@@ -214,6 +220,23 @@ func TestParseTxtTakesFolderFieldsOnly(t *testing.T) {
 	}
 }
 
+func TestUnreadableTxtNote(t *testing.T) {
+	root := newZipRoot(t)
+	writeFiles(t, root, "g/1.png")
+
+	entries := []ParsedFolderInfo{
+		{Path: "g/1.png", FileType: ".png", Values: map[string]string{}},
+		{Path: "g/notes.txt", FileType: ".txt", Values: map[string]string{}},
+	}
+	bundle, _, errs := buildImageSetBundle(root, "art/g", entries)
+	if bundle == nil {
+		t.Fatal("group with a missing .txt was skipped")
+	}
+	if !slices.Equal(errs, []string{"couldn't read g/notes.txt"}) {
+		t.Errorf("notes = %q, want only the file's path inside the zip", errs)
+	}
+}
+
 func TestBuildImageSetBundleSkipsGroupWithUnreadableImage(t *testing.T) {
 	root := newZipRoot(t)
 	writeFiles(t, root, "g/1.png")
@@ -229,7 +252,7 @@ func TestBuildImageSetBundleSkipsGroupWithUnreadableImage(t *testing.T) {
 	if bundle != nil {
 		t.Error("group with an unreadable image was imported")
 	}
-	if len(skipped) != 1 || !strings.Contains(skipped[0], "unreadable image g/2.png") {
+	if len(skipped) != 1 || skipped[0].Ref != "art/g" || skipped[0].Reason != "unreadable image g/2.png" {
 		t.Errorf("skipped = %v", skipped)
 	}
 }

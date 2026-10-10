@@ -3,6 +3,7 @@ package main
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/services"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/tagging"
 	zipupload "Kaleidoscopedb/Backend/KaleidoscopeBackend/zip_upload"
@@ -31,8 +32,8 @@ const SessionDbName = "Sessions"
 const sourceTagsDbName = "SourceTags"
 const autoTagsDbName = "AutoTags"
 const servicesDbName = "services"
+const notificationDbName = "notifications"
 
-// const notificationDbName = "notifications"
 const LowResPathAppend = "low/"
 const MaxFileSize = 5 * 1024 * 1024 * 1024
 
@@ -121,6 +122,7 @@ func ConnectDB() {
 	tagging.SourceTagsDB = db.Collection(sourceTagsDbName)
 	tagging.AutoTagsDB = db.Collection(autoTagsDbName)
 	services.ServicesDb = db.Collection(servicesDbName)
+	notification.Collection = db.Collection(notificationDbName)
 	imageset.LowResPathAppend = LowResPathAppend
 	imageset.Tagger = tagging.AutoTagFunc{}
 	services.RegistrationHook = tagging.RegistrationHookFunc{}
@@ -130,6 +132,9 @@ func ConnectDB() {
 		log.Fatal(err)
 	}
 	if err := tagging.EnsureIndexes(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+	if err := notification.EnsureIndexes(context.Background()); err != nil {
 		log.Fatal(err)
 	}
 
@@ -167,7 +172,6 @@ func StartAPI() {
 
 	//imageSet upload/retrieval
 	app.Get("/api/imagesets", authutil.AuthSessionToken, imageset.GetImageSetById)
-	app.Post("/api/imagesets", authutil.AuthSessionToken, imageset.PostImageSet)
 	app.Delete("/api/imagesets", authutil.AuthSessionToken, imageset.DeleteImageSets)
 	app.Put("/api/imagesets/tagoverrides", authutil.AuthSessionToken, tagging.ReplaceTagOverridesHandler)
 	app.Patch("/api/imagesets/tagoverrides", authutil.AuthSessionToken, tagging.AddTagOverridesHandler)

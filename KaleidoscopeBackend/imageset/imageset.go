@@ -30,21 +30,32 @@ func NormalizeTagText(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
+// ImageChangeState is where a source's image-change check stands. A document
+// without the field decodes to ImageChangeNone, and none may also be stored as "".
+type ImageChangeState string
+
+const (
+	ImageChangeNone     ImageChangeState = ""
+	ImageChangePending  ImageChangeState = "pending"
+	ImageChangeDeclined ImageChangeState = "declined"
+)
+
 type SourceInfo struct {
-	Name               string      `json:"name" bson:"name" form:"name"`
-	ID                 string      `json:"id" bson:"id" form:"id"`                                                       // ID of source itself (created by DB)
-	Title              string      `json:"title" bson:"title" form:"title"`                                              // Title of work at source
-	Description        string      `json:"description" bson:"description" form:"description"`                            //imported description, preserved even if the set's Description is edited
-	SourceAuthor       string      `json:"source_author" bson:"source_author" form:"source_author"`                      //the authors name at this source
-	AttributedTo       []int       `json:"attributed_to" bson:"attributed_to" form:"attributed_to"`                      //index of images in set that this source belongs to
-	SourceID           string      `json:"source_id" bson:"source_id" form:"source_id"`                                  // id of art WORK at the source
-	AuthorID           string      `json:"author_id" bson:"author_id" form:"author_id"`                                  //id the author user was assigned
-	Tags               []SourceTag `json:"tags" bson:"tags" form:"tags"`                                                 //tags provided at the source
-	Date               time.Time   `json:"date" bson:"date" form:"date"`                                                 //date reported by source; on Pixiv tracks last edit, not original post
-	LastChecked        time.Time   `json:"last_checked" bson:"last_checked" form:"last_checked"`                         //last time this source was polled for changes
-	LastImageUpdate    time.Time   `json:"last_image_update" bson:"last_image_update" form:"last_image_update"`          //Date value as of the last image hash check
-	PendingImageChange bool        `json:"pending_image_change" bson:"pending_image_change" form:"pending_image_change"` //true once a hash check finds an unresolved image difference
-	SourceMissing      bool        `json:"source_missing" bson:"source_missing" form:"source_missing"`                   //true when the source could not be fetched; existing data is left untouched
+	Name              string           `json:"name" bson:"name" form:"name"`
+	ID                string           `json:"id" bson:"id" form:"id"`                                                                     // ID of source itself (created by DB)
+	Title             string           `json:"title" bson:"title" form:"title"`                                                            // Title of work at source
+	Description       string           `json:"description" bson:"description" form:"description"`                                          //imported description, preserved even if the set's Description is edited
+	SourceAuthor      string           `json:"source_author" bson:"source_author" form:"source_author"`                                    //the authors name at this source
+	AttributedTo      []int            `json:"attributed_to" bson:"attributed_to" form:"attributed_to"`                                    //index of images in set that this source belongs to
+	SourceID          string           `json:"source_id" bson:"source_id" form:"source_id"`                                                // id of art WORK at the source
+	AuthorID          string           `json:"author_id" bson:"author_id" form:"author_id"`                                                //id the author user was assigned
+	Tags              []SourceTag      `json:"tags" bson:"tags" form:"tags"`                                                               //tags provided at the source
+	Date              time.Time        `json:"date" bson:"date" form:"date"`                                                               //date reported by source; on Pixiv tracks last edit, not original post
+	LastChecked       time.Time        `json:"last_checked" bson:"last_checked" form:"last_checked"`                                       //last time this source was polled for changes
+	LastImageUpdate   time.Time        `json:"last_image_update" bson:"last_image_update" form:"last_image_update"`                        //our time of this source's last change to the set's images
+	LastAppliedUpdate time.Time        `json:"last_applied_update" bson:"last_applied_update" form:"last_applied_update"`                  //our time of this source's last change to the set's metadata or images
+	ImageChangeState  ImageChangeState `json:"image_change_state,omitempty" bson:"image_change_state,omitempty" form:"image_change_state"` //pending or declined while an image change found at the source is unresolved
+	SourceMissing     bool             `json:"source_missing" bson:"source_missing" form:"source_missing"`                                 //true when the source could not be fetched; existing data is left untouched
 }
 
 // info regarding the images location on the DB and current state
@@ -98,8 +109,8 @@ func JoinDescriptions(current, next string) string {
 }
 
 // DeriveFromSources fills an empty Title and Description from the set's
-// Sources and adds any source author missing from Authors; it never
-// overwrites. Sources' own Descriptions must already be set.
+// Sources and rebuilds Authors from them (see deriveAuthors). Sources' own
+// Descriptions must already be set.
 func DeriveFromSources(a *ImageSetMongo) {
 	if a.Title == "" {
 		for _, s := range a.Sources {
@@ -109,16 +120,36 @@ func DeriveFromSources(a *ImageSetMongo) {
 			}
 		}
 	}
-	for _, s := range a.Sources {
-		if s.SourceAuthor != "" && !slices.Contains(a.Authors, s.SourceAuthor) {
-			a.Authors = append(a.Authors, s.SourceAuthor)
-		}
-	}
+	deriveAuthors(a)
 	if a.Description == "" {
 		for _, s := range a.Sources {
 			a.Description = JoinDescriptions(a.Description, s.Description)
 		}
 	}
+}
+
+// authorKnown reports whether name is a real author; unknownAuthor counts as empty.
+func authorKnown(name string) bool {
+	return name != "" && name != unknownAuthor
+}
+
+// deriveAuthors sets set.Authors to its sources' known authors, each once in
+// source order, or to unknownAuthor when there are none. Reports whether it changed.
+func deriveAuthors(set *ImageSetMongo) bool {
+	authors := []string{}
+	for _, s := range set.Sources {
+		if authorKnown(s.SourceAuthor) && !slices.Contains(authors, s.SourceAuthor) {
+			authors = append(authors, s.SourceAuthor)
+		}
+	}
+	if len(authors) == 0 {
+		authors = []string{unknownAuthor}
+	}
+	if slices.Equal(set.Authors, authors) {
+		return false
+	}
+	set.Authors = authors
+	return true
 }
 
 // AppendSource adds source to a set that already has at least one source,
@@ -140,6 +171,18 @@ func UpdateSourceDescription(a *ImageSetMongo, i int, description string) {
 // SourceID.
 func SameSource(a, b SourceInfo) bool {
 	return a.Name == b.Name && a.SourceID == b.SourceID
+}
+
+// UploadSourceName names the source of files that don't say where they came from.
+const UploadSourceName = "upload"
+
+// NormalizeSourceName returns name in its stored form: trimmed and lowercased,
+// or UploadSourceName when empty.
+func NormalizeSourceName(name string) string {
+	if name = strings.ToLower(strings.TrimSpace(name)); name == "" {
+		return UploadSourceName
+	}
+	return name
 }
 
 func PrintISet(a *ImageSetMongo) {

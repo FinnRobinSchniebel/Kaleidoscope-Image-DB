@@ -2,14 +2,19 @@ package zipupload
 
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // basePath is the extracted zip's root, used to resolve the relative file paths in fileIsetData.
 // cleanupPath is the temp directory wrapping basePath and is removed wholesale once done.
-func SaveImageSets(basePath string, cleanupPath string, fileIsetData []ImageSetFileBundle, user string) {
+// Each group's result is added to report, which is then finished and published.
+func SaveImageSets(basePath string, cleanupPath string, fileIsetData []ImageSetFileBundle, user string, report *notification.ImportReport) {
 
 	//Authority to delete the temparary files is delegated to here
 	defer func() {
@@ -18,10 +23,6 @@ func SaveImageSets(basePath string, cleanupPath string, fileIsetData []ImageSetF
 			log.Print(err)
 		}
 	}()
-
-	var count int
-
-	result := make(map[string]imageset.CollisionMap)
 
 	//synchronous for now to avoid possible memory issues
 	for setIndex := range fileIsetData {
@@ -36,23 +37,26 @@ func SaveImageSets(basePath string, cleanupPath string, fileIsetData []ImageSetF
 		imageset.PrintISet(&fileIsetData[setIndex].Iset)
 		log.Print(fileIsetData[setIndex].FilePath)
 
-		hits, iSetDbId, err := imageset.AddImageSet(&fileIsetData[setIndex].Iset, MedSour, user)
+		hits, _, err := imageset.AddImageSet(&fileIsetData[setIndex].Iset, MedSour, user)
 
 		//AddImageSet undoes its own partial writes, so the remaining groups can still be imported
 		if err != nil {
-			log.Printf("------ Warning: zip import [%s]: group %q failed: %s ------", user, fileIsetData[setIndex].Key, err)
+			err = fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)
+			report.Record(notification.FailedItem(user, fileIsetData[setIndex].Key, bson.NilObjectID, err))
 			continue
 		}
-		result[iSetDbId] = hits
-		count++
+		if len(hits) != 0 {
+			log.Printf("zip import [%s]: group %q has duplicate images: %v", user, fileIsetData[setIndex].Key, hits)
+		}
+		report.Record(notification.ItemResult{Kind: notification.ItemAdded, Ref: fileIsetData[setIndex].Key, SetID: fileIsetData[setIndex].Iset.ID})
 
 		for _, Path := range fileIsetData[setIndex].FilePath {
 			os.Remove(filepath.Join(basePath, Path))
 		}
 	}
 
-	log.Print(result)
-	log.Print(count)
-
-	return
+	report.Finish(notification.OutcomeCompleted, nil)
+	if err := notification.Publish(user, report); err != nil {
+		log.Printf("------ Warning: zip import [%s]: %s ------", user, err)
+	}
 }
