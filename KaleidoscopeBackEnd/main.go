@@ -9,7 +9,6 @@ import (
 	zipupload "Kaleidoscopedb/Backend/KaleidoscopeBackend/zip_upload"
 
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"net/url"
@@ -50,10 +49,6 @@ func readSecret(name string) (string, error) {
 }
 
 func main() {
-	//one-off: run once on the test deployment (docker compose run --rm backend -migrate-images), then removed
-	migrateImages := flag.Bool("migrate-images", false, "convert stored sets to image IDs and the new hashes, then exit")
-	flag.Parse()
-
 	imageset.BackendVolumeLocation = os.Getenv("BACKEND_VOLUME_LOCATION")
 	if err := imageset.ResetTempDir(); err != nil {
 		log.Fatal(err)
@@ -87,13 +82,6 @@ func main() {
 
 	ConnectDB()
 	defer client.Disconnect(context.Background())
-	if *migrateImages {
-		if err := imageset.RunImageMigration(); err != nil {
-			log.Fatalf("image migration failed: %v", err)
-		}
-		log.Print("image migration finished")
-		return
-	}
 	StartServices()
 	StartAPI()
 }

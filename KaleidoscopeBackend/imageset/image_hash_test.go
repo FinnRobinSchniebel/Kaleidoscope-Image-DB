@@ -121,7 +121,7 @@ func TestPixelHashSameAcrossLosslessEncodings(t *testing.T) {
 		{"8-bit vs 16-bit PNG, every alpha", pngRoundTrip(t, alphaRamp), pngRoundTrip(t, to16Bit(alphaRamp))},
 		{"paletted vs RGB PNG", pngRoundTrip(t, paletted), pngRoundTrip(t, palettedAsRGB)},
 		{"gray vs RGB PNG", pngRoundTrip(t, gray), pngRoundTrip(t, grayAsRGB)},
-		// imports hash the JPEG decode; the migration hashes the PNG it was stored as
+		// migrated hashes came from the stored PNG; a re-upload hashes the JPEG decode
 		{"JPEG decode vs its stored PNG", jpegDecoded, pngRoundTrip(t, jpegDecoded)},
 	}
 	for _, tt := range tests {

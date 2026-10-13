@@ -70,19 +70,7 @@ func TestNormalizeSourceNameDefaultsEmpty(t *testing.T) {
 	}
 }
 
-func TestSourceInfoReadsOldDocuments(t *testing.T) {
-	old, err := bson.Marshal(bson.M{"name": "pixiv", "source_id": "42", "pending_image_change": false})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var src SourceInfo
-	if err := bson.Unmarshal(old, &src); err != nil {
-		t.Fatal(err)
-	}
-	if src.ImageChangeState != ImageChangeNone || !src.LastAppliedUpdate.IsZero() {
-		t.Errorf("old document decoded to state %q, LastAppliedUpdate %v; want none and zero", src.ImageChangeState, src.LastAppliedUpdate)
-	}
-
+func TestImageChangeNoneLeftOut(t *testing.T) {
 	encoded, err := bson.Marshal(SourceInfo{Name: "pixiv"})
 	if err != nil {
 		t.Fatal(err)
