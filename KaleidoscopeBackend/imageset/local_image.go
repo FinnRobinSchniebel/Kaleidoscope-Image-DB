@@ -54,11 +54,12 @@ func CheckImageSize(m MediaSource) error {
 // maxFileNameBytes caps a whole file name; ext4 allows 255 bytes.
 const maxFileNameBytes = 240
 
-// ImageFileName builds "<id>_<title>_<index>.<ext>", shortening only the
-// title so the name never exceeds maxFileNameBytes.
-func ImageFileName(imageTitle string, imageId bson.ObjectID, setIndex int, fileEnding string) string {
-	prefix := imageId.Hex() + "_"
-	suffix := fmt.Sprintf("_%d.%s", setIndex, fileEnding)
+// ImageFileName builds "<imageID>_<title>.<ext>", shortening only the title
+// so the name never exceeds maxFileNameBytes. Names already stored keep
+// their older "<setID>_<title>_<index>" form.
+func ImageFileName(imageTitle string, imageID bson.ObjectID, fileEnding string) string {
+	prefix := imageID.Hex() + "_"
+	suffix := "." + fileEnding
 	budget := maxFileNameBytes - len(prefix) - len(suffix)
 	return prefix + truncateUTF8(cleanInvalidFileSymbols(imageTitle), budget) + suffix
 }

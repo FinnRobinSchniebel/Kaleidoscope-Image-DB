@@ -151,53 +151,6 @@ type SearchParams struct {
 	//TODO: type, image count,
 }
 
-type CollisionResponsePair struct {
-	IdOfHashCollision bson.ObjectID
-	ImageNumber       int
-}
-
-type CollisionMap map[int][]CollisionResponsePair
-
-func findOverlappingHashes(hash string, userID string) ([]CollisionResponsePair, error) {
-
-	filter := bson.D{
-		{"kscope_userid", userID},
-		{"images.hash", hash},
-	}
-	cursor, err := Collection.Find(context.Background(), filter)
-	if err != nil {
-		return nil, err
-	}
-
-	defer cursor.Close(context.Background())
-
-	var itemList []ImageSetMongo
-
-	cursor.All(context.Background(), &itemList)
-	if len(itemList) == 0 {
-		return nil, nil
-	}
-
-	var idList []CollisionResponsePair
-	for _, item := range itemList {
-		for index, _ := range item.Image {
-			if item.Image[index].ImageHash == hash {
-				idList = append(idList, CollisionResponsePair{item.ID, index})
-			}
-		}
-
-		//var iSet ImageSetMongo
-		//bson.Unmarshal([]byte(item.String()), &iSet)
-		//item["_id"].(bson.ObjectID)
-
-		//itemList = append(itemList)
-
-		//idList = append(idList, CollisionResponsePair{item.ID, })
-	}
-
-	return idList, nil
-}
-
 // Validates user credentials
 func GetFromID(usr string, id ...string) ([]ImageSetMongo, error) {
 

@@ -19,7 +19,7 @@ func TestImageFileNameStaysWithinLimit(t *testing.T) {
 		for n := 0; n <= 400; n++ {
 			for _, prefix := range []string{"", "thumbnail_", "low_"} {
 				title := prefix + strings.Repeat(unit, n)
-				name := ImageFileName(title, id, 1234, "png")
+				name := ImageFileName(title, id, "png")
 
 				if len(name) > maxFileNameBytes {
 					t.Fatalf("title of %d x %q: name is %d bytes, want <= %d", n, unit, len(name), maxFileNameBytes)
@@ -27,8 +27,8 @@ func TestImageFileNameStaysWithinLimit(t *testing.T) {
 				if !utf8.ValidString(name) {
 					t.Fatalf("title of %d x %q: name is not valid UTF-8", n, unit)
 				}
-				if !strings.HasPrefix(name, id.Hex()+"_") || !strings.HasSuffix(name, "_1234.png") {
-					t.Fatalf("title of %d x %q: name %q lost its id or index", n, unit, name)
+				if !strings.HasPrefix(name, id.Hex()+"_") || !strings.HasSuffix(name, ".png") {
+					t.Fatalf("title of %d x %q: name %q lost its id or extension", n, unit, name)
 				}
 			}
 		}
@@ -37,8 +37,8 @@ func TestImageFileNameStaysWithinLimit(t *testing.T) {
 
 func TestImageFileNameKeepsShortTitle(t *testing.T) {
 	id := bson.NewObjectID()
-	got := ImageFileName("My Title", id, 0, "gif")
-	want := id.Hex() + "_My Title_0.gif"
+	got := ImageFileName("My Title", id, "gif")
+	want := id.Hex() + "_My Title.gif"
 	if got != want {
 		t.Errorf("ImageFileName = %q, want %q", got, want)
 	}

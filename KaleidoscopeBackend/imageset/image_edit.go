@@ -13,17 +13,16 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ajdnik/imghash"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 /*
-Used to save images to the  correct location on the file system. It does not modify the imageset
-Out: fileName, file hash, error
+Used to save images to the  correct location on the file system, named by imageID. It does not modify the imageset
+Out: fileName, error
 
 Warning: this function does not save gifs
 */
-func SaveImage(imageToSave image.Image, path string, title string, id bson.ObjectID, index int, fileType string) (string, string, error) {
+func SaveImage(imageToSave image.Image, path string, title string, imageID bson.ObjectID, fileType string) (string, error) {
 
 	/**		Test FilePath	 **/
 	_, err := os.Stat(BackendVolumeLocation)
@@ -37,7 +36,7 @@ func SaveImage(imageToSave image.Image, path string, title string, id bson.Objec
 		log.Printf("File or directory exists at: %s\n", BackendVolumeLocation)
 	}
 	/**		save file 	**/
-	fileName := ImageFileName(title, id, index, fileType)
+	fileName := ImageFileName(title, imageID, fileType)
 	log.Print("FilePath: " + path + fileName)
 
 	var encode func(io.Writer) error
@@ -48,20 +47,16 @@ func SaveImage(imageToSave image.Image, path string, title string, id bson.Objec
 		encode = func(w io.Writer) error { return jpeg.Encode(w, imageToSave, &jpeg.Options{Quality: 100}) }
 	case "gif":
 		// TODO: gif writing belongs here once supported; use SaveGif until then
-		return "", "", fmt.Errorf("SaveImage does not write gifs yet")
+		return "", fmt.Errorf("SaveImage does not write gifs yet")
 	default:
-		return "", "", fmt.Errorf("file type could not be determined")
+		return "", fmt.Errorf("file type could not be determined")
 	}
 
 	if err := writeFileAtomic(path, fileName, encode); err != nil {
-		return "", "", fmt.Errorf("could not write the image to the server file: %w", err)
+		return "", fmt.Errorf("could not write the image to the server file: %w", err)
 	}
 
-	/** 	get hash 	**/
-	ihash := HashImage(imageToSave)
-	fmt.Printf("Image Saved\n Hashed to: %v\n", ihash)
-
-	return fileName, ihash, nil
+	return fileName, nil
 
 }
 
@@ -84,18 +79,11 @@ func writeFileAtomic(dir, name string, encode func(io.Writer) error) error {
 	return os.Rename(tmp.Name(), filepath.Join(dir, name))
 }
 
-// HashImage computes the same perceptual hash stored in ImageInfo.ImageHash,
-// so a freshly decoded image can be compared against what was saved.
-func HashImage(img image.Image) string {
-	phash := imghash.NewPHash()
-	return phash.Calculate(img).String()
-}
-
 /*
-Used only to save gifs at full size. Cannot be used to save dowscaled images and only accepts decoded gifs
-Out: fileName, file hash, error
+Used only to save gifs at full size, named by imageID. Cannot be used to save dowscaled images and only accepts decoded gifs
+Out: fileName, error
 */
-func SaveGif(imageToSave *gif.GIF, path string, title string, id bson.ObjectID, index int) (string, string, error) {
+func SaveGif(imageToSave *gif.GIF, path string, title string, imageID bson.ObjectID) (string, error) {
 	/**		Test FilePath	 **/
 	_, err := os.Stat(BackendVolumeLocation)
 	if err != nil {
@@ -109,22 +97,18 @@ func SaveGif(imageToSave *gif.GIF, path string, title string, id bson.ObjectID, 
 	}
 
 	if len(imageToSave.Image) == 0 {
-		return "", "", fmt.Errorf("empty gif")
+		return "", fmt.Errorf("empty gif")
 	}
 
-	fileName := ImageFileName(title, id, index, "gif")
+	fileName := ImageFileName(title, imageID, "gif")
 	log.Print("FilePath: " + path + fileName)
 
 	encode := func(w io.Writer) error { return gif.EncodeAll(w, imageToSave) }
 	if err := writeFileAtomic(path, fileName, encode); err != nil {
-		return "", "", fmt.Errorf("could not write the image to the server file: %w", err)
+		return "", fmt.Errorf("could not write the image to the server file: %w", err)
 	}
 
-	/** 	get hash 	**/
-	ihash := HashImage(imageToSave.Image[0])
-	fmt.Printf("Image Saved\n Hashed to: %v\n", ihash)
-
-	return fileName, ihash, nil
+	return fileName, nil
 }
 
 func getFileTypeFromHeader(MediaSource MediaSource) (string, error) {

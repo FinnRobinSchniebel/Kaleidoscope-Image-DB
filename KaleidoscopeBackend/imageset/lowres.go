@@ -20,7 +20,7 @@ import (
 //
 // title is expected to be the image set's raw title (NOT an already generated file name
 // such as ImageInfo.Name) - "thumbnail_" is prepended here to derive the file name.
-func SaveThumbnailLocal(path string, title string, img image.Image, ImageSetID bson.ObjectID, generatedFromIndex int) {
+func SaveThumbnailLocal(path string, title string, img image.Image, ImageSetID bson.ObjectID, fromImageID bson.ObjectID) {
 
 	lowresFullPath := path + LowResPathAppend
 
@@ -35,7 +35,7 @@ func SaveThumbnailLocal(path string, title string, img image.Image, ImageSetID b
 		return
 	}
 
-	filename := ImageFileName("thumbnail_"+title, ImageSetID, generatedFromIndex, "png")
+	filename := ImageFileName("thumbnail_"+title, fromImageID, "png")
 	saveGeneratedPNG(lowresFullPath, filename, img, bson.M{"_id": ImageSetID}, "thumbnail")
 }
 
@@ -189,8 +189,9 @@ func AddLowresToSetAndStorage(path string, title string, img image.Image, images
 		return
 	}
 
-	filename := ImageFileName("low_"+title, imageset.ID, index, "png")
-	//also requires the index to still hold the same image, so a shifted array can't take the name
-	filter := bson.M{"_id": imageset.ID, fmt.Sprintf("images.%d.images", index): imageset.Image[index].Name}
-	saveGeneratedPNG(lowresFullPath, filename, img, filter, fmt.Sprintf("images.%d.low_images", index))
+	imageID := imageset.Image[index].ID
+	filename := ImageFileName("low_"+title, imageID, "png")
+	//recorded on the image with that ID wherever it now sits, so a reorder can't give the name to another image
+	filter := bson.M{"_id": imageset.ID, "images.id": imageID}
+	saveGeneratedPNG(lowresFullPath, filename, img, filter, "images.$.low_images")
 }

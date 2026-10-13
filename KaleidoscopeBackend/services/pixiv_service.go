@@ -6,9 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	_ "image/jpeg"
-	_ "image/png"
 	"io"
 	"log"
 	"net/http"
@@ -397,12 +394,12 @@ func tagsChanged(have, want []imageset.SourceTag) bool {
 	return false
 }
 
-// savePixivIllust must run serially (as a scheduler task): AddImageSet's
-// duplicate-hash check relies on it. Returns the new set's ID.
+// savePixivIllust downloads illust's pages and stores them as a new set,
+// returning its ID.
 func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) (bson.ObjectID, error) {
 	illustID := illust.ID
 
-	// Download all pages to a temporary directory, then pass them to AddImageSet.
+	// Download all pages to a temporary directory, then store them as a new set.
 	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("pixiv_%d_*", illustID))
 	if err != nil {
 		return bson.NilObjectID, fmt.Errorf("%w: create temp dir: %w", notification.ErrSaveFailed, err)
@@ -414,19 +411,22 @@ func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) (
 		return bson.NilObjectID, fmt.Errorf("%w: illust %d: no downloadable image URLs", notification.ErrDownloadFailed, illustID)
 	}
 
-	media := make([]imageset.MediaSource, 0, len(urls))
+	//one ID per downloaded page, so the source is attributed to exactly the pages stored
+	incoming := make([]imageset.IncomingImage, 0, len(urls))
+	imageIDs := make([]bson.ObjectID, 0, len(urls))
 	for _, url := range urls {
 		path, err := downloadPixivImage(url, tmpDir)
 		if err != nil {
 			return bson.NilObjectID, fmt.Errorf("%w: download %s: %w", notification.ErrDownloadFailed, url, err)
 		}
-		media = append(media, imageset.DiskSource{Path: path})
+		imageID := bson.NewObjectID()
+		incoming = append(incoming, imageset.IncomingImage{ID: imageID, Media: imageset.DiskSource{Path: path}})
+		imageIDs = append(imageIDs, imageID)
 	}
 
-	iset := buildPixivImageSet(illust, userId, isPrivate)
-	_, _, err = imageset.AddImageSet(iset, media, userId)
-	if err != nil {
-		return bson.NilObjectID, fmt.Errorf("%w: AddImageSet for illust %d: %w", notification.ErrSaveFailed, illustID, err)
+	iset := buildPixivImageSet(illust, userId, isPrivate, imageIDs)
+	if _, err := imageset.ProcessNewImageSet(iset, incoming, userId); err != nil {
+		return bson.NilObjectID, fmt.Errorf("illust %d: %w", illustID, err)
 	}
 
 	log.Printf("pixiv: saved illust %d (%q)", illustID, illust.Title)
@@ -458,11 +458,10 @@ func illustImageURLs(illust *pixivmodel.Illust) []string {
 	return nil
 }
 
-// illustCheckImageURLs returns a smaller preview URL for every page, for use by
-// the hash check: imghash's PHash resizes its input internally, so hashing a
-// preview instead of the full original saves network, disk and memory without
-// changing the result for a genuinely unchanged image. Falls back to
-// illustImageURLs per page wherever a smaller size isn't available.
+// illustCheckImageURLs returns a smaller preview URL for every page, for the
+// image-change check: PDQ resizes its input anyway, so a preview saves
+// network, disk and memory. Falls back to illustImageURLs per page where no
+// smaller size exists.
 func illustCheckImageURLs(illust *pixivmodel.Illust) []string {
 	if illust.PageCount > 1 {
 		urls := make([]string, 0, len(illust.MetaPages))
@@ -482,18 +481,10 @@ func illustCheckImageURLs(illust *pixivmodel.Illust) []string {
 	return illustImageURLs(illust)
 }
 
-// buildPixivImageSet constructs the ImageSetMongo metadata from a Pixiv Illust.
-// Image slices and path are left empty; AddImageSet fills those in.
-func buildPixivImageSet(illust *pixivmodel.Illust, userId string, isPrivate bool) *imageset.ImageSetMongo {
-
-	pageCount := illust.PageCount
-	if pageCount < 1 {
-		pageCount = 1
-	}
-	attributed := make([]int, pageCount)
-	for i := range attributed {
-		attributed[i] = i
-	}
+// buildPixivImageSet constructs the ImageSetMongo metadata from a Pixiv Illust,
+// attributing its source to imageIDs (the downloaded pages, in page order).
+// Image slices and path are left empty; storing the set fills those in.
+func buildPixivImageSet(illust *pixivmodel.Illust, userId string, isPrivate bool, imageIDs []bson.ObjectID) *imageset.ImageSetMongo {
 
 	src := imageset.SourceInfo{
 		Name:         pixivServiceName,
@@ -504,7 +495,7 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string, isPrivate bool
 		AuthorID:     strconv.FormatUint(illust.User.ID, 10),
 		Tags:         pixivIllustTags(illust, isPrivate),
 		Date:         illust.CreateDate,
-		AttributedTo: attributed,
+		AttributedTo: imageIDs,
 		LastChecked:  time.Now(),
 	}
 
@@ -578,19 +569,8 @@ func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust, isPrivate 
 		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, SetID: set.ID, Reason: "the set changed during the sync"}
 	}
 
-	// Re-enabling this downloads images, so the CreateDate-changed case must
-	// then move to a queued task instead of running inline.
-	// changed, err := imagesChanged(illust, set, idx)
-	// if err != nil {
-	// 	return fmt.Errorf("checking images for illust %d: %w", illust.ID, err)
-	// }
-
+	// Image changes aren't checked yet: a changed CreateDate only updates the metadata.
 	checkedAt := time.Now()
-	// if changed {
-	// 	log.Printf("pixiv: illust %d (%q) images changed - deferring, manual review required", illust.ID, illust.Title)
-	// 	return imageset.MarkSourcePendingImageChange(set, idx, illust.CreateDate, checkedAt)
-	// }
-
 	newSrc := pixivSourceInfo(illust, set.Sources[idx], isPrivate)
 	changed, err := imageset.ApplySourceMetadataUpdate(set, idx, newSrc, checkedAt, userId)
 	if err != nil {
@@ -601,62 +581,6 @@ func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust, isPrivate 
 	}
 	log.Printf("pixiv: updated illust %d (%q)", illust.ID, illust.Title)
 	return notification.ItemResult{Kind: notification.ItemUpdated, Ref: sourceID, SetID: set.ID}
-}
-
-// imagesChanged reports whether illust's images likely differ from what's stored
-// for set.Sources[idx]: either the page count changed, or a downloaded page's hash
-// no longer matches. Hashing is the expensive path and only runs once the caller's
-// date gate already found something different, keeping unchanged syncs cheap.
-func imagesChanged(illust *pixivmodel.Illust, set *imageset.ImageSetMongo, idx int) (bool, error) {
-	src := set.Sources[idx]
-	if illust.PageCount != len(src.AttributedTo) {
-		return true, nil
-	}
-	return imageHashesDiffer(illust, set, src.AttributedTo)
-}
-
-// imageHashesDiffer downloads a small preview of each of illust's current pages
-// and compares its perceptual hash against the stored image at the matching
-// attributedTo index. Uses illustCheckImageURLs rather than full resolution, since
-// the hash algorithm resizes its input internally regardless.
-func imageHashesDiffer(illust *pixivmodel.Illust, set *imageset.ImageSetMongo, attributedTo []int) (bool, error) {
-	urls := illustCheckImageURLs(illust)
-	if len(urls) != len(attributedTo) {
-		return true, nil
-	}
-
-	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("pixiv_hashcheck_%d_*", illust.ID))
-	if err != nil {
-		return false, fmt.Errorf("create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	for i, url := range urls {
-		imgIndex := attributedTo[i]
-		if imgIndex < 0 || imgIndex >= len(set.Image) {
-			return true, nil
-		}
-
-		path, err := downloadPixivImage(url, tmpDir)
-		if err != nil {
-			return false, fmt.Errorf("download %s: %w", url, err)
-		}
-
-		f, err := os.Open(path)
-		if err != nil {
-			return false, fmt.Errorf("open %s: %w", path, err)
-		}
-		img, _, decodeErr := image.Decode(f)
-		f.Close()
-		if decodeErr != nil {
-			return false, fmt.Errorf("decode %s: %w", path, decodeErr)
-		}
-
-		if imageset.HashImage(img) != set.Image[imgIndex].ImageHash {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // downloadPixivImage fetches a single Pixiv image URL into dir and returns the

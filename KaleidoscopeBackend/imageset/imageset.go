@@ -46,7 +46,7 @@ type SourceInfo struct {
 	Title             string           `json:"title" bson:"title" form:"title"`                                                            // Title of work at source
 	Description       string           `json:"description" bson:"description" form:"description"`                                          //imported description, preserved even if the set's Description is edited
 	SourceAuthor      string           `json:"source_author" bson:"source_author" form:"source_author"`                                    //the authors name at this source
-	AttributedTo      []int            `json:"attributed_to" bson:"attributed_to" form:"attributed_to"`                                    //index of images in set that this source belongs to
+	AttributedTo      []bson.ObjectID  `json:"attributed_to" bson:"attributed_to" form:"attributed_to"`                                    //IDs of the set's images from this source, in the source's own page order
 	SourceID          string           `json:"source_id" bson:"source_id" form:"source_id"`                                                // id of art WORK at the source
 	AuthorID          string           `json:"author_id" bson:"author_id" form:"author_id"`                                                //id the author user was assigned
 	Tags              []SourceTag      `json:"tags" bson:"tags" form:"tags"`                                                               //tags provided at the source
@@ -60,10 +60,13 @@ type SourceInfo struct {
 
 // info regarding the images location on the DB and current state
 type ImageInfo struct {
-	Name          string `json:"images" bson:"images" form:"images"`
-	LowResName    string `json:"low_images" bson:"low_images" form:"low_images"`
-	IsImageActive bool   `json:"active,omitempty" bson:"active,omitempty" form:"active"`
-	ImageHash     string `json:"hash" bson:"hash,omitempty" form:"hash"`
+	ID            bson.ObjectID `json:"id" bson:"id" form:"id"` //stable across inserts and reorders; sources attribute images by it
+	Name          string        `json:"images" bson:"images" form:"images"`
+	LowResName    string        `json:"low_images" bson:"low_images" form:"low_images"`
+	IsImageActive bool          `json:"active,omitempty" bson:"active,omitempty" form:"active"`
+	ImageHashes   `bson:",inline"`
+	Width         int `json:"width" bson:"width" form:"width"`
+	Height        int `json:"height" bson:"height" form:"height"`
 }
 
 type ImageSetMongo struct {
@@ -265,20 +268,25 @@ func SourcesToString(a SourceInfo) string {
 		}
 	}
 
-	sb.WriteString("AttributedTo (image indexes):\n")
-	for _, idx := range a.AttributedTo {
-		sb.WriteString(fmt.Sprintf("   - %d\n", idx))
+	sb.WriteString("AttributedTo (image IDs):\n")
+	for _, id := range a.AttributedTo {
+		sb.WriteString(fmt.Sprintf("   - %s\n", id.Hex()))
 	}
 
 	return sb.String()
 }
 
+// ImageToString formats an image for logs, with each hash cut to its first 8 bytes.
 func ImageToString(a ImageInfo) string {
 	return fmt.Sprintf(
-		"------------------------------------\nImage Name: %s\nLowRes Name: %s\nActive: %t\nHash: %s\n",
+		"------------------------------------\nImage ID: %s\nImage Name: %s\nLowRes Name: %s\nActive: %t\nSize: %dx%d\nPixel Hash: %.8x\nPDQ Hash: %.8x\n",
+		a.ID.Hex(),
 		a.Name,
 		a.LowResName,
 		a.IsImageActive,
-		a.ImageHash,
+		a.Width,
+		a.Height,
+		a.Pixel,
+		a.PDQ,
 	)
 }

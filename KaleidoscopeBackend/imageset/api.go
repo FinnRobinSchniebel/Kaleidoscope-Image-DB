@@ -79,7 +79,7 @@ func GetThumbnail(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).SendString("the image set image link is missing. This is not supposed to happen.")
 	}
 	return serveGenerated(c, set, 0, 256, 256, func(img image.Image) {
-		SaveThumbnailLocal(set.Path, set.Title, img, set.ID, 0)
+		SaveThumbnailLocal(set.Path, set.Title, img, set.ID, set.Image[0].ID)
 	})
 }
 
@@ -164,12 +164,12 @@ func PostImageSet(c *fiber.Ctx) error {
 
 	media := form.File["media"]
 
-	MedSour := make([]MediaSource, len(media))
-	for i, m := range media {
-		MedSour[i] = MultipartSource{m}
+	incoming := make([]IncomingImage, len(media))
+	for i, fileHeader := range media {
+		incoming[i] = IncomingImage{ID: bson.NewObjectID(), Media: MultipartSource{fileHeader}}
 	}
 
-	hashHits, _, err := AddImageSet(imageSet, MedSour, userID)
+	hashHits, err := ProcessNewImageSet(imageSet, incoming, userID)
 	if err != nil {
 		status := fiber.StatusInternalServerError
 		if errors.Is(err, ErrNoMedia) {
