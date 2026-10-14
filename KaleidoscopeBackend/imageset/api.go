@@ -164,12 +164,16 @@ func PostImageSet(c *fiber.Ctx) error {
 
 	media := form.File["media"]
 
-	incoming := make([]IncomingImage, len(media))
+	files := make([]MediaSource, len(media))
 	for i, fileHeader := range media {
-		incoming[i] = IncomingImage{ID: bson.NewObjectID(), Media: MultipartSource{fileHeader}}
+		files[i] = MultipartSource{fileHeader}
+	}
+	//every image needs a source; uploads without one get the default, as zip does
+	if len(imageSet.Sources) == 0 {
+		imageSet.Sources = []SourceInfo{{Name: UploadSourceName}}
 	}
 
-	hashHits, err := ProcessNewImageSet(imageSet, incoming, userID)
+	hashHits, err := ProcessNewImageSet(imageSet, files, userID)
 	if err != nil {
 		status := fiber.StatusInternalServerError
 		if errors.Is(err, ErrNoMedia) {

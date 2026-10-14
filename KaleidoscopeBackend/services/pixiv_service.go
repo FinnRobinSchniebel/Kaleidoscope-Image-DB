@@ -411,21 +411,17 @@ func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) (
 		return bson.NilObjectID, fmt.Errorf("%w: illust %d: no downloadable image URLs", notification.ErrDownloadFailed, illustID)
 	}
 
-	//one ID per downloaded page, so the source is attributed to exactly the pages stored
-	incoming := make([]imageset.IncomingImage, 0, len(urls))
-	imageIDs := make([]bson.ObjectID, 0, len(urls))
+	files := make([]imageset.MediaSource, 0, len(urls))
 	for _, url := range urls {
 		path, err := downloadPixivImage(url, tmpDir)
 		if err != nil {
 			return bson.NilObjectID, fmt.Errorf("%w: download %s: %w", notification.ErrDownloadFailed, url, err)
 		}
-		imageID := bson.NewObjectID()
-		incoming = append(incoming, imageset.IncomingImage{ID: imageID, Media: imageset.DiskSource{Path: path}})
-		imageIDs = append(imageIDs, imageID)
+		files = append(files, imageset.DiskSource{Path: path})
 	}
 
-	iset := buildPixivImageSet(illust, userId, isPrivate, imageIDs)
-	if _, err := imageset.ProcessNewImageSet(iset, incoming, userId); err != nil {
+	iset := buildPixivImageSet(illust, userId, isPrivate)
+	if _, err := imageset.ProcessNewImageSet(iset, files, userId); err != nil {
 		return bson.NilObjectID, fmt.Errorf("illust %d: %w", illustID, err)
 	}
 
@@ -481,10 +477,10 @@ func illustCheckImageURLs(illust *pixivmodel.Illust) []string {
 	return illustImageURLs(illust)
 }
 
-// buildPixivImageSet constructs the ImageSetMongo metadata from a Pixiv Illust,
-// attributing its source to imageIDs (the downloaded pages, in page order).
-// Image slices and path are left empty; storing the set fills those in.
-func buildPixivImageSet(illust *pixivmodel.Illust, userId string, isPrivate bool, imageIDs []bson.ObjectID) *imageset.ImageSetMongo {
+// buildPixivImageSet constructs the ImageSetMongo metadata from a Pixiv Illust.
+// Images, their attribution and the path are left empty; storing the set
+// fills those in.
+func buildPixivImageSet(illust *pixivmodel.Illust, userId string, isPrivate bool) *imageset.ImageSetMongo {
 
 	src := imageset.SourceInfo{
 		Name:         pixivServiceName,
@@ -495,7 +491,6 @@ func buildPixivImageSet(illust *pixivmodel.Illust, userId string, isPrivate bool
 		AuthorID:     strconv.FormatUint(illust.User.ID, 10),
 		Tags:         pixivIllustTags(illust, isPrivate),
 		Date:         illust.CreateDate,
-		AttributedTo: imageIDs,
 		LastChecked:  time.Now(),
 	}
 

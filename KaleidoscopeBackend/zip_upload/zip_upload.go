@@ -16,19 +16,12 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/valyala/fasthttp"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type ImageSetFileBundle struct {
-	Key    string //grouping folder path, for reporting
-	Iset   imageset.ImageSetMongo
-	Images []BundleImage //in set order; the source's AttributedTo holds their IDs
-}
-
-// BundleImage is one image file of a bundle and the ID it will be stored under.
-type BundleImage struct {
-	Path string //relative to the extracted zip folder
-	ID   bson.ObjectID
+	Key      string //grouping folder path, for reporting
+	Iset     imageset.ImageSetMongo
+	FilePath []string //image files in set order, relative to the extracted zip folder
 }
 
 func ProcessZip(fileHeader *multipart.FileHeader, ruleLayers []string, fileLayer string, groupingIndex int, user string) (status int, collisions imageset.CollisionMap, skipped []string, errors []string, err error) {
@@ -168,7 +161,7 @@ func buildImageSetBundle(basePath string, key string, entries []ParsedFolderInfo
 	var skipped []notification.ItemResult
 	var errorList []string
 	var set imageset.ImageSetMongo
-	var images []BundleImage
+	var paths []string
 	var descriptions []ParsedFolderInfo //.txt files, attached once every source exists
 
 	for _, entry := range entries {
@@ -194,28 +187,24 @@ func buildImageSetBundle(basePath string, key string, entries []ParsedFolderInfo
 			errorList = append(errorList, err.Error())
 		}
 
-		//the ID the image will be stored under, so the source can be attributed before the set is stored
-		imageID := bson.NewObjectID()
-		images = append(images, BundleImage{Path: entry.Path, ID: imageID})
+		paths = append(paths, entry.Path)
 
 		//a group is one work from one source; its files may only add details the others left empty
 		switch {
 		case len(set.Sources) == 0:
-			source.AttributedTo = []bson.ObjectID{imageID}
 			set.Sources = []imageset.SourceInfo{source}
 		case imageset.SameSource(source, set.Sources[0]):
 			if conflict := mergeSourceFields(&set.Sources[0], source); conflict != "" {
 
 				return nil, append(skipped, notification.ItemResult{Kind: notification.ItemSkipped, Ref: key, Reason: fmt.Sprintf("%s in %s", conflict, entry.Path)}), errorList
 			}
-			set.Sources[0].AttributedTo = append(set.Sources[0].AttributedTo, imageID)
 		default:
 			//a set built from several different sources is not supported
 			return nil, append(skipped, notification.ItemResult{Kind: notification.ItemSkipped, Ref: key, Reason: fmt.Sprintf("combines different sources: %s and %s in %s", sourceLabel(set.Sources[0]), sourceLabel(source), entry.Path)}), errorList
 		}
 	}
 
-	if len(images) == 0 {
+	if len(paths) == 0 {
 		return nil, append(skipped, notification.ItemResult{Kind: notification.ItemSkipped, Ref: key, Reason: "no images"}), errorList
 	}
 
@@ -231,7 +220,7 @@ func buildImageSetBundle(basePath string, key string, entries []ParsedFolderInfo
 	}
 
 	imageset.DeriveFromSources(&set)
-	return &ImageSetFileBundle{Key: key, Iset: set, Images: images}, skipped, errorList
+	return &ImageSetFileBundle{Key: key, Iset: set, FilePath: paths}, skipped, errorList
 }
 
 // mergeSourceFields fills dst's empty Title, Author, AuthorId and Date from

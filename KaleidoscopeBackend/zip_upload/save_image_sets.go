@@ -27,22 +27,22 @@ func SaveImageSets(basePath string, cleanupPath string, fileIsetData []ImageSetF
 	for setIndex := range fileIsetData {
 		bundle := &fileIsetData[setIndex]
 
-		incoming := make([]imageset.IncomingImage, len(bundle.Images))
-		for i, bundleImage := range bundle.Images {
-			incoming[i] = imageset.IncomingImage{ID: bundleImage.ID, Media: imageset.DiskSource{Path: filepath.Join(basePath, bundleImage.Path)}}
+		files := make([]imageset.MediaSource, len(bundle.FilePath))
+		for i, path := range bundle.FilePath {
+			files[i] = imageset.DiskSource{Path: filepath.Join(basePath, path)}
 		}
 
 		imageset.PrintISet(&bundle.Iset)
 
 		//a failed group leaves nothing behind, so the remaining groups can still be imported
-		if _, err := imageset.ProcessNewImageSet(&bundle.Iset, incoming, user); err != nil {
+		if _, err := imageset.ProcessNewImageSet(&bundle.Iset, files, user); err != nil {
 			report.Record(notification.FailedItem(user, bundle.Key, bson.NilObjectID, err))
 			continue
 		}
 		report.Record(notification.ItemResult{Kind: notification.ItemAdded, Ref: bundle.Key, SetID: bundle.Iset.ID})
 
-		for _, bundleImage := range bundle.Images {
-			os.Remove(filepath.Join(basePath, bundleImage.Path))
+		for _, path := range bundle.FilePath {
+			os.Remove(filepath.Join(basePath, path))
 		}
 	}
 

@@ -116,14 +116,28 @@ func (m MultipartSource) Remove() bool {
 	return true
 }
 
-// ProcessNewImageSet stores set as a new image set: it hashes images, checks
-// userID's library for matches (logged and returned), then saves. Nothing is
-// written before the check, and errors carry a notification reason.
-func ProcessNewImageSet(set *ImageSetMongo, images []IncomingImage, userID string) (CollisionMap, error) {
-	prepared, err := prepareImages(images)
+// ProcessNewImageSet stores files as a new image set: it gives each file an
+// image ID attributed to set's one source, checks userID's library for
+// matches (logged and returned), then saves. set must have exactly one
+// source with nothing attributed yet. Nothing is written before the check,
+// and errors carry a notification reason.
+func ProcessNewImageSet(set *ImageSetMongo, files []MediaSource, userID string) (CollisionMap, error) {
+	if len(files) == 0 {
+		return nil, fmt.Errorf("%w: %w", notification.ErrSaveFailed, ErrNoMedia)
+	}
+	if len(set.Sources) != 1 || len(set.Sources[0].AttributedTo) != 0 {
+		return nil, fmt.Errorf("%w: a new set needs exactly one unattributed source, got %d", notification.ErrSaveFailed, len(set.Sources))
+	}
+
+	prepared, err := prepareImages(files)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)
 	}
+	set.Sources[0].AttributedTo = make([]bson.ObjectID, len(prepared))
+	for i, preparedImage := range prepared {
+		set.Sources[0].AttributedTo[i] = preparedImage.Info.ID
+	}
+
 	matches, err := findImageMatches(userID, prepared)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err)
@@ -137,14 +151,7 @@ func ProcessNewImageSet(set *ImageSetMongo, images []IncomingImage, userID strin
 	return matches, nil
 }
 
-// IncomingImage is a file to store as a new image, with the ID its source's
-// AttributedTo already uses.
-type IncomingImage struct {
-	ID    bson.ObjectID
-	Media MediaSource
-}
-
-// PreparedImage is an IncomingImage decoded once to hash and measure it. Its
+// PreparedImage is an incoming file decoded once to hash and measure it. Its
 // pixels aren't kept: addImageSet decodes the file again to save it.
 type PreparedImage struct {
 	Info  ImageInfo //ID, hashes and size; addImageSet adds the file name
@@ -152,34 +159,34 @@ type PreparedImage struct {
 	IsGif bool
 }
 
-// prepareImages decodes each incoming file once to hash and measure it, so
-// matching can run before anything is written. A file that can't be read
-// fails the whole list.
-func prepareImages(images []IncomingImage) ([]PreparedImage, error) {
-	prepared := make([]PreparedImage, 0, len(images))
-	for _, incoming := range images {
-		itype, err := getFileTypeFromHeader(incoming.Media)
+// prepareImages gives each file a new image ID and decodes it once to hash
+// and measure it, so matching can run before anything is written. A file
+// that can't be read fails the whole list.
+func prepareImages(files []MediaSource) ([]PreparedImage, error) {
+	prepared := make([]PreparedImage, 0, len(files))
+	for _, file := range files {
+		itype, err := getFileTypeFromHeader(file)
 		if err != nil {
-			return nil, fmt.Errorf("reading media type of %s: %w", incoming.Media.Name(), err)
+			return nil, fmt.Errorf("reading media type of %s: %w", file.Name(), err)
 		}
-		preparedImage := PreparedImage{Info: ImageInfo{ID: incoming.ID}, Media: incoming.Media, IsGif: itype == "gif"}
+		preparedImage := PreparedImage{Info: ImageInfo{ID: bson.NewObjectID()}, Media: file, IsGif: itype == "gif"}
 
 		if preparedImage.IsGif {
-			decodedGif, err := FileHeaderToGif(incoming.Media)
+			decodedGif, err := FileHeaderToGif(file)
 			if err != nil {
-				return nil, fmt.Errorf("decoding gif %s: %w", incoming.Media.Name(), err)
+				return nil, fmt.Errorf("decoding gif %s: %w", file.Name(), err)
 			}
 			if preparedImage.Info.ImageHashes, err = HashGif(decodedGif); err != nil {
-				return nil, fmt.Errorf("hashing gif %s: %w", incoming.Media.Name(), err)
+				return nil, fmt.Errorf("hashing gif %s: %w", file.Name(), err)
 			}
 			preparedImage.Info.Width, preparedImage.Info.Height = decodedGif.Config.Width, decodedGif.Config.Height
 		} else {
-			decoded, _, err := FileHeaderToImage(incoming.Media)
+			decoded, _, err := FileHeaderToImage(file)
 			if err != nil {
-				return nil, fmt.Errorf("decoding image %s: %w", incoming.Media.Name(), err)
+				return nil, fmt.Errorf("decoding image %s: %w", file.Name(), err)
 			}
 			if preparedImage.Info.ImageHashes, err = HashImage(decoded); err != nil {
-				return nil, fmt.Errorf("hashing image %s: %w", incoming.Media.Name(), err)
+				return nil, fmt.Errorf("hashing image %s: %w", file.Name(), err)
 			}
 			preparedImage.Info.Width, preparedImage.Info.Height = decoded.Bounds().Dx(), decoded.Bounds().Dy()
 		}
@@ -191,8 +198,8 @@ func prepareImages(images []IncomingImage) ([]PreparedImage, error) {
 // unknownAuthor stands in for a set's author until a source provides one.
 const unknownAuthor = "unknown"
 
-// ErrNoMedia is returned by addImageSet when the request contained no media
-// files. Callers map it to HTTP 400.
+// ErrNoMedia is returned by ProcessNewImageSet when the request contained no
+// media files. Callers map it to HTTP 400.
 var ErrNoMedia = errors.New("no media attached")
 
 // addImageSet saves each image (from prepareImages) as a file named by its ID,
@@ -221,17 +228,6 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 	imageSet.KscopeUserId = userId
 	// generated here rather than by the insert, so files can be named before the set is stored
 	imageSet.ID = bson.NewObjectID()
-
-	//check media count first to avoid empty imagsets in db
-	if len(images) == 0 {
-		return "", ErrNoMedia
-	}
-	//sources attribute images by ID, so an image without one could never be attributed
-	for _, preparedImage := range images {
-		if preparedImage.Info.ID.IsZero() {
-			return "", fmt.Errorf("image %s has no ID", preparedImage.Media.Name())
-		}
-	}
 
 	var err error
 

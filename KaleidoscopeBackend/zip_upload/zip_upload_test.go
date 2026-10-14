@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // writeFiles creates each relative path under root: .png paths get a real
@@ -156,22 +154,14 @@ func TestBuildImageSetBundle(t *testing.T) {
 	if len(set.Sources) != 1 {
 		t.Fatalf("Sources = %+v, want one", set.Sources)
 	}
-	var paths []string
-	var imageIDs []bson.ObjectID
-	for _, bundleImage := range bundle.Images {
-		paths = append(paths, bundleImage.Path)
-		imageIDs = append(imageIDs, bundleImage.ID)
-	}
-	if !slices.Equal(paths, []string{"g/1.png", "g/2.png", "g/3.png"}) {
-		t.Errorf("image paths = %v", paths)
-	}
-	if imageIDs[0].IsZero() || imageIDs[0] == imageIDs[1] || imageIDs[1] == imageIDs[2] || imageIDs[0] == imageIDs[2] {
-		t.Errorf("image IDs = %v, want three distinct IDs", imageIDs)
+	if !slices.Equal(bundle.FilePath, []string{"g/1.png", "g/2.png", "g/3.png"}) {
+		t.Errorf("FilePath = %v", bundle.FilePath)
 	}
 
+	//storing the set attributes the images; the builder leaves that to it
 	src := set.Sources[0]
-	if src.Name != "pixiv" || src.SourceID != "42" || !slices.Equal(src.AttributedTo, imageIDs) {
-		t.Errorf("source = %s/%s %v, want pixiv/42 attributed to the images' IDs %v", src.Name, src.SourceID, src.AttributedTo, imageIDs)
+	if src.Name != "pixiv" || src.SourceID != "42" || len(src.AttributedTo) != 0 {
+		t.Errorf("source = %s/%s attributed %v, want pixiv/42 with nothing attributed yet", src.Name, src.SourceID, src.AttributedTo)
 	}
 	if src.Title != "First" || src.SourceAuthor != "alice" || src.AuthorID != "9" {
 		t.Errorf("source fields = %q/%q/%q, want files to fill each other's empty fields", src.Title, src.SourceAuthor, src.AuthorID)

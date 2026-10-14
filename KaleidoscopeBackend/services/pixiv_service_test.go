@@ -10,7 +10,6 @@ import (
 
 	pixiv "github.com/ryohidaka/go-pixiv"
 	pixivmodel "github.com/ryohidaka/go-pixiv/models/appmodel"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestSavePixivIllustNoURLs(t *testing.T) {
@@ -83,8 +82,7 @@ func TestBuildPixivImageSetDerivesFromSource(t *testing.T) {
 		User:      &pixivmodel.User{ID: 9, Name: "alice"},
 		PageCount: 2,
 	}
-	imageIDs := []bson.ObjectID{bson.NewObjectID(), bson.NewObjectID()}
-	set := buildPixivImageSet(illust, "user1", false, imageIDs)
+	set := buildPixivImageSet(illust, "user1", false)
 
 	if set.Title != "Sunset" {
 		t.Errorf("Title = %q, want Sunset", set.Title)
@@ -99,7 +97,8 @@ func TestBuildPixivImageSetDerivesFromSource(t *testing.T) {
 		t.Errorf("Itype = %q, KscopeUserId = %q", set.Itype, set.KscopeUserId)
 	}
 	src := set.Sources[0]
-	if src.Name != pixivServiceName || src.SourceID != "7" || src.AuthorID != "9" || !slices.Equal(src.AttributedTo, imageIDs) {
+	//storing the set attributes the images; the builder leaves that to it
+	if src.Name != pixivServiceName || src.SourceID != "7" || src.AuthorID != "9" || len(src.AttributedTo) != 0 {
 		t.Errorf("source = %+v", src)
 	}
 }
