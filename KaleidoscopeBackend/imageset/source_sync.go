@@ -1,6 +1,7 @@
 package imageset
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -9,33 +10,62 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// ApplySourceMetadataUpdate updates Sources[index]'s metadata and tags from newSrc
-// and saves them (see applySourceMetadata for which fields and when). Callers must
-// confirm the source's images are unchanged first; images are never touched here.
-// changed reports whether data from the source changed, which also stamps
-// LastAppliedUpdate.
-func ApplySourceMetadataUpdate(ISet *ImageSetMongo, index int, newSrc SourceInfo, checkedAt time.Time, userId string) (changed bool, err error) {
-	before := ISet.Sources[index]
+// ErrSourceNotStored is returned by the source writers below when none of the
+// user's sets holds the source.
+var ErrSourceNotStored = errors.New("source not stored")
+
+// findStoredSource re-reads the set holding the source and finds its index.
+// The caller holds LockUserSets, so the set stays current until its write.
+func findStoredSource(userID, name, sourceID string) (*ImageSetMongo, int, error) {
+	set, ok, err := GetImageSetBySourceID(userID, name, sourceID)
+	if err != nil {
+		return nil, -1, err
+	}
+	if ok {
+		key := SourceInfo{Name: name, SourceID: sourceID}
+		for index, src := range set.Sources {
+			if SameSource(src, key) {
+				return set, index, nil
+			}
+		}
+	}
+	return nil, -1, fmt.Errorf("%w: %s/%s", ErrSourceNotStored, name, sourceID)
+}
+
+// ApplySourceMetadataUpdate updates the stored source matching newSrc's Name and
+// SourceID with its metadata and tags, holding LockUserSets (see
+// applySourceMetadata for which fields and when). Only metadata is read from newSrc; the stored source keeps its ID and
+// attribution. Callers must confirm the source's images are unchanged first;
+// images are never touched here. changed reports whether data from the source
+// changed, which also stamps LastAppliedUpdate.
+func ApplySourceMetadataUpdate(userID string, newSrc SourceInfo, checkedAt time.Time) (setID bson.ObjectID, changed bool, err error) {
+	defer LockUserSets(userID)()
+	set, index, err := findStoredSource(userID, newSrc.Name, newSrc.SourceID)
+	if err != nil {
+		return bson.NilObjectID, false, err
+	}
+
+	before := set.Sources[index]
 	// ProcessSourceTags edits tags in place, so the copy needs its own slice.
 	before.Tags = slices.Clone(before.Tags)
-	fields := applySourceMetadata(ISet, index, newSrc)
+	fields := applySourceMetadata(set, index, newSrc)
 
 	// Must precede ProcessSourceTags: its system-tag recompute reads SourceMissing.
-	ISet.Sources[index].LastChecked = checkedAt
-	ISet.Sources[index].ImageChangeState = ImageChangeNone
-	ISet.Sources[index].SourceMissing = false
+	set.Sources[index].LastChecked = checkedAt
+	set.Sources[index].ImageChangeState = ImageChangeNone
+	set.Sources[index].SourceMissing = false
 
-	if err := Tagger.ProcessSourceTags(userId, ISet, index, newSrc.Tags); err != nil {
-		return false, fmt.Errorf("processing source tags: %w", err)
+	if err := Tagger.ProcessSourceTags(userID, set, index, newSrc.Tags); err != nil {
+		return set.ID, false, fmt.Errorf("processing source tags: %w", err)
 	}
-	changed = sourceDataChanged(before, ISet.Sources[index])
+	changed = sourceDataChanged(before, set.Sources[index])
 	if changed {
-		ISet.Sources[index].LastAppliedUpdate = checkedAt
+		set.Sources[index].LastAppliedUpdate = checkedAt
 	}
 
-	fields[fmt.Sprintf("sources.%d", index)] = ISet.Sources[index]
-	maps.Copy(fields, tagFields(ISet))
-	return changed, updateSourceFields(ISet, index, fields)
+	fields[fmt.Sprintf("sources.%d", index)] = set.Sources[index]
+	maps.Copy(fields, tagFields(set))
+	return set.ID, changed, updateSourceFields(set, index, fields)
 }
 
 // applySourceMetadata copies newSrc's non-empty title, description, known author
@@ -82,16 +112,23 @@ func sourceDataChanged(before, after SourceInfo) bool {
 		!slices.Equal(before.Tags, after.Tags)
 }
 
-// MarkSourcePendingImageChange records that Sources[index]'s images no longer match
-// what's stored, without writing any image or metadata change. sourceDate is the
-// source's own Date as of this check; storing it lets a later sync tell whether
+// MarkSourcePendingImageChange records that the stored source's images no longer
+// match what's stored, holding LockUserSets and writing no image or metadata
+// change. sourceDate is
+// the source's own Date as of this check; storing it lets a later sync tell whether
 // the source has moved on again since this still-unresolved change was detected.
-func MarkSourcePendingImageChange(ISet *ImageSetMongo, index int, sourceDate, checkedAt time.Time) error {
-	wasMissing := ISet.Sources[index].SourceMissing
-	ISet.Sources[index].ImageChangeState = ImageChangePending
-	ISet.Sources[index].SourceMissing = false
-	ISet.Sources[index].Date = sourceDate
-	ISet.Sources[index].LastChecked = checkedAt
+func MarkSourcePendingImageChange(userID, name, sourceID string, sourceDate, checkedAt time.Time) (setID bson.ObjectID, err error) {
+	defer LockUserSets(userID)()
+	set, index, err := findStoredSource(userID, name, sourceID)
+	if err != nil {
+		return bson.NilObjectID, err
+	}
+
+	wasMissing := set.Sources[index].SourceMissing
+	set.Sources[index].ImageChangeState = ImageChangePending
+	set.Sources[index].SourceMissing = false
+	set.Sources[index].Date = sourceDate
+	set.Sources[index].LastChecked = checkedAt
 
 	p := fmt.Sprintf("sources.%d.", index)
 	fields := bson.M{
@@ -101,23 +138,30 @@ func MarkSourcePendingImageChange(ISet *ImageSetMongo, index int, sourceDate, ch
 		p + "last_checked":       checkedAt,
 	}
 	if wasMissing {
-		if err := Tagger.RecomputeSystemTags(ISet.KscopeUserId, ISet); err != nil {
-			return fmt.Errorf("computing system tags: %w", err)
+		if err := Tagger.RecomputeSystemTags(userID, set); err != nil {
+			return set.ID, fmt.Errorf("computing system tags: %w", err)
 		}
-		maps.Copy(fields, tagFields(ISet))
+		maps.Copy(fields, tagFields(set))
 	}
-	return updateSourceFields(ISet, index, fields)
+	return set.ID, updateSourceFields(set, index, fields)
 }
 
-// MarkSourceMissing records that Sources[index] could no longer be fetched. Any prior
-// image-change state is reset to none along with it: there's no source left to
-// update the images from, so an unresolved change can no longer be completed.
+// MarkSourceMissing records, holding LockUserSets, that the stored source could no
+// longer be fetched. Any
+// prior image-change state is reset to none along with it: there's no source left
+// to update the images from, so an unresolved change can no longer be completed.
 // newlyMissing reports whether this call flipped SourceMissing.
-func MarkSourceMissing(ISet *ImageSetMongo, index int, checkedAt time.Time) (newlyMissing bool, err error) {
-	wasMissing := ISet.Sources[index].SourceMissing
-	ISet.Sources[index].SourceMissing = true
-	ISet.Sources[index].ImageChangeState = ImageChangeNone
-	ISet.Sources[index].LastChecked = checkedAt
+func MarkSourceMissing(userID, name, sourceID string, checkedAt time.Time) (setID bson.ObjectID, newlyMissing bool, err error) {
+	defer LockUserSets(userID)()
+	set, index, err := findStoredSource(userID, name, sourceID)
+	if err != nil {
+		return bson.NilObjectID, false, err
+	}
+
+	wasMissing := set.Sources[index].SourceMissing
+	set.Sources[index].SourceMissing = true
+	set.Sources[index].ImageChangeState = ImageChangeNone
+	set.Sources[index].LastChecked = checkedAt
 
 	p := fmt.Sprintf("sources.%d.", index)
 	fields := bson.M{
@@ -126,21 +170,28 @@ func MarkSourceMissing(ISet *ImageSetMongo, index int, checkedAt time.Time) (new
 		p + "last_checked":       checkedAt,
 	}
 	if !wasMissing {
-		if err := Tagger.RecomputeSystemTags(ISet.KscopeUserId, ISet); err != nil {
-			return false, fmt.Errorf("computing system tags: %w", err)
+		if err := Tagger.RecomputeSystemTags(userID, set); err != nil {
+			return set.ID, false, fmt.Errorf("computing system tags: %w", err)
 		}
-		maps.Copy(fields, tagFields(ISet))
+		maps.Copy(fields, tagFields(set))
 	}
-	return !wasMissing, updateSourceFields(ISet, index, fields)
+	return set.ID, !wasMissing, updateSourceFields(set, index, fields)
 }
 
-// MarkSourceRecovered records that Sources[index] is reachable again with nothing
-// else to report. Metadata or image changes go through ApplySourceMetadataUpdate /
-// MarkSourcePendingImageChange instead, which clear SourceMissing themselves.
-func MarkSourceRecovered(ISet *ImageSetMongo, index int, checkedAt time.Time) error {
-	wasMissing := ISet.Sources[index].SourceMissing
-	ISet.Sources[index].SourceMissing = false
-	ISet.Sources[index].LastChecked = checkedAt
+// MarkSourceRecovered records, holding LockUserSets, that the stored source is
+// reachable again with nothing else to report. Metadata or image changes go through
+// ApplySourceMetadataUpdate / MarkSourcePendingImageChange instead, which clear
+// SourceMissing themselves.
+func MarkSourceRecovered(userID, name, sourceID string, checkedAt time.Time) (setID bson.ObjectID, err error) {
+	defer LockUserSets(userID)()
+	set, index, err := findStoredSource(userID, name, sourceID)
+	if err != nil {
+		return bson.NilObjectID, err
+	}
+
+	wasMissing := set.Sources[index].SourceMissing
+	set.Sources[index].SourceMissing = false
+	set.Sources[index].LastChecked = checkedAt
 
 	p := fmt.Sprintf("sources.%d.", index)
 	fields := bson.M{
@@ -148,10 +199,10 @@ func MarkSourceRecovered(ISet *ImageSetMongo, index int, checkedAt time.Time) er
 		p + "last_checked":   checkedAt,
 	}
 	if wasMissing {
-		if err := Tagger.RecomputeSystemTags(ISet.KscopeUserId, ISet); err != nil {
-			return fmt.Errorf("computing system tags: %w", err)
+		if err := Tagger.RecomputeSystemTags(userID, set); err != nil {
+			return set.ID, fmt.Errorf("computing system tags: %w", err)
 		}
-		maps.Copy(fields, tagFields(ISet))
+		maps.Copy(fields, tagFields(set))
 	}
-	return updateSourceFields(ISet, index, fields)
+	return set.ID, updateSourceFields(set, index, fields)
 }

@@ -79,7 +79,10 @@ func validateAutoTagName(name string) error {
 	return nil
 }
 
+// CreateAutoTag holds LockUserSets from the rule write through applying it to
+// the user's sets.
 func CreateAutoTag(userID bson.ObjectID, name string, srcTagKeyMatch []string) (bson.ObjectID, error) {
+	defer imageset.LockUserSets(userID.Hex())()
 	if err := validateAutoTagName(name); err != nil {
 		return bson.ObjectID{}, err
 	}
@@ -103,8 +106,10 @@ func CreateAutoTag(userID bson.ObjectID, name string, srcTagKeyMatch []string) (
 // Rejects system-computed tags (see system_tags.go): applyAutoTagToSets
 // below re-evaluates membership purely from SrcTagKeyMatch, which is always
 // empty for a system tag, so letting this through would silently strip the
-// tag from every set that currently has it.
+// tag from every set that currently has it. Holds LockUserSets from the rule
+// write through applying it, so two edits apply in the order they were saved.
 func UpdateAutoTag(userID, autoTagID bson.ObjectID, name *string, srcTagKeyMatch []string) error {
+	defer imageset.LockUserSets(userID.Hex())()
 	if name != nil {
 		if err := validateAutoTagName(*name); err != nil {
 			return err
@@ -161,8 +166,10 @@ func UpdateAutoTag(userID, autoTagID bson.ObjectID, name *string, srcTagKeyMatch
 
 // DeleteAutoTag rejects system-computed tags (see system_tags.go): deleting
 // the doc would leave its id dangling in every set's AutoTags/Tags, and the
-// next recompute would just mint a replacement with a fresh id anyway.
+// next recompute would just mint a replacement with a fresh id anyway. Holds
+// LockUserSets from the delete through removing the tag from the user's sets.
 func DeleteAutoTag(userID, autoTagID bson.ObjectID) error {
+	defer imageset.LockUserSets(userID.Hex())()
 	var existing AutoTagDoc
 	if err := AutoTagsDB.FindOne(context.Background(), bson.M{"_id": autoTagID, "user_id": userID}).Decode(&existing); err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
@@ -432,7 +439,8 @@ func addDeltas(dst, src map[bson.ObjectID]int) {
 // applyAutoTagToSets re-evaluates autoTagID's membership on every image set
 // that could be affected by the change from oldSrcTagKeyMatch to
 // newSrcTagKeyMatch (either list may be nil), and applies the resulting
-// additions/removals in one bulk write.
+// additions/removals in one bulk write. The caller holds imageset.LockUserSets
+// from its rule write.
 func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldSrcTagKeyMatch, newSrcTagKeyMatch []string) error {
 	touchedKeys := union(oldSrcTagKeyMatch, newSrcTagKeyMatch)
 	touchedTags, err := sourceTagsByKey(userID, touchedKeys)
@@ -470,7 +478,9 @@ func applyAutoTagToSets(userID, autoTagID bson.ObjectID, oldSrcTagKeyMatch, newS
 
 // setAutoTagOnSets adds or removes tagID on each of sets so its presence
 // matches want, rebuilds each changed set's tags, writes them in one bulk
-// write, then applies the count changes.
+// write, then applies the count changes. The caller holds
+// imageset.LockUserSets from the read of sets, so tags and the count deltas
+// computed from them are still current at the write.
 func setAutoTagOnSets(userID, tagID bson.ObjectID, sets []imageset.ImageSetMongo, want func(imageset.ImageSetMongo) bool) error {
 	var models []mongo.WriteModel
 	deltas := make(map[bson.ObjectID]int)
@@ -487,10 +497,6 @@ func setAutoTagOnSets(userID, tagID bson.ObjectID, sets []imageset.ImageSetMongo
 		} else {
 			newAutoTags = slices.DeleteFunc(newAutoTags, func(id bson.ObjectID) bool { return id == tagID })
 		}
-		// TODO: tags is computed from this set's state as of the caller's Find, so a
-		// concurrent write to its autotags/tag_rule_overrides before this BulkWrite
-		// can be overwritten with a stale value, unlike the atomic $addToSet/$pull
-		// alongside it. count (also from this snapshot, via $inc) does not self-heal.
 		tags := ApplyTagRuleOverrides(newAutoTags, set.TagRuleOverrides)
 		addDeltas(deltas, tagCountDeltas(set.Tags, tags))
 		models = append(models, mongo.NewUpdateOneModel().

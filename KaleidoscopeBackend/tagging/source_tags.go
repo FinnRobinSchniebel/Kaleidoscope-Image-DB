@@ -363,8 +363,11 @@ type regatheredTag struct {
 
 // RegatherSourceTags recomputes every SourceTagDoc for userID from scratch,
 // backfilling missing entries and correcting count/translation drift. Blocks
-// for the duration on the same per-user lock ProcessSourceTags uses.
+// for the duration on the same per-user lock ProcessSourceTags uses, and first
+// on imageset.LockUserSets, so it never scans a set halfway through a save or
+// delete.
 func RegatherSourceTags(userID bson.ObjectID) (summary *RegatherSummary, err error) {
+	defer imageset.LockUserSets(userID.Hex())()
 	defer lockUserTags(userID.Hex())()
 
 	log.Printf("tagging regather [%s]: started", userID.Hex())

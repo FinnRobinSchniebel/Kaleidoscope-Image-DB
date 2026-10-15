@@ -1,6 +1,7 @@
 package imageset
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -174,6 +175,44 @@ func UpdateSourceDescription(a *ImageSetMongo, i int, description string) {
 // SourceID.
 func SameSource(a, b SourceInfo) bool {
 	return a.Name == b.Name && a.SourceID == b.SourceID
+}
+
+var errBrokenAttribution = errors.New("image attribution is broken")
+
+// checkAttribution enforces that every image has a source: image IDs are
+// non-zero and unique, every image is attributed to at least one source, every
+// attributed ID is an image of the set, and no source lists an ID twice. A
+// source with nothing attributed is allowed.
+func (set *ImageSetMongo) checkAttribution() error {
+	attributed := make(map[bson.ObjectID]bool, len(set.Image))
+	for _, img := range set.Image {
+		if img.ID.IsZero() {
+			return fmt.Errorf("%w: an image has no ID", errBrokenAttribution)
+		}
+		if _, seen := attributed[img.ID]; seen {
+			return fmt.Errorf("%w: image %s appears twice", errBrokenAttribution, img.ID.Hex())
+		}
+		attributed[img.ID] = false
+	}
+	for _, src := range set.Sources {
+		listed := make(map[bson.ObjectID]bool, len(src.AttributedTo))
+		for _, id := range src.AttributedTo {
+			if listed[id] {
+				return fmt.Errorf("%w: source %s/%s lists image %s twice", errBrokenAttribution, src.Name, src.SourceID, id.Hex())
+			}
+			listed[id] = true
+			if _, inSet := attributed[id]; !inSet {
+				return fmt.Errorf("%w: source %s/%s attributes image %s, which isn't in the set", errBrokenAttribution, src.Name, src.SourceID, id.Hex())
+			}
+			attributed[id] = true
+		}
+	}
+	for _, img := range set.Image {
+		if !attributed[img.ID] {
+			return fmt.Errorf("%w: image %s has no source", errBrokenAttribution, img.ID.Hex())
+		}
+	}
+	return nil
 }
 
 // UploadSourceName names the source of files that don't say where they came from.

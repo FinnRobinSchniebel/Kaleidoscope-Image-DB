@@ -94,7 +94,8 @@ func EmptyTagsFilter() bson.M {
 // UpdateTagTranslations applies EN to every image set (userID's own) with a
 // source named sourceName carrying a tag matching each entry's Default
 // (case/whitespace-insensitive, same identity NormalizeTagText defines),
-// wherever the stored EN currently differs. One BulkWrite for the batch.
+// wherever the stored EN currently differs. One BulkWrite for the batch. The
+// caller holds LockUserSets (it runs inside ProcessSourceTags).
 func UpdateTagTranslations(userID, sourceName string, tags []SourceTag) error {
 	if len(tags) == 0 {
 		return nil
@@ -208,10 +209,12 @@ func ownedFilter(ids []bson.ObjectID, userID string, admin bool) bson.M {
 }
 
 // DeleteImageSetInDB deletes the set, its image files and its recorded tag
-// counts. Non-admins can only delete their own sets; a set that is missing or
-// not theirs returns mongo.ErrNoDocuments either way. Files go first, so a
-// failed file removal leaves the document for a retry to finish.
+// counts, holding LockUserSets. Non-admins can only delete their own sets; a
+// set that is missing or not theirs returns mongo.ErrNoDocuments either way.
+// Files go first, so a failed file removal leaves the document for a retry to
+// finish.
 func DeleteImageSetInDB(id bson.ObjectID, userID string, admin bool) error {
+	defer LockUserSets(userID)()
 	filter := ownedFilter([]bson.ObjectID{id}, userID, admin)
 
 	var entryToDelete ImageSetMongo
@@ -296,7 +299,8 @@ func TagStatesForSets(ids []bson.ObjectID, userID string, admin bool) ([]SetTagS
 
 // SaveTagOverrides sets every set in tagsByID to overrides and its own tags,
 // in one bulk write. The ids must already be ownership-checked (see
-// TagStatesForSets). Nil overrides are stored as an empty list.
+// TagStatesForSets), and the caller holds LockUserSets from that read. Nil
+// overrides are stored as an empty list.
 func SaveTagOverrides(overrides []string, tagsByID map[bson.ObjectID][]string) error {
 	if len(tagsByID) == 0 {
 		return nil
@@ -328,7 +332,8 @@ type OverrideMerge struct {
 // MergeTagOverrides applies m to every set in ids (userID's own unless
 // admin) in one update, atomic per set: tag_rule_overrides becomes its
 // entries minus m.Drop, plus m.Add without duplicates, and tags becomes tags
-// plus m.TagsAdd minus m.TagsDrop.
+// plus m.TagsAdd minus m.TagsDrop. The caller holds LockUserSets from the read
+// it computed its count changes from.
 func MergeTagOverrides(ids []bson.ObjectID, userID string, admin bool, m OverrideMerge) error {
 	arrayOrEmpty := func(field string) bson.D {
 		return bson.D{{Key: "$ifNull", Value: bson.A{field, bson.A{}}}}

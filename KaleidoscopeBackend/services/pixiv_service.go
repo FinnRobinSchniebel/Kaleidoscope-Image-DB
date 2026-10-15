@@ -350,29 +350,18 @@ func enqueueNewIllust(userId string, illust pixivmodel.Illust, isPrivate bool) e
 	})
 }
 
-// markPixivSourceMissing re-reads the set right before writing, to keep the
-// window for overwriting a concurrent edit small. Only a source that wasn't
-// missing yet is reported as missing.
+// markPixivSourceMissing marks the illust's stored source missing. Only a source
+// that wasn't missing yet is reported as missing.
 func markPixivSourceMissing(userId string, illustID uint64) notification.ItemResult {
 	sourceID := strconv.FormatUint(illustID, 10)
-	set, ok, err := imageset.GetImageSetBySourceID(userId, pixivServiceName, sourceID)
-	if err != nil {
-		return notification.FailedItem(userId, sourceID, bson.NilObjectID, fmt.Errorf("%w: looking up removed illust: %w", notification.ErrLibraryAccess, err))
-	}
-	if !ok {
-		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "removed at source"}
-	}
-	_, idx := sourceByID(set, sourceID)
-	if idx < 0 {
-		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: sourceID}
-	}
-
-	newlyMissing, err := imageset.MarkSourceMissing(set, idx, time.Now())
+	setID, newlyMissing, err := imageset.MarkSourceMissing(userId, pixivServiceName, sourceID, time.Now())
 	switch {
+	case errors.Is(err, imageset.ErrSourceNotStored):
+		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "removed at source"}
 	case err != nil:
-		return notification.FailedItem(userId, sourceID, set.ID, fmt.Errorf("%w: marking missing: %w", notification.ErrLibraryAccess, err))
+		return notification.FailedItem(userId, sourceID, setID, fmt.Errorf("%w: marking missing: %w", notification.ErrLibraryAccess, err))
 	case newlyMissing:
-		return notification.ItemResult{Kind: notification.ItemMissing, Ref: sourceID, SetID: set.ID}
+		return notification.ItemResult{Kind: notification.ItemMissing, Ref: sourceID, SetID: setID}
 	default:
 		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: sourceID}
 	}
@@ -529,12 +518,10 @@ func pixivIllustCaption(illust *pixivmodel.Illust) string {
 	return ""
 }
 
-// pixivSourceInfo builds a fresh SourceInfo from illust for a source that already
-// exists in the DB, preserving its DB sub-id and image attribution from old.
-func pixivSourceInfo(illust *pixivmodel.Illust, old imageset.SourceInfo, isPrivate bool) imageset.SourceInfo {
+// pixivSourceInfo builds the incoming SourceInfo for illust's metadata update.
+func pixivSourceInfo(illust *pixivmodel.Illust, isPrivate bool) imageset.SourceInfo {
 	return imageset.SourceInfo{
 		Name:         pixivServiceName,
-		ID:           old.ID,
 		SourceID:     strconv.FormatUint(illust.ID, 10),
 		Title:        illust.Title,
 		Description:  pixivIllustCaption(illust),
@@ -542,40 +529,27 @@ func pixivSourceInfo(illust *pixivmodel.Illust, old imageset.SourceInfo, isPriva
 		AuthorID:     strconv.FormatUint(illust.User.ID, 10),
 		Tags:         pixivIllustTags(illust, isPrivate),
 		Date:         illust.CreateDate,
-		AttributedTo: old.AttributedTo,
 	}
 }
 
-// applyPixivSourceUpdate applies illust's metadata to its stored set,
-// re-reading the set right before writing to keep the window for overwriting
-// a concurrent edit small. A re-apply of identical values reports unchanged, and
-// a set the user changed since the page was read is skipped.
+// applyPixivSourceUpdate applies illust's metadata to its stored set. A re-apply
+// of identical values reports unchanged, and a set that no longer holds the
+// source since the page was read is skipped.
 func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust, isPrivate bool) notification.ItemResult {
 	sourceID := strconv.FormatUint(illust.ID, 10)
-	set, ok, err := imageset.GetImageSetBySourceID(userId, pixivServiceName, sourceID)
-	if err != nil {
-		return notification.FailedItem(userId, sourceID, bson.NilObjectID, fmt.Errorf("%w: looking up the stored set: %w", notification.ErrLibraryAccess, err))
-	}
-	if !ok {
-		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "the set changed during the sync"}
-	}
-	_, idx := sourceByID(set, sourceID)
-	if idx < 0 {
-		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, SetID: set.ID, Reason: "the set changed during the sync"}
-	}
 
 	// Image changes aren't checked yet: a changed CreateDate only updates the metadata.
-	checkedAt := time.Now()
-	newSrc := pixivSourceInfo(illust, set.Sources[idx], isPrivate)
-	changed, err := imageset.ApplySourceMetadataUpdate(set, idx, newSrc, checkedAt, userId)
-	if err != nil {
-		return notification.FailedItem(userId, sourceID, set.ID, fmt.Errorf("%w: applying metadata update: %w", notification.ErrLibraryAccess, err))
-	}
-	if !changed {
+	setID, changed, err := imageset.ApplySourceMetadataUpdate(userId, pixivSourceInfo(illust, isPrivate), time.Now())
+	switch {
+	case errors.Is(err, imageset.ErrSourceNotStored):
+		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "the set changed during the sync"}
+	case err != nil:
+		return notification.FailedItem(userId, sourceID, setID, fmt.Errorf("%w: applying metadata update: %w", notification.ErrLibraryAccess, err))
+	case !changed:
 		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: sourceID}
 	}
 	log.Printf("pixiv: updated illust %d (%q)", illust.ID, illust.Title)
-	return notification.ItemResult{Kind: notification.ItemUpdated, Ref: sourceID, SetID: set.ID}
+	return notification.ItemResult{Kind: notification.ItemUpdated, Ref: sourceID, SetID: setID}
 }
 
 // downloadPixivImage fetches a single Pixiv image URL into dir and returns the

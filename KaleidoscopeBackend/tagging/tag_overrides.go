@@ -236,7 +236,9 @@ func hexIDs(ids []bson.ObjectID) []string {
 // ReplaceTagOverrides sets every set in ids (userID's own unless admin) to
 // exactly overrides and rebuilds its Tags from its AutoTags. Empty overrides
 // clear them. ids must be unique and overrides pass validateOverrideEntries.
+// Holds imageset.LockUserSets from reading the sets through the count changes.
 func ReplaceTagOverrides(userID string, admin bool, ids []bson.ObjectID, overrides []string) ([]string, error) {
+	defer imageset.LockUserSets(userID)()
 	overrides = normalizeOverrides(overrides)
 	states, err := imageset.TagStatesForSets(ids, userID, admin)
 	if err != nil {
@@ -272,8 +274,10 @@ func ReplaceTagOverrides(userID string, admin bool, ids []bson.ObjectID, overrid
 // id. It never removes an override. Because each incoming override is final
 // for its id, Tags becomes Tags plus the includes minus the excludes, with no
 // need for AutoTags. ids must be unique and overrides pass
-// validateOverrideEntries.
+// validateOverrideEntries. Holds imageset.LockUserSets from reading the sets
+// through the count changes.
 func AddTagOverrides(userID string, admin bool, ids []bson.ObjectID, overrides []string) ([]string, error) {
+	defer imageset.LockUserSets(userID)()
 	overrides = normalizeOverrides(overrides)
 	states, err := imageset.TagStatesForSets(ids, userID, admin)
 	if err != nil {

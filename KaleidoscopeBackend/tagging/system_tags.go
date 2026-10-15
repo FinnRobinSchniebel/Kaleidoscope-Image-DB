@@ -179,8 +179,10 @@ func refreshUntaggedCount(userID bson.ObjectID) error {
 
 // RecomputeUntrackedForService re-evaluates the Untracked system tag on
 // every image set owned by userID that has a source named serviceName,
-// since that source's registration status just changed.
+// since that source's registration status just changed. Holds
+// imageset.LockUserSets from the read of those sets through the write.
 func RecomputeUntrackedForService(userID, serviceName string) error {
+	defer imageset.LockUserSets(userID)()
 	uid, err := bson.ObjectIDFromHex(userID)
 	if err != nil {
 		return fmt.Errorf("parsing user id: %w", err)

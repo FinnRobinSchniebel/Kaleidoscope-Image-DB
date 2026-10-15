@@ -24,7 +24,8 @@ type AutoTagger interface {
 	// ProcessSourceTags mutates set in place: merges fetched into
 	// Sources[sourceIdx].Tags, and updates AutoTags/Tags for tags new to
 	// the set. Leave Sources[sourceIdx].Tags empty first if sourceIdx has
-	// never been recorded before, so every fetched tag counts as new.
+	// never been recorded before, so every fetched tag counts as new. Call
+	// with LockUserSets held: it also writes other sets' translations.
 	ProcessSourceTags(userID string, set *ImageSetMongo, sourceIdx int, fetched []SourceTag) error
 	// RecordDeletion undoes usage counts recorded when the now-deleted set
 	// was created or synced: source tags from sources, AutoTags from tags.
@@ -120,7 +121,8 @@ func (m MultipartSource) Remove() bool {
 // image ID attributed to set's one source, checks userID's library for
 // matches (logged and returned), then saves. set must have exactly one
 // source with nothing attributed yet. Nothing is written before the check,
-// and errors carry a notification reason.
+// and errors carry a notification reason. The check and the save hold
+// LockUserSets; decoding the files doesn't.
 func ProcessNewImageSet(set *ImageSetMongo, files []MediaSource, userID string) (CollisionMap, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("%w: %w", notification.ErrSaveFailed, ErrNoMedia)
@@ -138,6 +140,7 @@ func ProcessNewImageSet(set *ImageSetMongo, files []MediaSource, userID string) 
 		set.Sources[0].AttributedTo[i] = preparedImage.Info.ID
 	}
 
+	defer LockUserSets(userID)()
 	matches, err := findImageMatches(userID, prepared)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err)
@@ -203,14 +206,21 @@ const unknownAuthor = "unknown"
 var ErrNoMedia = errors.New("no media attached")
 
 // addImageSet saves each image (from prepareImages) as a file named by its ID,
-// then inserts imageSet and returns its ID as hex. A failure undoes its own
-// partial writes.
+// then inserts imageSet and returns its ID as hex. Attribution is checked
+// before anything is written, and a later failure undoes its own partial writes.
 func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string) (string, error) {
 
 	//TODO: Test if image size is to large
 
-	//clean file paths to avoid unauthorized access
-	imageSet.Image = nil
+	//built from the prepared images only, so no client-sent path survives; names are set as each file is saved
+	imageSet.Image = make([]ImageInfo, len(images))
+	for i, preparedImage := range images {
+		imageSet.Image[i] = preparedImage.Info
+		imageSet.Image[i].IsImageActive = true
+	}
+	if err := imageSet.checkAttribution(); err != nil {
+		return "", err
+	}
 	imageSet.ThumbNail = ""
 
 	imageSet.KscopeUserId = ""
@@ -274,7 +284,7 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 		}
 	}
 
-	for _, preparedImage := range images {
+	for i, preparedImage := range images {
 
 		/**		save media		**/
 		var fileName string
@@ -300,11 +310,7 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 		if err != nil {
 			return "", fmt.Errorf("saving media: %w", err)
 		}
-
-		info := preparedImage.Info
-		info.Name = fileName
-		info.IsImageActive = true
-		imageSet.Image = append(imageSet.Image, info)
+		imageSet.Image[i].Name = fileName
 	}
 
 	log.Print("Files Uploaded")
