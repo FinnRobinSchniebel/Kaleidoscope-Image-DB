@@ -6,8 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // basePath is the extracted zip's root, used to resolve the relative file paths in fileIsetData.
@@ -35,11 +33,7 @@ func SaveImageSets(basePath string, cleanupPath string, fileIsetData []ImageSetF
 		imageset.PrintISet(&bundle.Iset)
 
 		//a failed group leaves nothing behind, so the remaining groups can still be imported
-		if _, err := imageset.ProcessNewImageSet(&bundle.Iset, files, user); err != nil {
-			report.Record(notification.FailedItem(user, bundle.Key, bson.NilObjectID, err))
-			continue
-		}
-		report.Record(notification.ItemResult{Kind: notification.ItemAdded, Ref: bundle.Key, SetID: bundle.Iset.ID})
+		report.Record(imageset.ProcessImageSet(&bundle.Iset, files, user, bundle.Key)...)
 
 		for _, path := range bundle.FilePath {
 			os.Remove(filepath.Join(basePath, path))

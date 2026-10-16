@@ -144,3 +144,26 @@ func PDQDistance(first, second []byte) int {
 	}
 	return distance
 }
+
+// PlainDistance is the largest PDQ distance from plain white or from the
+// all-zero hash (pure black) that still counts as a plain page. Every plain
+// page of any colour hashes near one of the two; real art measured 54 or more.
+const PlainDistance = 40
+
+var whitePDQ = sync.OnceValues(func() ([]byte, error) {
+	white := image.NewNRGBA(image.Rect(0, 0, 64, 64))
+	draw.Draw(white, white.Bounds(), image.White, image.Point{}, draw.Src)
+	return pdqHash(white)
+})
+
+// isPlain reports whether pdq is a plain page's hash. A missing hash is never plain.
+func isPlain(pdq []byte) (bool, error) {
+
+	white, err := whitePDQ()
+	if err != nil {
+		return false, fmt.Errorf("hashing plain white: %w", err)
+	}
+
+	zero := make([]byte, pdqHashBytes)
+	return PDQDistance(pdq, white) <= PlainDistance || PDQDistance(pdq, zero) <= PlainDistance, nil
+}

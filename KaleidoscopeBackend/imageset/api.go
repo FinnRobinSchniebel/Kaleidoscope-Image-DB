@@ -2,6 +2,7 @@ package imageset
 
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"errors"
 	"fmt"
 	"image"
@@ -163,6 +164,9 @@ func PostImageSet(c *fiber.Ctx) error {
 	}
 
 	media := form.File["media"]
+	if len(media) == 0 {
+		return c.Status(fiber.StatusBadRequest).SendString(ErrNoMedia.Error())
+	}
 
 	files := make([]MediaSource, len(media))
 	for i, fileHeader := range media {
@@ -173,21 +177,15 @@ func PostImageSet(c *fiber.Ctx) error {
 		imageSet.Sources = []SourceInfo{{Name: UploadSourceName}}
 	}
 
-	hashHits, err := ProcessNewImageSet(imageSet, files, userID)
-	if err != nil {
-		status := fiber.StatusInternalServerError
-		if errors.Is(err, ErrNoMedia) {
-			status = fiber.StatusBadRequest
-		}
-		return c.Status(status).SendString(err.Error())
-	}
+	results := ProcessImageSet(imageSet, files, userID, UploadSourceName)
 
-	//non-empty hashHits means the set was added but duplicate images were detected
 	status := fiber.StatusCreated
-	if len(hashHits) != 0 {
-		status = fiber.StatusAccepted
+	for _, result := range results {
+		if result.Kind == notification.ItemFailed {
+			status = fiber.StatusInternalServerError
+		}
 	}
-	return c.Status(status).JSON(fiber.Map{"hash_hits": hashHits})
+	return c.Status(status).JSON(fiber.Map{"results": results})
 }
 
 // takes in one or multiple "ids" in a coma separated list (no spaces)

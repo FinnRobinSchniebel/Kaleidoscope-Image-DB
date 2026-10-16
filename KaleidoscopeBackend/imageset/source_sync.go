@@ -55,9 +55,11 @@ func ApplySourceMetadataUpdate(userID string, newSrc SourceInfo, checkedAt time.
 	set.Sources[index].ImageChangeState = ImageChangeNone
 	set.Sources[index].SourceMissing = false
 
-	if err := Tagger.ProcessSourceTags(userID, set, index, newSrc.Tags); err != nil {
+	counted, err := Tagger.ProcessSourceTags(userID, set, index, newSrc.Tags)
+	if err != nil {
 		return set.ID, false, fmt.Errorf("processing source tags: %w", err)
 	}
+
 	changed = sourceDataChanged(before, set.Sources[index])
 	if changed {
 		set.Sources[index].LastAppliedUpdate = checkedAt
@@ -65,7 +67,11 @@ func ApplySourceMetadataUpdate(userID string, newSrc SourceInfo, checkedAt time.
 
 	fields[fmt.Sprintf("sources.%d", index)] = set.Sources[index]
 	maps.Copy(fields, tagFields(set))
-	return set.ID, changed, updateSourceFields(set, index, fields)
+
+	if err := updateSourceFields(set, index, fields); err != nil {
+		return set.ID, false, errors.Join(err, Tagger.UndoTagCounts(userID, counted))
+	}
+	return set.ID, changed, nil
 }
 
 // applySourceMetadata copies newSrc's non-empty title, description, known author
@@ -137,13 +143,19 @@ func MarkSourcePendingImageChange(userID, name, sourceID string, sourceDate, che
 		p + "date":               sourceDate,
 		p + "last_checked":       checkedAt,
 	}
+
+	var counted TagCountChange
 	if wasMissing {
-		if err := Tagger.RecomputeSystemTags(userID, set); err != nil {
+		if counted, err = Tagger.RecomputeSystemTags(userID, set); err != nil {
 			return set.ID, fmt.Errorf("computing system tags: %w", err)
 		}
 		maps.Copy(fields, tagFields(set))
 	}
-	return set.ID, updateSourceFields(set, index, fields)
+
+	if err := updateSourceFields(set, index, fields); err != nil {
+		return set.ID, errors.Join(err, Tagger.UndoTagCounts(userID, counted))
+	}
+	return set.ID, nil
 }
 
 // MarkSourceMissing records, holding LockUserSets, that the stored source could no
@@ -169,13 +181,19 @@ func MarkSourceMissing(userID, name, sourceID string, checkedAt time.Time) (setI
 		p + "image_change_state": ImageChangeNone,
 		p + "last_checked":       checkedAt,
 	}
+
+	var counted TagCountChange
 	if !wasMissing {
-		if err := Tagger.RecomputeSystemTags(userID, set); err != nil {
+		if counted, err = Tagger.RecomputeSystemTags(userID, set); err != nil {
 			return set.ID, false, fmt.Errorf("computing system tags: %w", err)
 		}
 		maps.Copy(fields, tagFields(set))
 	}
-	return set.ID, !wasMissing, updateSourceFields(set, index, fields)
+
+	if err := updateSourceFields(set, index, fields); err != nil {
+		return set.ID, false, errors.Join(err, Tagger.UndoTagCounts(userID, counted))
+	}
+	return set.ID, !wasMissing, nil
 }
 
 // MarkSourceRecovered records, holding LockUserSets, that the stored source is
@@ -198,11 +216,17 @@ func MarkSourceRecovered(userID, name, sourceID string, checkedAt time.Time) (se
 		p + "source_missing": false,
 		p + "last_checked":   checkedAt,
 	}
+
+	var counted TagCountChange
 	if wasMissing {
-		if err := Tagger.RecomputeSystemTags(userID, set); err != nil {
+		if counted, err = Tagger.RecomputeSystemTags(userID, set); err != nil {
 			return set.ID, fmt.Errorf("computing system tags: %w", err)
 		}
 		maps.Copy(fields, tagFields(set))
 	}
-	return set.ID, updateSourceFields(set, index, fields)
+
+	if err := updateSourceFields(set, index, fields); err != nil {
+		return set.ID, errors.Join(err, Tagger.UndoTagCounts(userID, counted))
+	}
+	return set.ID, nil
 }

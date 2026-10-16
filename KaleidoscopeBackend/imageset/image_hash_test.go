@@ -191,3 +191,45 @@ func TestPDQFlattensTransparency(t *testing.T) {
 		t.Errorf("transparent copy is %d from a different picture, want more than %d", d, SimilarDistance)
 	}
 }
+
+func TestIsPlain(t *testing.T) {
+
+	plainPage := func(c color.Color) image.Image {
+		page := image.NewNRGBA(image.Rect(0, 0, 200, 300))
+		draw.Draw(page, page.Bounds(), image.NewUniform(c), image.Point{}, draw.Src)
+		return page
+	}
+
+	tests := []struct {
+		name  string
+		img   image.Image
+		plain bool
+	}{
+		{"white", plainPage(color.White), true},
+		{"black", plainPage(color.Black), true},
+		{"mid gray", plainPage(color.Gray{Y: 128}), true},
+		{"red", plainPage(color.NRGBA{R: 200, G: 30, B: 30, A: 255}), true},
+		{"picture", testPicture(0, false), false},
+	}
+	for _, tt := range tests {
+
+		hashes, err := HashImage(tt.img)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		plain, err := isPlain(hashes.PDQ)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if plain != tt.plain {
+			white, _ := whitePDQ()
+			t.Errorf("%s: plain = %t, want %t (distance from white %d)", tt.name, plain, tt.plain, PDQDistance(hashes.PDQ, white))
+		}
+	}
+
+	if plain, err := isPlain(nil); err != nil || plain {
+		t.Errorf("a missing hash: plain = %t, err = %v; want not plain", plain, err)
+	}
+}

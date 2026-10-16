@@ -118,10 +118,11 @@ func ensureSystemAutoTags(userID bson.ObjectID, names []string) (map[string]bson
 // adjusting stored counts; the count adjustment is its last write. Like
 // ProcessSourceTags, it does not persist set; callers must write
 // autotags/tags themselves, then refresh Untagged (RefreshUntaggedCount).
-func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
+// The returned change is empty when no count changed.
+func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) (imageset.TagCountChange, error) {
 	uid, err := bson.ObjectIDFromHex(userID)
 	if err != nil {
-		return fmt.Errorf("parsing user id: %w", err)
+		return imageset.TagCountChange{}, fmt.Errorf("parsing user id: %w", err)
 	}
 	want := map[string]bool{
 		lostMediaTagName: isLostMedia(set.Sources),
@@ -129,7 +130,7 @@ func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 	}
 	ids, err := ensureSystemAutoTags(uid, slices.Collect(maps.Keys(want)))
 	if err != nil {
-		return err
+		return imageset.TagCountChange{}, err
 	}
 
 	changed := false
@@ -145,10 +146,15 @@ func RecomputeSystemTags(userID string, set *imageset.ImageSetMongo) error {
 			set.AutoTags = slices.DeleteFunc(set.AutoTags, func(x bson.ObjectID) bool { return x == id })
 		}
 	}
-	if changed {
-		return rebuildTagsAndAdjustCounts(uid, set)
+	if !changed {
+		return imageset.TagCountChange{}, nil
 	}
-	return nil
+
+	tagsBefore := slices.Clone(set.Tags)
+	if err := rebuildTagsAndAdjustCounts(uid, set); err != nil {
+		return imageset.TagCountChange{}, err
+	}
+	return imageset.TagCountChange{TagsBefore: tagsBefore, TagsAfter: slices.Clone(set.Tags)}, nil
 }
 
 // refreshUntaggedCount recomputes and stores Untagged's Count for userID.

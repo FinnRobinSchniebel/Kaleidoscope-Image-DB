@@ -13,6 +13,7 @@ type StoredImageHash struct {
 	SetID   bson.ObjectID
 	ImageID bson.ObjectID
 	Hashes  ImageHashes
+	Plain   bool
 }
 
 // HashMatch is a stored image matching an incoming one: Exact when the pixels
@@ -21,6 +22,7 @@ type HashMatch struct {
 	SetID   bson.ObjectID `json:"set_id"`
 	ImageID bson.ObjectID `json:"image_id"`
 	Exact   bool          `json:"exact"`
+	Plain   bool          `json:"plain"` //either image is a plain page; only exact matches are kept then
 }
 
 // CollisionMap holds each incoming image's matches, keyed by its position in
@@ -44,7 +46,13 @@ func loadUserImageHashes(userID string) ([]StoredImageHash, error) {
 	var stored []StoredImageHash
 	for _, set := range sets {
 		for _, img := range set.Image {
-			stored = append(stored, StoredImageHash{SetID: set.ID, ImageID: img.ID, Hashes: img.ImageHashes})
+
+			plain, err := isPlain(img.PDQ)
+			if err != nil {
+				return nil, err
+			}
+
+			stored = append(stored, StoredImageHash{SetID: set.ID, ImageID: img.ID, Hashes: img.ImageHashes, Plain: plain})
 		}
 	}
 	return stored, nil
@@ -52,13 +60,18 @@ func loadUserImageHashes(userID string) ([]StoredImageHash, error) {
 
 // findHashMatches returns the stored images matching hashes: exact when both
 // pixel hashes are present and equal, otherwise similar when the PDQ hashes
-// are within SimilarDistance. A missing hash never matches.
-func findHashMatches(hashes ImageHashes, stored []StoredImageHash) []HashMatch {
+// are within SimilarDistance. A missing hash never matches, and a pair where
+// either side is a plain page only matches exactly (plain pages all look alike).
+func findHashMatches(hashes ImageHashes, plain bool, stored []StoredImageHash) []HashMatch {
+
 	var matches []HashMatch
 	for _, storedImage := range stored {
+
+		pairPlain := plain || storedImage.Plain
 		exact := len(hashes.Pixel) == pixelHashBytes && bytes.Equal(hashes.Pixel, storedImage.Hashes.Pixel)
-		if exact || PDQDistance(hashes.PDQ, storedImage.Hashes.PDQ) <= SimilarDistance {
-			matches = append(matches, HashMatch{SetID: storedImage.SetID, ImageID: storedImage.ImageID, Exact: exact})
+
+		if exact || (!pairPlain && PDQDistance(hashes.PDQ, storedImage.Hashes.PDQ) <= SimilarDistance) {
+			matches = append(matches, HashMatch{SetID: storedImage.SetID, ImageID: storedImage.ImageID, Exact: exact, Plain: pairPlain})
 		}
 	}
 	return matches
@@ -67,13 +80,15 @@ func findHashMatches(hashes ImageHashes, stored []StoredImageHash) []HashMatch {
 // findImageMatches loads userID's stored hashes once and matches every
 // prepared image against them, before anything is written.
 func findImageMatches(userID string, images []PreparedImage) (CollisionMap, error) {
+
 	stored, err := loadUserImageHashes(userID)
 	if err != nil {
 		return nil, err
 	}
+
 	collisions := make(CollisionMap)
 	for index, preparedImage := range images {
-		if matches := findHashMatches(preparedImage.Info.ImageHashes, stored); len(matches) != 0 {
+		if matches := findHashMatches(preparedImage.Info.ImageHashes, preparedImage.Plain, stored); len(matches) != 0 {
 			collisions[index] = matches
 		}
 	}

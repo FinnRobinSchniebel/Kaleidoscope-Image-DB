@@ -27,7 +27,7 @@ func TestFindHashMatches(t *testing.T) {
 	noHashes := StoredImageHash{SetID: bson.NewObjectID(), ImageID: bson.NewObjectID()}
 	stored := []StoredImageHash{exact, similar, tooFar, noHashes}
 
-	got := findHashMatches(incoming, stored)
+	got := findHashMatches(incoming, false, stored)
 	want := []HashMatch{
 		{SetID: exact.SetID, ImageID: exact.ImageID, Exact: true},
 		{SetID: similar.SetID, ImageID: similar.ImageID, Exact: false},
@@ -37,7 +37,22 @@ func TestFindHashMatches(t *testing.T) {
 	}
 
 	//two images without hashes must not count as equal
-	if got := findHashMatches(ImageHashes{}, stored); len(got) != 0 {
+	if got := findHashMatches(ImageHashes{}, false, stored); len(got) != 0 {
 		t.Errorf("an image without hashes matched %+v", got)
+	}
+
+	//a plain page on either side only matches exactly, and the match says so
+	plainExact, plainSimilar := exact, similar
+	plainExact.Plain, plainSimilar.Plain = true, true
+	got = findHashMatches(incoming, false, []StoredImageHash{plainExact, plainSimilar})
+	want = []HashMatch{{SetID: exact.SetID, ImageID: exact.ImageID, Exact: true, Plain: true}}
+	if !slices.Equal(got, want) {
+		t.Errorf("against plain stored pages: matches = %+v, want only the exact one, flagged plain", got)
+	}
+
+	got = findHashMatches(incoming, true, []StoredImageHash{exact, similar})
+	want = []HashMatch{{SetID: exact.SetID, ImageID: exact.ImageID, Exact: true, Plain: true}}
+	if !slices.Equal(got, want) {
+		t.Errorf("a plain incoming page: matches = %+v, want only the exact one, flagged plain", got)
 	}
 }

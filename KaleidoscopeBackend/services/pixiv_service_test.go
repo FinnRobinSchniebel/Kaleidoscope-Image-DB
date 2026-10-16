@@ -3,7 +3,6 @@ package services
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
-	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -13,9 +12,9 @@ import (
 )
 
 func TestSavePixivIllustNoURLs(t *testing.T) {
-	_, err := savePixivIllust("user1", &pixivmodel.Illust{ID: 1}, false)
-	if !errors.Is(err, notification.ErrDownloadFailed) {
-		t.Errorf("err = %v, want it marked ErrDownloadFailed", err)
+	results := savePixivIllust("user1", &pixivmodel.Illust{ID: 1}, false)
+	if len(results) != 1 || results[0].Kind != notification.ItemFailed || results[0].Reason != notification.ErrDownloadFailed.Error() {
+		t.Errorf("results = %+v, want one failed item with the download reason", results)
 	}
 }
 

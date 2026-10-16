@@ -338,15 +338,10 @@ func sourceByID(set *imageset.ImageSetMongo, sourceID string) (src imageset.Sour
 // ----- Per-illust work ----
 
 // enqueueNewIllust is queued rather than run inline because it downloads images.
-// Its task reports the illust as added or failed.
+// Its task reports what importing the illust did.
 func enqueueNewIllust(userId string, illust pixivmodel.Illust, isPrivate bool) error {
-	ref := strconv.FormatUint(illust.ID, 10)
 	return DefaultScheduler.Enqueue(pixivServiceName, userId, func() ([]notification.ItemResult, error) {
-		setID, err := savePixivIllust(userId, &illust, isPrivate)
-		if err != nil {
-			return []notification.ItemResult{notification.FailedItem(userId, ref, bson.NilObjectID, err)}, nil
-		}
-		return []notification.ItemResult{{Kind: notification.ItemAdded, Ref: ref, SetID: setID}}, nil
+		return savePixivIllust(userId, &illust, isPrivate), nil
 	})
 }
 
@@ -383,39 +378,40 @@ func tagsChanged(have, want []imageset.SourceTag) bool {
 	return false
 }
 
-// savePixivIllust downloads illust's pages and stores them as a new set,
-// returning its ID.
-func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) (bson.ObjectID, error) {
-	illustID := illust.ID
+// savePixivIllust downloads illust's pages and imports them, returning the
+// report items for it: a new set, a merge into stored sets, or a failure.
+func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) []notification.ItemResult {
 
-	// Download all pages to a temporary directory, then store them as a new set.
+	illustID := illust.ID
+	ref := strconv.FormatUint(illustID, 10)
+
+	// Download all pages to a temporary directory, then import them.
 	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("pixiv_%d_*", illustID))
 	if err != nil {
-		return bson.NilObjectID, fmt.Errorf("%w: create temp dir: %w", notification.ErrSaveFailed, err)
+		return []notification.ItemResult{notification.FailedItem(userId, ref, bson.NilObjectID, fmt.Errorf("%w: create temp dir: %w", notification.ErrSaveFailed, err))}
 	}
 	defer os.RemoveAll(tmpDir)
 
 	urls := illustImageURLs(illust)
 	if len(urls) == 0 {
-		return bson.NilObjectID, fmt.Errorf("%w: illust %d: no downloadable image URLs", notification.ErrDownloadFailed, illustID)
+		err := fmt.Errorf("%w: illust %d: no downloadable image URLs", notification.ErrDownloadFailed, illustID)
+		return []notification.ItemResult{notification.FailedItem(userId, ref, bson.NilObjectID, err)}
 	}
 
 	files := make([]imageset.MediaSource, 0, len(urls))
 	for _, url := range urls {
+
 		path, err := downloadPixivImage(url, tmpDir)
 		if err != nil {
-			return bson.NilObjectID, fmt.Errorf("%w: download %s: %w", notification.ErrDownloadFailed, url, err)
+			err = fmt.Errorf("%w: download %s: %w", notification.ErrDownloadFailed, url, err)
+			return []notification.ItemResult{notification.FailedItem(userId, ref, bson.NilObjectID, err)}
 		}
 		files = append(files, imageset.DiskSource{Path: path})
 	}
 
-	iset := buildPixivImageSet(illust, userId, isPrivate)
-	if _, err := imageset.ProcessNewImageSet(iset, files, userId); err != nil {
-		return bson.NilObjectID, fmt.Errorf("illust %d: %w", illustID, err)
-	}
-
-	log.Printf("pixiv: saved illust %d (%q)", illustID, illust.Title)
-	return iset.ID, nil
+	results := imageset.ProcessImageSet(buildPixivImageSet(illust, userId, isPrivate), files, userId, ref)
+	log.Printf("pixiv: imported illust %d (%q)", illustID, illust.Title)
+	return results
 }
 
 // illustImageURLs returns the original-resolution download URLs for every page

@@ -1,6 +1,7 @@
 package imageset
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"bytes"
 	"errors"
 	"image"
@@ -114,7 +115,7 @@ func TestAddImageSetChecksAttributionFirst(t *testing.T) {
 	}
 }
 
-func TestProcessNewImageSetRejectsBadInput(t *testing.T) {
+func TestProcessImageSetRejectsBadInput(t *testing.T) {
 	//a readable file, so a missing check would run on into the lookup (no DB here) and crash
 	var pngBytes bytes.Buffer
 	if err := png.Encode(&pngBytes, testPicture(0, false)); err != nil {
@@ -137,13 +138,11 @@ func TestProcessNewImageSetRejectsBadInput(t *testing.T) {
 		{"source already attributed", []SourceInfo{{Name: "pixiv", AttributedTo: []bson.ObjectID{bson.NewObjectID()}}}, files},
 	}
 	for _, tt := range tests {
-		set := &ImageSetMongo{Sources: tt.sources}
-		if _, err := ProcessNewImageSet(set, tt.files, "user1"); err == nil {
-			t.Errorf("%s: accepted", tt.name)
-		}
-	}
 
-	if _, err := ProcessNewImageSet(&ImageSetMongo{Sources: []SourceInfo{{Name: "pixiv"}}}, nil, "user1"); !errors.Is(err, ErrNoMedia) {
-		t.Errorf("no files: err = %v, want ErrNoMedia so callers can answer 400", err)
+		set := &ImageSetMongo{Sources: tt.sources}
+		results := ProcessImageSet(set, tt.files, "user1", "group")
+		if len(results) != 1 || results[0].Kind != notification.ItemFailed || results[0].Ref != "group" {
+			t.Errorf("%s: results = %+v, want one failed item for the group", tt.name, results)
+		}
 	}
 }

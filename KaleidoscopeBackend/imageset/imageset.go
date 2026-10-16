@@ -103,12 +103,15 @@ func CleanImagSetForFrontEnd(iSet ...ImageSetMongo) []ImageSetMongo {
 // JoinDescriptions appends next to current after a blank line; an empty side
 // is dropped.
 func JoinDescriptions(current, next string) string {
+
 	if next == "" {
 		return current
 	}
+
 	if current == "" {
 		return next
 	}
+
 	return current + "\n\n" + next
 }
 
@@ -116,6 +119,7 @@ func JoinDescriptions(current, next string) string {
 // Sources and rebuilds Authors from them (see deriveAuthors). Sources' own
 // Descriptions must already be set.
 func DeriveFromSources(a *ImageSetMongo) {
+
 	if a.Title == "" {
 		for _, s := range a.Sources {
 			if s.Title != "" {
@@ -124,7 +128,9 @@ func DeriveFromSources(a *ImageSetMongo) {
 			}
 		}
 	}
+
 	deriveAuthors(a)
+
 	if a.Description == "" {
 		for _, s := range a.Sources {
 			a.Description = JoinDescriptions(a.Description, s.Description)
@@ -140,19 +146,24 @@ func authorKnown(name string) bool {
 // deriveAuthors sets set.Authors to its sources' known authors, each once in
 // source order, or to unknownAuthor when there are none. Reports whether it changed.
 func deriveAuthors(set *ImageSetMongo) bool {
+
 	authors := []string{}
 	for _, s := range set.Sources {
 		if authorKnown(s.SourceAuthor) && !slices.Contains(authors, s.SourceAuthor) {
 			authors = append(authors, s.SourceAuthor)
 		}
 	}
+
 	if len(authors) == 0 {
 		authors = []string{unknownAuthor}
 	}
+
 	if slices.Equal(set.Authors, authors) {
 		return false
 	}
+
 	set.Authors = authors
+
 	return true
 }
 
@@ -186,9 +197,11 @@ var errBrokenAttribution = errors.New("image attribution is broken")
 func (set *ImageSetMongo) checkAttribution() error {
 	attributed := make(map[bson.ObjectID]bool, len(set.Image))
 	for _, img := range set.Image {
+
 		if img.ID.IsZero() {
 			return fmt.Errorf("%w: an image has no ID", errBrokenAttribution)
 		}
+
 		if _, seen := attributed[img.ID]; seen {
 			return fmt.Errorf("%w: image %s appears twice", errBrokenAttribution, img.ID.Hex())
 		}
@@ -196,18 +209,23 @@ func (set *ImageSetMongo) checkAttribution() error {
 	}
 	for _, src := range set.Sources {
 		listed := make(map[bson.ObjectID]bool, len(src.AttributedTo))
+
 		for _, id := range src.AttributedTo {
+
 			if listed[id] {
 				return fmt.Errorf("%w: source %s/%s lists image %s twice", errBrokenAttribution, src.Name, src.SourceID, id.Hex())
 			}
+
 			listed[id] = true
 			if _, inSet := attributed[id]; !inSet {
 				return fmt.Errorf("%w: source %s/%s attributes image %s, which isn't in the set", errBrokenAttribution, src.Name, src.SourceID, id.Hex())
 			}
+
 			attributed[id] = true
 		}
 	}
 	for _, img := range set.Image {
+
 		if !attributed[img.ID] {
 			return fmt.Errorf("%w: image %s has no source", errBrokenAttribution, img.ID.Hex())
 		}
@@ -221,6 +239,7 @@ const UploadSourceName = "upload"
 // NormalizeSourceName returns name in its stored form: trimmed and lowercased,
 // or UploadSourceName when empty.
 func NormalizeSourceName(name string) string {
+
 	if name = strings.ToLower(strings.TrimSpace(name)); name == "" {
 		return UploadSourceName
 	}
@@ -299,7 +318,9 @@ func SourcesToString(a SourceInfo) string {
 	sb.WriteString(fmt.Sprintf("Date: %s\n", a.Date.Format(time.RFC3339)))
 
 	sb.WriteString("Tags:\n")
+
 	for _, tag := range a.Tags {
+
 		if tag.EN != "" {
 			sb.WriteString(fmt.Sprintf("   - %s (%s)\n", tag.EN, tag.Default))
 		} else {

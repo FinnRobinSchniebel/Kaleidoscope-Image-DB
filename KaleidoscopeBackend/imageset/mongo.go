@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -645,6 +647,112 @@ func GetImageSetsBySourceIDs(userId string, sourceName string, sourceIDs []strin
 		}
 	}
 	return result, nil
+}
+
+// loadOwnedSets returns userID's sets among ids, in the order of ids. Sets that
+// are missing or not the user's are left out.
+func loadOwnedSets(userID string, ids []bson.ObjectID) ([]ImageSetMongo, error) {
+
+	//a nil list would be sent as $in: null, which MongoDB rejects
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	cursor, err := Collection.Find(context.Background(), ownedFilter(ids, userID, false))
+	if err != nil {
+		return nil, fmt.Errorf("loading image sets: %w", err)
+	}
+
+	var found []ImageSetMongo
+	if err := cursor.All(context.Background(), &found); err != nil {
+		return nil, fmt.Errorf("loading image sets: %w", err)
+	}
+
+	byID := make(map[bson.ObjectID]ImageSetMongo, len(found))
+	for _, set := range found {
+		byID[set.ID] = set
+	}
+
+	ordered := make([]ImageSetMongo, 0, len(found))
+	for _, id := range ids {
+		if set, ok := byID[id]; ok {
+			ordered = append(ordered, set)
+		}
+	}
+	return ordered, nil
+}
+
+// saveMergedSet writes a merge into set, only if its stored image IDs are still
+// beforeIDs. images is written only when the list changed, and the thumbnail is
+// cleared when image 0 changed (reported as thumbnailCleared), so the next view
+// regenerates it. A set that no longer matches returns an error. The caller
+// holds LockUserSets.
+func saveMergedSet(set *ImageSetMongo, beforeIDs []bson.ObjectID) (thumbnailCleared bool, err error) {
+
+	ids := make([]bson.ObjectID, len(set.Image))
+	for i, img := range set.Image {
+		ids[i] = img.ID
+	}
+
+	fields := bson.M{
+		"sources":     set.Sources,
+		"title":       set.Title,
+		"authors":     set.Authors,
+		"description": set.Description,
+		"type":        set.Itype,
+		"other":       set.Other,
+	}
+	maps.Copy(fields, tagFields(set))
+
+	if !slices.Equal(ids, beforeIDs) {
+		fields["images"] = set.Image
+		thumbnailCleared = len(ids) > 0 && (len(beforeIDs) == 0 || ids[0] != beforeIDs[0])
+		if thumbnailCleared {
+			fields["thumbnail"] = ""
+		}
+	}
+
+	filter := bson.M{
+		"_id":           set.ID,
+		"kscope_userid": set.KscopeUserId,
+		"$expr":         bson.M{"$eq": bson.A{"$images.id", bson.M{"$literal": beforeIDs}}},
+	}
+	result, err := Collection.UpdateOne(context.Background(), filter, bson.M{"$set": fields})
+	if err != nil {
+		return false, fmt.Errorf("saving merged image set: %w", err)
+	}
+
+	if result.MatchedCount == 0 {
+		return false, fmt.Errorf("image set %s changed or was deleted before the merge was saved", set.ID.Hex())
+	}
+	return thumbnailCleared, nil
+}
+
+// findSetIDsWithSource returns the IDs of userID's sets holding the source
+// named name with sourceID.
+func findSetIDsWithSource(userID, name, sourceID string) ([]bson.ObjectID, error) {
+
+	filter := bson.M{
+		"kscope_userid": userID,
+		"sources":       bson.M{"$elemMatch": bson.M{"name": name, "source_id": sourceID}},
+	}
+	cursor, err := Collection.Find(context.Background(), filter, options.Find().SetProjection(bson.M{"_id": 1}))
+	if err != nil {
+		return nil, fmt.Errorf("finding sets with source %s/%s: %w", name, sourceID, err)
+	}
+
+	var found []struct {
+		ID bson.ObjectID `bson:"_id"`
+	}
+	if err := cursor.All(context.Background(), &found); err != nil {
+		return nil, fmt.Errorf("finding sets with source %s/%s: %w", name, sourceID, err)
+	}
+
+	ids := make([]bson.ObjectID, len(found))
+	for i, doc := range found {
+		ids[i] = doc.ID
+	}
+	return ids, nil
 }
 
 // GetImageSetBySourceID is a single-ID convenience wrapper around
