@@ -35,8 +35,13 @@ type AutoTagger interface {
 	// place. Does not persist set - callers own the eventual save.
 	RecomputeSystemTags(userID string, set *ImageSetMongo) (TagCountChange, error)
 	// UndoTagCounts reverses the counts in change, for a caller whose write
-	// of the set failed after ProcessSourceTags or RecomputeSystemTags.
+	// of the set failed after ProcessSourceTags, RecomputeSystemTags or
+	// CombineTagOverrides.
 	UndoTagCounts(userID string, change TagCountChange) error
+	// CombineTagOverrides unions other into set's TagRuleOverrides (an
+	// include beats an exclude of the same tag) and rebuilds set.Tags,
+	// adjusting the counts. Does not persist set.
+	CombineTagOverrides(userID string, set *ImageSetMongo, other []string) (TagCountChange, error)
 	// RefreshUntaggedCount recounts userID's Untagged AutoTag from the
 	// database. Call after a write that changed any set's tags.
 	RefreshUntaggedCount(userID string) error
@@ -169,23 +174,48 @@ func ProcessImageSet(set *ImageSetMongo, files []MediaSource, userID string, ref
 	}
 
 	var results []notification.ItemResult
-	var newSetID bson.ObjectID
-	var changedTargets, written []bson.ObjectID
 	var suggested []candidateMatch
 
 	switch chooseOutcome(candidates) {
 	case outcomeMerge:
+		var written, gainedImages, gainedSource []bson.ObjectID
 		for _, candidate := range candidates {
 
 			if candidate.scenario == scenarioPartial || candidate.scenario == scenarioSimilar {
-				continue //left for the full-set check
+				continue //left for the full-set checks below, which run on targets that gained images
 			}
 
-			item, changedForLookup := mergeIntoSet(userID, ref, set, prepared, candidate)
+			item, imagesAdded, sourceAdded := mergeIntoSet(userID, ref, set, prepared, candidate)
 			results = append(results, item)
 			written = append(written, candidate.set.ID)
-			if changedForLookup {
-				changedTargets = append(changedTargets, candidate.set.ID)
+
+			switch {
+			case imagesAdded:
+				gainedImages = append(gainedImages, candidate.set.ID)
+			case sourceAdded:
+				gainedSource = append(gainedSource, candidate.set.ID)
+			}
+		}
+
+		//every write comes first, so a check can't combine a target before its own write runs
+		done := make(map[bson.ObjectID]bool)
+		for _, target := range gainedImages {
+
+			if done[target] {
+				continue //absorbed by an earlier check, or already checked as its survivor
+			}
+
+			items, finalID, absorbed := checkFullSet(userID, ref, target, set.Sources, written)
+			results = append(results, items...)
+			done[finalID] = true
+			for _, id := range absorbed {
+				done[id] = true
+			}
+		}
+
+		for _, target := range gainedSource {
+			if !done[target] {
+				results = append(results, suggestMerge(userID, ref, target, nil, set.Sources, written)...)
 			}
 		}
 
@@ -202,11 +232,10 @@ func ProcessImageSet(set *ImageSetMongo, files []MediaSource, userID string, ref
 		if _, err := addImageSet(set, prepared, userID); err != nil {
 			return []notification.ItemResult{notification.FailedItem(userID, ref, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err))}
 		}
-		newSetID = set.ID
-		results = append(results, notification.ItemResult{Kind: notification.ItemAdded, Ref: ref, SetID: newSetID})
+		results = append(results, notification.ItemResult{Kind: notification.ItemAdded, Ref: ref, SetID: set.ID})
+		results = append(results, suggestMerge(userID, ref, set.ID, suggested, set.Sources, nil)...)
 	}
-
-	return append(results, suggestMerges(userID, ref, set.Sources[0], newSetID, changedTargets, written, suggested)...)
+	return results
 }
 
 // PreparedImage is an incoming file decoded once to hash and measure it. Its

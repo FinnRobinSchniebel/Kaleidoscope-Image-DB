@@ -8,7 +8,6 @@ import (
 	"log"
 	"maps"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -682,31 +681,43 @@ func loadOwnedSets(userID string, ids []bson.ObjectID) ([]ImageSetMongo, error) 
 	return ordered, nil
 }
 
-// saveMergedSet writes a merge into set, only if its stored image IDs are still
-// beforeIDs. images is written only when the list changed, and the thumbnail is
-// cleared when image 0 changed (reported as thumbnailCleared), so the next view
-// regenerates it. A set that no longer matches returns an error. The caller
-// holds LockUserSets.
-func saveMergedSet(set *ImageSetMongo, beforeIDs []bson.ObjectID) (thumbnailCleared bool, err error) {
+// saveMergedSet writes a merge or combine into set, only if its stored image IDs
+// are still those of before. images is written only when the IDs or an active
+// flag changed, and the thumbnail is cleared when image 0 changed (reported as
+// thumbnailCleared), so the next view regenerates it. A set that no longer
+// matches returns an error. The caller holds LockUserSets.
+func saveMergedSet(set *ImageSetMongo, before []ImageInfo) (thumbnailCleared bool, err error) {
 
-	ids := make([]bson.ObjectID, len(set.Image))
-	for i, img := range set.Image {
-		ids[i] = img.ID
+	beforeIDs := make([]bson.ObjectID, len(before))
+	for i, img := range before {
+		beforeIDs[i] = img.ID
+	}
+
+	imagesChanged := len(set.Image) != len(before)
+	for i := 0; !imagesChanged && i < len(before); i++ {
+		imagesChanged = set.Image[i].ID != before[i].ID || set.Image[i].IsImageActive != before[i].IsImageActive
+	}
+
+	overrides := set.TagRuleOverrides
+	if overrides == nil {
+		overrides = []string{}
 	}
 
 	fields := bson.M{
-		"sources":     set.Sources,
-		"title":       set.Title,
-		"authors":     set.Authors,
-		"description": set.Description,
-		"type":        set.Itype,
-		"other":       set.Other,
+		"sources":            set.Sources,
+		"title":              set.Title,
+		"authors":            set.Authors,
+		"description":        set.Description,
+		"type":               set.Itype,
+		"other":              set.Other,
+		"tag_rule_overrides": overrides,
+		"date_added":         set.DateAdded,
 	}
 	maps.Copy(fields, tagFields(set))
 
-	if !slices.Equal(ids, beforeIDs) {
+	if imagesChanged {
 		fields["images"] = set.Image
-		thumbnailCleared = len(ids) > 0 && (len(beforeIDs) == 0 || ids[0] != beforeIDs[0])
+		thumbnailCleared = len(set.Image) > 0 && (len(before) == 0 || set.Image[0].ID != before[0].ID)
 		if thumbnailCleared {
 			fields["thumbnail"] = ""
 		}
@@ -726,6 +737,27 @@ func saveMergedSet(set *ImageSetMongo, beforeIDs []bson.ObjectID) (thumbnailClea
 		return false, fmt.Errorf("image set %s changed or was deleted before the merge was saved", set.ID.Hex())
 	}
 	return thumbnailCleared, nil
+}
+
+// deleteCombinedSet deletes a set a combine absorbed, only if it still belongs
+// to its owner and still holds exactly imageIDs; anything else is an error.
+// Deletes the document only, not its files or tag counts.
+func deleteCombinedSet(set *ImageSetMongo, imageIDs []bson.ObjectID) error {
+
+	filter := bson.M{
+		"_id":           set.ID,
+		"kscope_userid": set.KscopeUserId,
+		"$expr":         bson.M{"$eq": bson.A{"$images.id", bson.M{"$literal": imageIDs}}},
+	}
+	result, err := Collection.DeleteOne(context.Background(), filter)
+	if err != nil {
+		return fmt.Errorf("deleting combined image set %s: %w", set.ID.Hex(), err)
+	}
+
+	if result.DeletedCount == 0 {
+		return fmt.Errorf("combined image set %s changed or was already deleted", set.ID.Hex())
+	}
+	return nil
 }
 
 // findSetIDsWithSource returns the IDs of userID's sets holding the source

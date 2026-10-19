@@ -50,15 +50,13 @@ func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.Obj
 // candidate): an addition inserts its new images, and incoming's source is
 // attached to the images it covers. Nothing is written before checkAttribution,
 // and a failure removes the new files and undoes the recorded tag counts.
-// changedForLookup reports images inserted or a source new to the set, which
-// is when the same-source lookup runs. The caller holds LockUserSets.
-func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []PreparedImage, match candidateMatch) (item notification.ItemResult, changedForLookup bool) {
+// imagesAdded (the set needs a full-set check) and sourceAdded (a source new to
+// the set) are only reported for a write that landed. The caller holds
+// LockUserSets.
+func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []PreparedImage, match candidateMatch) (item notification.ItemResult, imagesAdded, sourceAdded bool) {
 
 	target := match.set
-	beforeIDs := make([]bson.ObjectID, len(target.Image))
-	for i, img := range target.Image {
-		beforeIDs[i] = img.ID
-	}
+	before := slices.Clone(target.Image)
 	tagsBefore, autoTagsBefore := slices.Clone(target.Tags), slices.Clone(target.AutoTags)
 	itypeBefore, otherBefore := target.Itype, target.Other
 	sourcesBefore := slices.Clone(target.Sources)
@@ -73,7 +71,7 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 	index, isNew := attachIncomingSource(target, incoming, targetImageIDs(match, keeperOf, added))
 
 	if err := target.checkAttribution(); err != nil {
-		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false, false
 	}
 
 	plannedIDs := make(map[bson.ObjectID]bool, len(added))
@@ -114,13 +112,13 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 		}
 
 		if err := writePreparedImages(target, toWrite); err != nil {
-			return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+			return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false, false
 		}
 	}
 
 	counted, err := Tagger.ProcessSourceTags(userID, target, index, incoming.Sources[0].Tags)
 	if err != nil {
-		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: processing source tags: %w", notification.ErrSaveFailed, err)), false
+		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: processing source tags: %w", notification.ErrSaveFailed, err)), false, false
 	}
 
 	source := &target.Sources[index]
@@ -133,7 +131,7 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 
 	if !realChange && !otherChange {
 		committed = true
-		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, false
+		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, false, false
 	}
 
 	if realChange {
@@ -145,9 +143,9 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 	}
 
 	oldThumbnail := target.ThumbNail
-	thumbnailCleared, err := saveMergedSet(target, beforeIDs)
+	thumbnailCleared, err := saveMergedSet(target, before)
 	if err != nil {
-		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false, false
 	}
 	committed = true
 	refreshUntagged(userID)
@@ -161,90 +159,69 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 
 	switch {
 	case !realChange:
-		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, false
+		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, false, false
 	case len(added) == 1:
-		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "added 1 new image to an existing set"}, true
+		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "added 1 new image to an existing set"}, true, isNew
 	case len(added) > 1:
-		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: fmt.Sprintf("added %d new images to an existing set", len(added))}, true
+		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: fmt.Sprintf("added %d new images to an existing set", len(added))}, true, isNew
 	default:
-		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "matched an existing set"}, isNew
+		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "matched an existing set"}, false, isNew
 	}
 }
 
-// suggestMerges publishes the import's suggested merges and returns a Pending
-// item for each. newSetID (zero when no set was made) is suggested with every
-// candidate, with its image pairs. When source has an ID and the import made a
-// new set or changed a target (changedTargets), the sets holding the same
-// source are suggested too, without pairs. The new set and every set in written
-// are never suggested. A failed publish is only logged.
-func suggestMerges(userID, ref string, source SourceInfo, newSetID bson.ObjectID, changedTargets, written []bson.ObjectID, candidates []candidateMatch) []notification.ItemResult {
+// suggestMerge publishes one suggested merge for setID and returns its Pending
+// item, or nothing when there is nobody to suggest. It names each candidate
+// with its image pairs (their image IDs must be setID's own), then every set
+// holding one of sources that has an ID, without pairs. setID and the excluded
+// sets are never named, and no set twice. A failed publish or lookup is only
+// logged.
+func suggestMerge(userID, ref string, setID bson.ObjectID, candidates []candidateMatch, sources []SourceInfo, excluded []bson.ObjectID) []notification.ItemResult {
 
-	excluded := make(map[bson.ObjectID]bool)
-	for _, id := range written {
-		excluded[id] = true
-	}
-	if !newSetID.IsZero() {
-		excluded[newSetID] = true
+	skip := map[bson.ObjectID]bool{setID: true}
+	for _, id := range excluded {
+		skip[id] = true
 	}
 
-	var sameSource []bson.ObjectID
-	if source.SourceID != "" && (!newSetID.IsZero() || len(changedTargets) > 0) {
+	suggestion := notification.SuggestedMerge{SetID: setID}
+	for _, candidate := range candidates {
+		if !skip[candidate.set.ID] {
+			suggestion.Candidates = append(suggestion.Candidates, notification.MergeCandidate{SetID: candidate.set.ID, Pairs: candidate.pairs})
+			skip[candidate.set.ID] = true
+		}
+	}
+
+	for _, source := range sources {
+
+		if source.SourceID == "" {
+			continue //ID-less sources never match across sets
+		}
 
 		found, err := findSetIDsWithSource(userID, source.Name, source.SourceID)
 		if err != nil {
 			log.Printf("------ Warning: import [%s] %s: same-source lookup: %s ------", userID, ref, err)
-		}
-		sameSource = found
-	}
-
-	var suggestions []notification.SuggestedMerge
-	if !newSetID.IsZero() {
-
-		suggestion := notification.SuggestedMerge{SetID: newSetID}
-		listed := make(map[bson.ObjectID]bool)
-		for _, candidate := range candidates {
-			if !excluded[candidate.set.ID] {
-				suggestion.Candidates = append(suggestion.Candidates, notification.MergeCandidate{SetID: candidate.set.ID, Pairs: candidate.pairs})
-				listed[candidate.set.ID] = true
-			}
-		}
-
-		for _, id := range sameSource {
-			if !excluded[id] && !listed[id] {
-				suggestion.Candidates = append(suggestion.Candidates, notification.MergeCandidate{SetID: id})
-			}
-		}
-		suggestions = append(suggestions, suggestion)
-	}
-
-	for _, target := range changedTargets {
-
-		suggestion := notification.SuggestedMerge{SetID: target}
-		for _, id := range sameSource {
-			if !excluded[id] {
-				suggestion.Candidates = append(suggestion.Candidates, notification.MergeCandidate{SetID: id})
-			}
-		}
-		suggestions = append(suggestions, suggestion)
-	}
-
-	var results []notification.ItemResult
-	for _, suggestion := range suggestions {
-
-		if len(suggestion.Candidates) == 0 {
 			continue
 		}
 
-		if err := notification.Publish(userID, suggestion); err != nil {
-			log.Printf("------ Warning: import [%s] %s: %s ------", userID, ref, err)
-			continue
+		for _, id := range found {
+			if !skip[id] {
+				suggestion.Candidates = append(suggestion.Candidates, notification.MergeCandidate{SetID: id})
+				skip[id] = true
+			}
 		}
-
-		reason := fmt.Sprintf("suggested a merge with %d sets", len(suggestion.Candidates))
-		if len(suggestion.Candidates) == 1 {
-			reason = "suggested a merge with 1 set"
-		}
-		results = append(results, notification.ItemResult{Kind: notification.ItemPending, Ref: ref, SetID: suggestion.SetID, Reason: reason})
 	}
-	return results
+
+	if len(suggestion.Candidates) == 0 {
+		return nil
+	}
+
+	if err := notification.Publish(userID, suggestion); err != nil {
+		log.Printf("------ Warning: import [%s] %s: %s ------", userID, ref, err)
+		return nil
+	}
+
+	reason := fmt.Sprintf("suggested a merge with %d sets", len(suggestion.Candidates))
+	if len(suggestion.Candidates) == 1 {
+		reason = "suggested a merge with 1 set"
+	}
+	return []notification.ItemResult{{Kind: notification.ItemPending, Ref: ref, SetID: setID, Reason: reason}}
 }

@@ -3,6 +3,7 @@ package tagging
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -60,6 +61,58 @@ func rebuildTagsAndAdjustCounts(userID bson.ObjectID, set *imageset.ImageSetMong
 	old := set.Tags
 	buildTags(set)
 	return adjustAutoTagCounts(userID, tagCountDeltas(old, set.Tags))
+}
+
+// unionTagOverrides merges two override lists by AutoTag id, in first-seen
+// order: an include of an id wins over an exclude of it. Invalid entries are
+// dropped and the result is normalized.
+func unionTagOverrides(kept, other []string) []string {
+
+	excluded := make(map[bson.ObjectID]bool)
+	var order []bson.ObjectID
+	for _, entry := range slices.Concat(kept, other) {
+
+		id, exclude, ok := ParseTagRuleOverrideEntry(entry)
+		if !ok {
+			continue
+		}
+
+		if alreadyExcluded, seen := excluded[id]; seen {
+			excluded[id] = alreadyExcluded && exclude
+			continue
+		}
+
+		excluded[id] = exclude
+		order = append(order, id)
+	}
+
+	union := make([]string, 0, len(order))
+	for _, id := range order {
+		if excluded[id] {
+			union = append(union, "-"+id.Hex())
+		} else {
+			union = append(union, id.Hex())
+		}
+	}
+	return union
+}
+
+// CombineTagOverrides is the imageset.AutoTagger.CombineTagOverrides
+// implementation: set's overrides become their union with other, and set.Tags
+// is rebuilt, adjusting the counts. Does not persist set.
+func CombineTagOverrides(userID string, set *imageset.ImageSetMongo, other []string) (imageset.TagCountChange, error) {
+
+	uid, err := bson.ObjectIDFromHex(userID)
+	if err != nil {
+		return imageset.TagCountChange{}, fmt.Errorf("parsing user id: %w", err)
+	}
+
+	tagsBefore := slices.Clone(set.Tags)
+	set.TagRuleOverrides = unionTagOverrides(set.TagRuleOverrides, other)
+	if err := rebuildTagsAndAdjustCounts(uid, set); err != nil {
+		return imageset.TagCountChange{}, err
+	}
+	return imageset.TagCountChange{TagsBefore: tagsBefore, TagsAfter: slices.Clone(set.Tags)}, nil
 }
 
 // ErrInvalidOverride is returned for a malformed override entry or an id

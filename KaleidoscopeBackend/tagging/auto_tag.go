@@ -189,6 +189,10 @@ func (AutoTagFunc) UndoTagCounts(userID string, change imageset.TagCountChange) 
 	return UndoTagCounts(userID, change)
 }
 
+func (AutoTagFunc) CombineTagOverrides(userID string, set *imageset.ImageSetMongo, other []string) (imageset.TagCountChange, error) {
+	return CombineTagOverrides(userID, set, other)
+}
+
 func (AutoTagFunc) RefreshUntaggedCount(userID string) error {
 	uid, err := bson.ObjectIDFromHex(userID)
 	if err != nil {

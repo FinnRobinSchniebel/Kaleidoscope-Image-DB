@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/gif"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -151,6 +152,34 @@ func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 		}
 	}
 	return errList
+}
+
+// linkIntoFolder makes fromDir/name also exist as toDir/name: a hard link, or a
+// copy where linking fails. An existing toDir/name is an error and is left
+// untouched, so a link can never replace another image's file.
+func linkIntoFolder(fromDir, toDir, name string) error {
+
+	source, target := filepath.Join(fromDir, name), filepath.Join(toDir, name)
+	if _, err := os.Lstat(target); err == nil {
+		return fmt.Errorf("%s already exists", target)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("checking %s: %w", target, err)
+	}
+
+	if err := os.Link(source, target); err == nil {
+		return nil
+	}
+
+	file, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", source, err)
+	}
+	defer file.Close()
+
+	return writeFileAtomic(toDir, name, func(w io.Writer) error {
+		_, err := io.Copy(w, file)
+		return err
+	})
 }
 
 // DeleteLowResFile removes name (a low-res copy or the thumbnail) from path's

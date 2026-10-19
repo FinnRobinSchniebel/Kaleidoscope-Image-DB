@@ -152,8 +152,9 @@ func planNewImages(incoming []PreparedImage, match candidateMatch) (keeperOf []i
 			continue
 		}
 
+		//a missing or malformed hash is never equal to another, so such an image keeps itself
 		pixels := string(preparedImage.Info.Pixel)
-		if keeper, seen := firstWithPixels[pixels]; seen {
+		if keeper, seen := firstWithPixels[pixels]; seen && len(preparedImage.Info.Pixel) == pixelHashBytes {
 			keeperOf[i] = keeper
 			continue
 		}

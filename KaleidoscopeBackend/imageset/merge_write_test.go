@@ -11,9 +11,18 @@ import (
 )
 
 // fakeTagger records nothing and changes no tags, so a merge can run without a database.
-type fakeTagger struct{}
+type fakeTagger struct {
+	processed  *bool //set when ProcessSourceTags runs, if non-nil
+	processErr error //returned by ProcessSourceTags
+}
 
-func (fakeTagger) ProcessSourceTags(string, *ImageSetMongo, int, []SourceTag) (TagCountChange, error) {
+func (f fakeTagger) ProcessSourceTags(string, *ImageSetMongo, int, []SourceTag) (TagCountChange, error) {
+	if f.processed != nil {
+		*f.processed = true
+	}
+	return TagCountChange{}, f.processErr
+}
+func (fakeTagger) CombineTagOverrides(string, *ImageSetMongo, []string) (TagCountChange, error) {
 	return TagCountChange{}, nil
 }
 func (fakeTagger) RecordDeletion(string, []SourceInfo, []string) error { return nil }
@@ -89,7 +98,7 @@ func TestMergeIntoSetChecksAttributionFirst(t *testing.T) {
 	match := candidateMatch{set: target, scenario: scenarioAddition, exactOf: [][]bson.ObjectID{{imageA}, nil}}
 
 	//no Tagger here, so getting past the check would crash in ProcessSourceTags
-	item, _ := mergeIntoSet("user1", "group", incoming, prepared, match)
+	item, _, _ := mergeIntoSet("user1", "group", incoming, prepared, match)
 	if item.Kind != notification.ItemFailed {
 		t.Errorf("item = %+v, want a failed item for the broken attribution", item)
 	}
@@ -123,8 +132,8 @@ func TestMergeIntoSetUnchanged(t *testing.T) {
 	match := candidateMatch{set: target, scenario: scenarioDuplicate, exactOf: [][]bson.ObjectID{{imageA}, {imageB}}}
 
 	//no database here, so attempting the write would crash on the nil Collection
-	item, changedForLookup := mergeIntoSet("user1", "group", incoming, prepared, match)
-	if item.Kind != notification.ItemUnchanged || changedForLookup {
-		t.Errorf("item = %+v, changedForLookup %t; want unchanged and no lookup", item, changedForLookup)
+	item, imagesAdded, sourceAdded := mergeIntoSet("user1", "group", incoming, prepared, match)
+	if item.Kind != notification.ItemUnchanged || imagesAdded || sourceAdded {
+		t.Errorf("item = %+v, imagesAdded %t, sourceAdded %t; want unchanged with nothing added", item, imagesAdded, sourceAdded)
 	}
 }

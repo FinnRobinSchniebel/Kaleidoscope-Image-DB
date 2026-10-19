@@ -10,6 +10,26 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+func TestUnionTagOverrides(t *testing.T) {
+
+	a, b, c := bson.NewObjectID().Hex(), bson.NewObjectID().Hex(), bson.NewObjectID().Hex()
+	tests := []struct {
+		name        string
+		kept, other []string
+		want        []string
+	}{
+		{"distinct entries", []string{a}, []string{"-" + b}, []string{a, "-" + b}},
+		{"an include beats an exclude kept first", []string{"-" + a}, []string{a}, []string{a}},
+		{"an include beats an exclude from the other set", []string{a}, []string{"-" + a}, []string{a}},
+		{"repeats collapse and invalid entries drop", []string{c, "-" + b}, []string{c, "-" + b, "not-an-id"}, []string{c, "-" + b}},
+	}
+	for _, tt := range tests {
+		if got := unionTagOverrides(tt.kept, tt.other); !slices.Equal(got, tt.want) {
+			t.Errorf("%s: unionTagOverrides = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestSplitOverrides(t *testing.T) {
 	a, b := bson.NewObjectID().Hex(), bson.NewObjectID().Hex()
 
