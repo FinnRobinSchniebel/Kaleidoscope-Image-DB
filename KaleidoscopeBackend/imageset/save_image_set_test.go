@@ -105,13 +105,38 @@ func TestAddImageSetChecksAttributionFirst(t *testing.T) {
 	defer func() { BackendVolumeLocation = old }()
 
 	//no Tagger, DB or file here, so getting past the check would crash or fail differently
-	set := &ImageSetMongo{Sources: []SourceInfo{{Name: "pixiv", SourceID: "1"}}}
+	set := &ImageSetMongo{ID: bson.NewObjectID(), Sources: []SourceInfo{{Name: "pixiv", SourceID: "1"}}}
 	images := []PreparedImage{{Info: ImageInfo{ID: bson.NewObjectID()}}}
-	if _, err := addImageSet(set, images, "user1"); !errors.Is(err, errBrokenAttribution) {
+	if err := addImageSet(set, images, "user1"); !errors.Is(err, errBrokenAttribution) {
 		t.Errorf("err = %v, want errBrokenAttribution: the image list must be built and checked first", err)
 	}
 	if set.Path != "" {
 		t.Errorf("Path = %q: the author folder was made before the check", set.Path)
+	}
+}
+
+func TestAddImageSetUsesGivenID(t *testing.T) {
+
+	oldVolume, previous := BackendVolumeLocation, Tagger
+	BackendVolumeLocation = t.TempDir()
+	Tagger = fakeTagger{processErr: errors.New("stop before the database")}
+	defer func() { BackendVolumeLocation, Tagger = oldVolume, previous }()
+
+	newSet := func(id bson.ObjectID) (*ImageSetMongo, []PreparedImage) {
+		imageID := bson.NewObjectID()
+		set := &ImageSetMongo{ID: id, Sources: []SourceInfo{{Name: "pixiv", SourceID: "1", AttributedTo: []bson.ObjectID{imageID}}}}
+		return set, []PreparedImage{{Info: ImageInfo{ID: imageID}}}
+	}
+
+	set, images := newSet(bson.NilObjectID)
+	if err := addImageSet(set, images, "user1"); err == nil || set.Path != "" {
+		t.Errorf("no ID: err %v, Path %q; want an error before anything is made", err, set.Path)
+	}
+
+	given := bson.NewObjectID()
+	set, images = newSet(given)
+	if err := addImageSet(set, images, "user1"); err == nil || set.Path == "" || set.ID != given {
+		t.Errorf("given ID: err %v, Path %q, ID %v; want it to reach the tag counts still under %v", err, set.Path, set.ID, given)
 	}
 }
 
@@ -139,10 +164,16 @@ func TestProcessImageSetRejectsBadInput(t *testing.T) {
 	}
 	for _, tt := range tests {
 
-		set := &ImageSetMongo{Sources: tt.sources}
+		callerID := bson.NewObjectID()
+		set := &ImageSetMongo{ID: callerID, Sources: tt.sources}
 		results := ProcessImageSet(set, tt.files, "user1", "group")
 		if len(results) != 1 || results[0].Kind != notification.ItemFailed || results[0].Ref != "group" {
 			t.Errorf("%s: results = %+v, want one failed item for the group", tt.name, results)
+		}
+
+		//the fresh ID is given before any check, replacing the caller's
+		if set.ID.IsZero() || set.ID == callerID {
+			t.Errorf("%s: set ID = %v, want a fresh one given up front", tt.name, set.ID)
 		}
 	}
 }

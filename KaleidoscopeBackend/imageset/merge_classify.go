@@ -18,22 +18,13 @@ const (
 	scenarioSimilar   mergeScenario = "similar"   //the same pictures, but no identical images
 )
 
-// candidateMatch is a stored set an import matched, and how.
+// candidateMatch is a stored set some incoming images matched, and how.
 type candidateMatch struct {
 	set      *ImageSetMongo
 	scenario mergeScenario
 	exactOf  [][]bson.ObjectID        //per incoming image, the set's pixel-identical images in set order
-	pairs    []notification.ImagePair //uses the prepared image IDs, so only valid for a new set's suggestion
+	pairs    []notification.ImagePair //uses the incoming images' IDs, so valid for a suggestion on the set they belong to
 }
-
-// importOutcome is what a whole import does with its candidates.
-type importOutcome int
-
-const (
-	outcomeNew     importOutcome = iota //no candidates: store a new set
-	outcomeSuggest                      //only partial or similar candidates: new set plus a suggestion
-	outcomeMerge                        //some duplicate, addition or less candidate: merge into each
-)
 
 // findCandidates returns the sets with at least one non-plain hit among the
 // first count incoming images, in order of their first hit.
@@ -119,20 +110,19 @@ func classifyCandidate(set *ImageSetMongo, incoming []PreparedImage, matches Col
 	return match
 }
 
-// chooseOutcome picks what the whole import does from its classified candidates.
-func chooseOutcome(candidates []candidateMatch) importOutcome {
+// splitCandidates separates classified candidates into automatic merges
+// (duplicate, addition, less) and suggestions (partial, similar), keeping order.
+func splitCandidates(candidates []candidateMatch) (automatic, suggested []candidateMatch) {
 
 	for _, candidate := range candidates {
 		switch candidate.scenario {
 		case scenarioDuplicate, scenarioAddition, scenarioLess:
-			return outcomeMerge
+			automatic = append(automatic, candidate)
+		default:
+			suggested = append(suggested, candidate)
 		}
 	}
-
-	if len(candidates) > 0 {
-		return outcomeSuggest
-	}
-	return outcomeNew
+	return automatic, suggested
 }
 
 // planNewImages picks the incoming images match's set doesn't have. keeperOf[i]

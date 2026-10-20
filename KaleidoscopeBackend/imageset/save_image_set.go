@@ -136,11 +136,13 @@ func (m MultipartSource) Remove() bool {
 
 // ProcessImageSet imports files with set's one source (nothing attributed yet)
 // into userID's library and returns the import report's items, ref naming the
-// import in them. A duplicate, addition or less of stored sets is merged into
-// each; otherwise it becomes a new set, with a suggested merge when it only
-// partly or similarly matches stored sets. Failures are items carrying a
-// notification reason. Everything after decoding holds LockUserSets.
+// import in them. mergeFlow merges it into the stored sets it duplicates, extends
+// or is a subset of; with none, it becomes a new set. Failures are items carrying
+// a notification reason. Everything after decoding holds LockUserSets.
 func ProcessImageSet(set *ImageSetMongo, files []MediaSource, userID string, ref string) []notification.ItemResult {
+
+	//given first, overriding any caller's, so a suggestion can name the set before it's stored
+	set.ID = bson.NewObjectID()
 
 	if len(files) == 0 {
 		return []notification.ItemResult{notification.FailedItem(userID, ref, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, ErrNoMedia))}
@@ -158,84 +160,24 @@ func ProcessImageSet(set *ImageSetMongo, files []MediaSource, userID string, ref
 
 	defer LockUserSets(userID)()
 
-	matches, err := findImageMatches(userID, prepared)
+	merged, err := mergeFlow(userID, ref, set, prepared, true)
 	if err != nil {
 		return []notification.ItemResult{notification.FailedItem(userID, ref, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err))}
 	}
 
-	candidateSets, err := loadOwnedSets(userID, findCandidates(matches, len(prepared)))
-	if err != nil {
-		return []notification.ItemResult{notification.FailedItem(userID, ref, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err))}
+	if len(merged.targets) > 0 {
+		return merged.items
 	}
 
-	candidates := make([]candidateMatch, len(candidateSets))
-	for i := range candidateSets {
-		candidates[i] = classifyCandidate(&candidateSets[i], prepared, matches)
+	set.Sources[0].AttributedTo = make([]bson.ObjectID, len(prepared))
+	for i, preparedImage := range prepared {
+		set.Sources[0].AttributedTo[i] = preparedImage.Info.ID
 	}
 
-	var results []notification.ItemResult
-	var suggested []candidateMatch
-
-	switch chooseOutcome(candidates) {
-	case outcomeMerge:
-		var written, gainedImages, gainedSource []bson.ObjectID
-		for _, candidate := range candidates {
-
-			if candidate.scenario == scenarioPartial || candidate.scenario == scenarioSimilar {
-				continue //left for the full-set checks below, which run on targets that gained images
-			}
-
-			item, imagesAdded, sourceAdded := mergeIntoSet(userID, ref, set, prepared, candidate)
-			results = append(results, item)
-			written = append(written, candidate.set.ID)
-
-			switch {
-			case imagesAdded:
-				gainedImages = append(gainedImages, candidate.set.ID)
-			case sourceAdded:
-				gainedSource = append(gainedSource, candidate.set.ID)
-			}
-		}
-
-		//every write comes first, so a check can't combine a target before its own write runs
-		done := make(map[bson.ObjectID]bool)
-		for _, target := range gainedImages {
-
-			if done[target] {
-				continue //absorbed by an earlier check, or already checked as its survivor
-			}
-
-			items, finalID, absorbed := checkFullSet(userID, ref, target, set.Sources, written)
-			results = append(results, items...)
-			done[finalID] = true
-			for _, id := range absorbed {
-				done[id] = true
-			}
-		}
-
-		for _, target := range gainedSource {
-			if !done[target] {
-				results = append(results, suggestMerge(userID, ref, target, nil, set.Sources, written)...)
-			}
-		}
-
-	case outcomeSuggest:
-		suggested = candidates
-		fallthrough
-
-	case outcomeNew:
-		set.Sources[0].AttributedTo = make([]bson.ObjectID, len(prepared))
-		for i, preparedImage := range prepared {
-			set.Sources[0].AttributedTo[i] = preparedImage.Info.ID
-		}
-
-		if _, err := addImageSet(set, prepared, userID); err != nil {
-			return []notification.ItemResult{notification.FailedItem(userID, ref, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err))}
-		}
-		results = append(results, notification.ItemResult{Kind: notification.ItemAdded, Ref: ref, SetID: set.ID})
-		results = append(results, suggestMerge(userID, ref, set.ID, suggested, set.Sources, nil)...)
+	if err := addImageSet(set, prepared, userID); err != nil {
+		return append(merged.items, notification.FailedItem(userID, ref, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)))
 	}
-	return results
+	return append([]notification.ItemResult{{Kind: notification.ItemAdded, Ref: ref, SetID: set.ID}}, merged.items...)
 }
 
 // PreparedImage is an incoming file decoded once to hash and measure it. Its
@@ -296,11 +238,16 @@ const unknownAuthor = "unknown"
 var ErrNoMedia = errors.New("no media attached")
 
 // addImageSet saves each image (from prepareImages) as a file named by its ID,
-// then inserts imageSet and returns its ID as hex. Attribution is checked
-// before anything is written, and a later failure undoes its own partial writes.
-func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string) (string, error) {
+// then inserts imageSet under the ID it already has (ProcessImageSet gives it;
+// a zero ID is an error). Attribution is checked before anything is written,
+// and a later failure undoes its own partial writes.
+func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string) error {
 
 	//TODO: Test if image size is to large
+
+	if imageSet.ID.IsZero() {
+		return errors.New("adding an image set without an ID")
+	}
 
 	//built from the prepared images only, so no client-sent path survives; names are set as each file is saved
 	imageSet.Image = make([]ImageInfo, len(images))
@@ -309,7 +256,7 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 		imageSet.Image[i].IsImageActive = true
 	}
 	if err := imageSet.checkAttribution(); err != nil {
-		return "", err
+		return err
 	}
 	imageSet.ThumbNail = ""
 
@@ -326,8 +273,6 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 	}
 	//add userId (done as seperate step to avoid exploits if changes are made)
 	imageSet.KscopeUserId = userId
-	// generated here rather than by the insert, so files can be named before the set is stored
-	imageSet.ID = bson.NewObjectID()
 
 	var err error
 
@@ -338,7 +283,7 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 	imageSet.Path, err = MakeFileDirectoryFromAuthor(userId, imageSet.Authors[0])
 
 	if err != nil {
-		return "", fmt.Errorf("creating author directory: %w", err)
+		return fmt.Errorf("creating author directory: %w", err)
 	}
 
 	// The insert below is the commit point. Until then nothing is stored, so a
@@ -365,13 +310,13 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 	for idx := range imageSet.Sources {
 		//the returned change is ignored: undoNewImageSet removes every count this set recorded
 		if _, err := Tagger.ProcessSourceTags(userId, imageSet, idx, fetched[idx]); err != nil {
-			return "", fmt.Errorf("processing source tags: %w", err)
+			return fmt.Errorf("processing source tags: %w", err)
 		}
 	}
 	if len(imageSet.Sources) == 0 {
 		// ProcessSourceTags never ran, and it is what normally recomputes system tags
 		if _, err := Tagger.RecomputeSystemTags(userId, imageSet); err != nil {
-			return "", fmt.Errorf("computing system tags: %w", err)
+			return fmt.Errorf("computing system tags: %w", err)
 		}
 	}
 
@@ -380,13 +325,13 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 		toWrite[preparedImage.Info.ID] = preparedImage
 	}
 	if err := writePreparedImages(imageSet, toWrite); err != nil {
-		return "", err
+		return err
 	}
 
 	log.Print("Files Uploaded")
 
 	if _, err := Collection.InsertOne(context.Background(), imageSet); err != nil {
-		return "", fmt.Errorf("inserting image set: %w", err)
+		return fmt.Errorf("inserting image set: %w", err)
 	}
 	committed = true
 	refreshUntagged(userId)
@@ -396,7 +341,7 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 	CreateThumbnailForNew(imageSet.Path, imageSet.Image[0], imageSet.Title, imageSet.ID)
 
 	log.Println("---Upload complete---")
-	return imageSet.ID.Hex(), nil
+	return nil
 }
 
 // writePreparedImages saves each image in toWrite (keyed by image ID) into

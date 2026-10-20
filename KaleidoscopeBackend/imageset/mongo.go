@@ -681,12 +681,13 @@ func loadOwnedSets(userID string, ids []bson.ObjectID) ([]ImageSetMongo, error) 
 	return ordered, nil
 }
 
-// saveMergedSet writes a merge or combine into set, only if its stored image IDs
-// are still those of before. images is written only when the IDs or an active
-// flag changed, and the thumbnail is cleared when image 0 changed (reported as
-// thumbnailCleared), so the next view regenerates it. A set that no longer
-// matches returns an error. The caller holds LockUserSets.
-func saveMergedSet(set *ImageSetMongo, before []ImageInfo) (thumbnailCleared bool, err error) {
+// saveMergedSet writes a merge into set, only if its stored image IDs are still
+// those of before. images is written only when the IDs or an active flag
+// changed. When image 0 changed, the old thumbnail file is removed before the
+// write clears its name (set.ThumbNail too), so the next view regenerates it; a
+// failed removal is only logged. A set that no longer matches returns an error.
+// The caller holds LockUserSets.
+func saveMergedSet(set *ImageSetMongo, before []ImageInfo) error {
 
 	beforeIDs := make([]bson.ObjectID, len(before))
 	for i, img := range before {
@@ -715,11 +716,18 @@ func saveMergedSet(set *ImageSetMongo, before []ImageInfo) (thumbnailCleared boo
 	}
 	maps.Copy(fields, tagFields(set))
 
+	thumbnailCleared := false
 	if imagesChanged {
 		fields["images"] = set.Image
 		thumbnailCleared = len(set.Image) > 0 && (len(before) == 0 || set.Image[0].ID != before[0].ID)
-		if thumbnailCleared {
-			fields["thumbnail"] = ""
+	}
+
+	if thumbnailCleared {
+
+		fields["thumbnail"] = ""
+		//removed first: a name without its file regenerates, a file without its name is an orphan
+		if err := DeleteLowResFile(set.Path, set.ThumbNail); err != nil {
+			log.Printf("------ Warning: removing the old thumbnail of %s: %s ------", set.ID.Hex(), err)
 		}
 	}
 
@@ -730,13 +738,17 @@ func saveMergedSet(set *ImageSetMongo, before []ImageInfo) (thumbnailCleared boo
 	}
 	result, err := Collection.UpdateOne(context.Background(), filter, bson.M{"$set": fields})
 	if err != nil {
-		return false, fmt.Errorf("saving merged image set: %w", err)
+		return fmt.Errorf("saving merged image set: %w", err)
 	}
 
 	if result.MatchedCount == 0 {
-		return false, fmt.Errorf("image set %s changed or was deleted before the merge was saved", set.ID.Hex())
+		return fmt.Errorf("image set %s changed or was deleted before the merge was saved", set.ID.Hex())
 	}
-	return thumbnailCleared, nil
+
+	if thumbnailCleared {
+		set.ThumbNail = ""
+	}
+	return nil
 }
 
 // deleteCombinedSet deletes a set a combine absorbed, only if it still belongs

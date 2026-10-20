@@ -154,12 +154,12 @@ func DeleteFilesFromInfoList(path string, info []ImageInfo) error {
 	return errList
 }
 
-// linkIntoFolder makes fromDir/name also exist as toDir/name: a hard link, or a
-// copy where linking fails. An existing toDir/name is an error and is left
+// linkIntoFolder makes fromDir/fromName also exist as toDir/toName: a hard link,
+// or a copy where linking fails. An existing toDir/toName is an error and is left
 // untouched, so a link can never replace another image's file.
-func linkIntoFolder(fromDir, toDir, name string) error {
+func linkIntoFolder(fromDir, fromName, toDir, toName string) error {
 
-	source, target := filepath.Join(fromDir, name), filepath.Join(toDir, name)
+	source, target := filepath.Join(fromDir, fromName), filepath.Join(toDir, toName)
 	if _, err := os.Lstat(target); err == nil {
 		return fmt.Errorf("%s already exists", target)
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -176,7 +176,7 @@ func linkIntoFolder(fromDir, toDir, name string) error {
 	}
 	defer file.Close()
 
-	return writeFileAtomic(toDir, name, func(w io.Writer) error {
+	return writeFileAtomic(toDir, toName, func(w io.Writer) error {
 		_, err := io.Copy(w, file)
 		return err
 	})

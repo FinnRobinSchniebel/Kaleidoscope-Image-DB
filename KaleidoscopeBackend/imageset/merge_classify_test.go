@@ -66,20 +66,31 @@ func TestClassifyCandidate(t *testing.T) {
 		t.Errorf("findCandidates = %v, want B then A in first-hit order, and not C (only a plain page)", got)
 	}
 
-	addition, partial, similar := candidateMatch{scenario: scenarioAddition}, candidateMatch{scenario: scenarioPartial}, candidateMatch{scenario: scenarioSimilar}
-	outcomes := []struct {
-		name       string
-		candidates []candidateMatch
-		want       importOutcome
-	}{
-		{"an automatic candidate beside a partial one", []candidateMatch{partial, addition}, outcomeMerge},
-		{"only partial and similar candidates", []candidateMatch{partial, similar}, outcomeSuggest},
-		{"no candidates", nil, outcomeNew},
+}
+
+func TestSplitCandidates(t *testing.T) {
+
+	scenarios := []mergeScenario{scenarioDuplicate, scenarioPartial, scenarioAddition, scenarioSimilar, scenarioLess}
+	candidates := make([]candidateMatch, len(scenarios))
+	for i, scenario := range scenarios {
+		candidates[i] = candidateMatch{scenario: scenario}
 	}
-	for _, tt := range outcomes {
-		if got := chooseOutcome(tt.candidates); got != tt.want {
-			t.Errorf("chooseOutcome, %s = %d, want %d", tt.name, got, tt.want)
+
+	scenariosOf := func(list []candidateMatch) []mergeScenario {
+		var got []mergeScenario
+		for _, candidate := range list {
+			got = append(got, candidate.scenario)
 		}
+		return got
+	}
+
+	automatic, suggested := splitCandidates(candidates)
+	if want := []mergeScenario{scenarioDuplicate, scenarioAddition, scenarioLess}; !slices.Equal(scenariosOf(automatic), want) {
+		t.Errorf("automatic = %v, want %v in order", scenariosOf(automatic), want)
+	}
+
+	if want := []mergeScenario{scenarioPartial, scenarioSimilar}; !slices.Equal(scenariosOf(suggested), want) {
+		t.Errorf("suggested = %v, want %v in order", scenariosOf(suggested), want)
 	}
 }
 

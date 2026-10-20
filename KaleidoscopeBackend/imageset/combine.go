@@ -5,54 +5,217 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// combineSets merges absorbed into survivor, saves it, then deletes absorbed and
-// its leftover files. survivor is changed in place, even when the combine fails.
-// Nothing is written until the merged set passes checkAttribution, and until
-// survivor's write lands a failure removes the new links and undoes the counts.
-// A failure deleting absorbed leaves both sets (an interrupted combine).
-// imagesChanged reports that survivor gained images. The caller holds
-// LockUserSets.
-func combineSets(userID, ref string, survivor, absorbed *ImageSetMongo) (item notification.ItemResult, imagesChanged bool) {
+// mergePlan is what a merge decides before anything is written. It names image
+// IDs only; applyMergePlan takes each image's entry from the two sets.
+type mergePlan struct {
+	survivor, absorbed *ImageSetMongo
+	order              []bson.ObjectID                 //survivor's final image IDs, in order
+	inactive           map[bson.ObjectID]bool          //IDs in order to mark inactive; the rest are active
+	idMap              map[bson.ObjectID]bson.ObjectID //absorbed image ID to the ID it's kept under
+	copiedFrom         map[bson.ObjectID]bson.ObjectID //a fresh-ID copy to the absorbed image it copies
+	description        string
+}
 
+// orderedImages returns the survivor's final image entries in plan.order, with
+// flags from plan.inactive. A copy is its absorbed entry under the fresh ID and
+// a new file name, with no low-res yet. An ID in neither set is an error.
+func (plan mergePlan) orderedImages() ([]ImageInfo, error) {
+
+	absorbedEntries := make(map[bson.ObjectID]ImageInfo, len(plan.absorbed.Image))
+	for _, img := range plan.absorbed.Image {
+		absorbedEntries[img.ID] = img
+	}
+
+	entries := maps.Clone(absorbedEntries)
+	for _, img := range plan.survivor.Image {
+		entries[img.ID] = img //an image both sets hold keeps the survivor's file
+	}
+
+	images := make([]ImageInfo, len(plan.order))
+	for i, id := range plan.order {
+
+		img, found := entries[id]
+		if sourceID, copied := plan.copiedFrom[id]; copied {
+			img, found = absorbedEntries[sourceID]
+			img.ID = id
+			img.Name = ImageFileName(plan.survivor.Title, id, strings.TrimPrefix(filepath.Ext(img.Name), "."))
+			img.LowResName = ""
+		}
+
+		if !found {
+			return nil, fmt.Errorf("image %s is in neither set", id.Hex())
+		}
+
+		img.IsImageActive = !plan.inactive[id]
+		images[i] = img
+	}
+	return images, nil
+}
+
+// mergeStoredSetIntoTargets writes set into each of its automatic targets, which
+// survive, then removes set once every write has landed. Targets that gain
+// nothing are written first and gaining ones last, stopping at the first
+// failure, so a kept-ID move into set's own folder is always the final write. A
+// failed write or removal keeps set: an interrupted merge, with removed false.
+// The caller holds LockUserSets.
+func mergeStoredSetIntoTargets(userID, ref string, set *ImageSetMongo, targets []candidateMatch) (items []notification.ItemResult, outcomes []targetOutcome, removed bool) {
+
+	freshIDs := needsFreshIDs(targets)
+	gains := func(target candidateMatch) int {
+		if target.scenario == scenarioAddition {
+			return 1
+		}
+		return 0
+	}
+	ordered := slices.Clone(targets)
+	slices.SortStableFunc(ordered, func(a, b candidateMatch) int { return gains(a) - gains(b) })
+
+	survivors := make([]*ImageSetMongo, 0, len(ordered))
+	for _, target := range ordered {
+
+		var imagesAdded, sourcesAdded bool
+		plan, err := makeAutoMergePlan(target.set, set, freshIDs)
+		if err == nil {
+			imagesAdded, sourcesAdded, err = applyMergePlan(userID, plan)
+		}
+
+		if err != nil {
+			return append(items, notification.FailedItem(userID, ref, target.set.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err))), outcomes, false
+		}
+
+		reason := fmt.Sprintf("combined with set %s", set.ID.Hex())
+		items = append(items, notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.set.ID, Reason: reason})
+
+		outcome := targetOutcome{setID: target.set.ID, imagesAdded: imagesAdded}
+		if imagesAdded || sourcesAdded {
+			outcome.received = set.Sources
+		}
+		outcomes = append(outcomes, outcome)
+		survivors = append(survivors, target.set)
+	}
+
+	if err := removeMergedSet(userID, set, survivors); err != nil {
+		return append(items, notification.FailedItem(userID, ref, set.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err))), outcomes, false
+	}
+	return items, outcomes, true
+}
+
+// needsFreshIDs reports that more than one target would gain images, so each
+// needs its own copies of them.
+func needsFreshIDs(targets []candidateMatch) bool {
+
+	gaining := 0
+	for _, target := range targets {
+		if target.scenario == scenarioAddition {
+			gaining++
+		}
+	}
+	return gaining > 1
+}
+
+// makeAutoMergePlan makes the automatic merge's decisions: collapseImages'
+// order (fresh-ID copies when freshIDs is set), an image inactive only when
+// every copy of it was, and the descriptions joined when they differ. Changes
+// neither set.
+func makeAutoMergePlan(survivor, absorbed *ImageSetMongo, freshIDs bool) (mergePlan, error) {
+
+	images, idMap, err := collapseImages(survivor, absorbed, freshIDs)
+	if err != nil {
+		return mergePlan{}, err
+	}
+
+	existing := make(map[bson.ObjectID]bool, len(survivor.Image)+len(absorbed.Image))
+	for _, img := range slices.Concat(survivor.Image, absorbed.Image) {
+		existing[img.ID] = true
+	}
+
+	activeCopy := make(map[bson.ObjectID]bool, len(absorbed.Image))
+	copiedFrom := make(map[bson.ObjectID]bson.ObjectID)
+	for _, img := range absorbed.Image {
+
+		kept := idMap[img.ID]
+		if img.IsImageActive {
+			activeCopy[kept] = true
+		}
+
+		//a copy's ID is in neither set; absorbed order records a keeper before its repeats
+		if _, recorded := copiedFrom[kept]; !existing[kept] && !recorded {
+			copiedFrom[kept] = img.ID
+		}
+	}
+
+	plan := mergePlan{
+		survivor:    survivor,
+		absorbed:    absorbed,
+		order:       make([]bson.ObjectID, len(images)),
+		inactive:    make(map[bson.ObjectID]bool),
+		idMap:       idMap,
+		copiedFrom:  copiedFrom,
+		description: survivor.Description,
+	}
+	for i, img := range images {
+
+		plan.order[i] = img.ID
+		if !img.IsImageActive && !activeCopy[img.ID] {
+			plan.inactive[img.ID] = true
+		}
+	}
+
+	if absorbed.Description != survivor.Description {
+		plan.description = JoinDescriptions(survivor.Description, absorbed.Description)
+	}
+	return plan, nil
+}
+
+// applyMergePlan writes plan.absorbed into plan.survivor and saves the survivor;
+// the absorbed set stays until removeMergedSet. The survivor is changed in
+// place, even when this fails. Nothing is written until the merged set passes
+// checkAttribution, and until the save lands a failure removes the new links and
+// undoes the counts. The caller holds LockUserSets.
+func applyMergePlan(userID string, plan mergePlan) (imagesAdded, sourcesAdded bool, err error) {
+
+	survivor, absorbed := plan.survivor, plan.absorbed
 	if survivor.KscopeUserId != userID || absorbed.KscopeUserId != userID {
-		err := fmt.Errorf("%w: sets %s and %s aren't both the user's", notification.ErrSaveFailed, survivor.ID.Hex(), absorbed.ID.Hex())
-		return notification.FailedItem(userID, ref, survivor.ID, err), false
+		return false, false, fmt.Errorf("sets %s and %s aren't both the user's", survivor.ID.Hex(), absorbed.ID.Hex())
+	}
+
+	if survivor.ID == absorbed.ID {
+		return false, false, fmt.Errorf("set %s can't be merged with itself", survivor.ID.Hex())
 	}
 
 	before := slices.Clone(survivor.Image)
-	oldThumbnail := survivor.ThumbNail
-	absorbedIDs := make([]bson.ObjectID, len(absorbed.Image))
-	for i, img := range absorbed.Image {
-		absorbedIDs[i] = img.ID
-	}
+	sourcesBefore := len(survivor.Sources)
 
-	merged, idMap, moved, _, err := collapseImages(survivor, absorbed)
+	images, err := plan.orderedImages()
 	if err != nil {
-		return notification.FailedItem(userID, ref, survivor.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+		return false, false, err
 	}
-	survivor.Image = merged
-	indexes := mergeSourcesInto(survivor, absorbed.Sources, idMap)
+	survivor.Image = images
+	survivor.Description = plan.description
+	indexes := mergeSourcesInto(survivor, absorbed.Sources, plan.idMap)
 	mergeSetFields(survivor, absorbed)
 
 	if err := survivor.checkAttribution(); err != nil {
-		return notification.FailedItem(userID, ref, survivor.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+		return false, false, err
 	}
 
 	survivorFolder, err := os.Stat(survivor.Path)
 	if err != nil {
-		return notification.FailedItem(userID, ref, survivor.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+		return false, false, err
 	}
 
 	absorbedFolder, err := os.Stat(absorbed.Path)
 	if err != nil {
-		return notification.FailedItem(userID, ref, survivor.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+		return false, false, err
 	}
 	samePath := os.SameFile(survivorFolder, absorbedFolder)
 
@@ -68,95 +231,115 @@ func combineSets(userID, ref string, survivor, absorbed *ImageSetMongo) (item no
 
 		for _, name := range linked {
 			if err := os.Remove(filepath.Join(survivor.Path, name)); err != nil {
-				log.Printf("------ Warning: removing link %s of failed combine into %s: %s ------", name, survivor.ID.Hex(), err)
+				log.Printf("------ Warning: removing link %s of failed merge into %s: %s ------", name, survivor.ID.Hex(), err)
 			}
 		}
 
 		for i := len(counted) - 1; i >= 0; i-- {
 			if err := Tagger.UndoTagCounts(userID, counted[i]); err != nil {
-				log.Printf("------ Warning: undoing tag counts of failed combine into %s: %s ------", survivor.ID.Hex(), err)
+				log.Printf("------ Warning: undoing tag counts of failed merge into %s: %s ------", survivor.ID.Hex(), err)
 			}
 		}
 	}()
 
-	if !samePath {
+	held := make(map[bson.ObjectID]bool, len(before))
+	for _, img := range before {
+		held[img.ID] = true
+	}
 
-		movedIDs := make(map[bson.ObjectID]bool, len(moved))
-		for _, img := range moved {
+	absorbedNames := make(map[bson.ObjectID]string, len(absorbed.Image))
+	for _, img := range absorbed.Image {
+		absorbedNames[img.ID] = img.Name
+	}
 
-			if err := linkIntoFolder(absorbed.Path, survivor.Path, img.Name); err != nil {
-				return notification.FailedItem(userID, ref, survivor.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+	for i := range survivor.Image {
+
+		gained := &survivor.Image[i]
+		sourceID, copied := plan.copiedFrom[gained.ID]
+		switch {
+		case held[gained.ID]:
+			continue
+		case copied:
+			//linked under its new name even within one folder
+			if err := linkIntoFolder(absorbed.Path, absorbedNames[sourceID], survivor.Path, gained.Name); err != nil {
+				return false, false, err
 			}
-
-			linked = append(linked, img.Name)
-			movedIDs[img.ID] = true
-		}
-
-		//a moved image's low-res copy isn't linked, so it regenerates in survivor's folder
-		for i := range survivor.Image {
-			if movedIDs[survivor.Image[i].ID] {
-				survivor.Image[i].LowResName = ""
+		case samePath:
+			continue //a moved image in the same folder: the survivor now names its file and low-res
+		default:
+			if err := linkIntoFolder(absorbed.Path, gained.Name, survivor.Path, gained.Name); err != nil {
+				return false, false, err
 			}
+			gained.LowResName = "" //its low-res copy isn't linked, so it regenerates in survivor's folder
 		}
+		linked = append(linked, gained.Name)
 	}
 
 	for a, index := range indexes {
 
 		change, err := Tagger.ProcessSourceTags(userID, survivor, index, absorbed.Sources[a].Tags)
 		if err != nil {
-			return notification.FailedItem(userID, ref, survivor.ID, fmt.Errorf("%w: processing source tags: %w", notification.ErrSaveFailed, err)), false
+			return false, false, fmt.Errorf("processing source tags: %w", err)
 		}
 		counted = append(counted, change)
 	}
 
 	change, err := Tagger.CombineTagOverrides(userID, survivor, absorbed.TagRuleOverrides)
 	if err != nil {
-		return notification.FailedItem(userID, ref, survivor.ID, fmt.Errorf("%w: combining tag overrides: %w", notification.ErrSaveFailed, err)), false
+		return false, false, fmt.Errorf("combining tag overrides: %w", err)
 	}
 	counted = append(counted, change)
 
-	thumbnailCleared, err := saveMergedSet(survivor, before)
-	if err != nil {
-		return notification.FailedItem(userID, ref, survivor.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+	if err := saveMergedSet(survivor, before); err != nil {
+		return false, false, err
 	}
 	committed = true
 	refreshUntagged(userID)
 
+	return len(survivor.Image) > len(before), len(survivor.Sources) > sourcesBefore, nil
+}
+
+// removeMergedSet removes absorbed once its content has been written into
+// survivors: its leftover files first, then its document, then its counts, so a
+// failure leaves the files listed for a retry rather than orphaned (an
+// interrupted merge). The caller holds LockUserSets.
+func removeMergedSet(userID string, absorbed *ImageSetMongo, survivors []*ImageSetMongo) error {
+
+	leftovers, err := filesToRemove(absorbed, survivors)
+	if err == nil {
+		err = DeleteFilesFromInfoList(absorbed.Path, leftovers)
+	}
+
+	if err != nil {
+		log.Printf("------ Warning: interrupted merge: %s was merged, but its files couldn't all be removed ------", absorbed.ID.Hex())
+		return fmt.Errorf("interrupted merge: removing files of %s: %w", absorbed.ID.Hex(), err)
+	}
+
+	thumbnailShared := slices.ContainsFunc(survivors, func(survivor *ImageSetMongo) bool {
+		return absorbed.ThumbNail != "" && survivor.ThumbNail == absorbed.ThumbNail
+	})
+	if !thumbnailShared {
+		if err := DeleteLowResFile(absorbed.Path, absorbed.ThumbNail); err != nil {
+			log.Printf("------ Warning: interrupted merge: %s was merged, but its thumbnail couldn't be removed ------", absorbed.ID.Hex())
+			return fmt.Errorf("interrupted merge: removing the thumbnail of %s: %w", absorbed.ID.Hex(), err)
+		}
+	}
+
+	absorbedIDs := make([]bson.ObjectID, len(absorbed.Image))
+	for i, img := range absorbed.Image {
+		absorbedIDs[i] = img.ID
+	}
+
 	if err := deleteCombinedSet(absorbed, absorbedIDs); err != nil {
-		log.Printf("------ Warning: interrupted combine: %s now holds the images and sources of %s, which wasn't deleted ------", survivor.ID.Hex(), absorbed.ID.Hex())
-		return notification.FailedItem(userID, ref, survivor.ID, fmt.Errorf("%w: interrupted combine: %w", notification.ErrSaveFailed, err)), false
+		log.Printf("------ Warning: interrupted merge: %s was merged, but wasn't deleted ------", absorbed.ID.Hex())
+		return fmt.Errorf("interrupted merge: %w", err)
 	}
 
 	if err := Tagger.RecordDeletion(userID, absorbed.Sources, absorbed.Tags); err != nil {
-		log.Printf("------ Warning: undoing tag counts of combined set %s: %s ------", absorbed.ID.Hex(), err)
+		log.Printf("------ Warning: undoing tag counts of merged set %s: %s ------", absorbed.ID.Hex(), err)
 	}
 	refreshUntagged(userID)
-
-	survivorIDs := make(map[bson.ObjectID]bool, len(survivor.Image))
-	for _, img := range survivor.Image {
-		survivorIDs[img.ID] = true
-	}
-
-	if err := DeleteFilesFromInfoList(absorbed.Path, filesToRemove(absorbed.Image, survivorIDs, samePath)); err != nil {
-		log.Printf("------ Warning: removing files of combined set %s: %s ------", absorbed.ID.Hex(), err)
-	}
-
-	//the same name in the same folder would be survivor's own thumbnail
-	if !samePath || absorbed.ThumbNail != survivor.ThumbNail {
-		if err := DeleteLowResFile(absorbed.Path, absorbed.ThumbNail); err != nil {
-			log.Printf("------ Warning: removing the thumbnail of combined set %s: %s ------", absorbed.ID.Hex(), err)
-		}
-	}
-
-	if thumbnailCleared {
-		survivor.ThumbNail = ""
-		if err := DeleteLowResFile(survivor.Path, oldThumbnail); err != nil {
-			log.Printf("------ Warning: removing the old thumbnail of %s: %s ------", survivor.ID.Hex(), err)
-		}
-	}
-
-	reason := fmt.Sprintf("combined with set %s", absorbed.ID.Hex())
-	return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: survivor.ID, Reason: reason}, len(survivor.Image) > len(before)
+	return nil
 }
 
 // asPrepared wraps stored images as an incoming list for the lookup and
@@ -197,50 +380,39 @@ func exactMatches(images []PreparedImage, set *ImageSetMongo) CollisionMap {
 }
 
 // collapseImages merges absorbed's images into a new list after survivor's. An
-// absorbed image the survivor already has collapses into the survivor's copy
-// and repeats within absorbed into the first (dropped); a kept copy is active if
-// any of its copies was. The rest keep their IDs (moved) and are placed after
-// the nearest earlier matched image. idMap maps every absorbed ID to the ID it
-// is kept under.
-func collapseImages(survivor, absorbed *ImageSetMongo) (merged []ImageInfo, idMap map[bson.ObjectID]bson.ObjectID, moved, dropped []ImageInfo, err error) {
+// absorbed image the survivor already has collapses into the survivor's copy,
+// and repeats within absorbed into the first. The rest keep their entries, under
+// a fresh ID when freshIDs is set, and are placed after the nearest earlier
+// matched image (the automatic order). Every image keeps its stored flag. idMap
+// maps every absorbed ID to the ID it is kept under.
+func collapseImages(survivor, absorbed *ImageSetMongo, freshIDs bool) (images []ImageInfo, idMap map[bson.ObjectID]bson.ObjectID, err error) {
 
 	incoming, err := asPrepared(absorbed.Image)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	match := classifyCandidate(survivor, incoming, exactMatches(incoming, survivor))
 	keeperOf, added := planNewImages(incoming, match)
 
 	idMap = make(map[bson.ObjectID]bson.ObjectID, len(absorbed.Image))
-	activeByID := make(map[bson.ObjectID]bool)
 	for i, img := range absorbed.Image {
 
 		switch keeper := keeperOf[i]; {
 		case keeper == -1:
 			idMap[img.ID] = match.exactOf[i][0]
-			dropped = append(dropped, img)
 		case keeper == i:
-			idMap[img.ID] = img.ID
-			added[i] = img
-			moved = append(moved, img)
+			kept := img
+			if freshIDs {
+				kept.ID = added[i].ID
+			}
+			idMap[img.ID] = kept.ID
+			added[i] = kept
 		default:
-			idMap[img.ID] = absorbed.Image[keeper].ID
-			dropped = append(dropped, img)
-		}
-
-		if img.IsImageActive {
-			activeByID[idMap[img.ID]] = true
+			idMap[img.ID] = idMap[absorbed.Image[keeper].ID] //a keeper always comes before its repeats
 		}
 	}
-
-	merged = placeInsertedImages(survivor.Image, match, keeperOf, added)
-	for i := range merged {
-		if activeByID[merged[i].ID] {
-			merged[i].IsImageActive = true
-		}
-	}
-	return merged, idMap, moved, dropped, nil
+	return placeInsertedImages(survivor.Image, match, keeperOf, added), idMap, nil
 }
 
 // mergeSourcesInto merges absorbed sources into survivor in memory, with their
@@ -322,14 +494,9 @@ func collapseSourceBookkeeping(kept *SourceInfo, survivorBefore, other SourceInf
 	}
 }
 
-// mergeSetFields takes absorbed's set-level fields into survivor: descriptions
-// joined when they differ, an empty Itype or Other filled, and the earlier
-// date_added kept.
+// mergeSetFields takes absorbed's set-level fields into survivor: an empty Itype
+// or Other filled, and the earlier date_added kept.
 func mergeSetFields(survivor, absorbed *ImageSetMongo) {
-
-	if absorbed.Description != survivor.Description {
-		survivor.Description = JoinDescriptions(survivor.Description, absorbed.Description)
-	}
 
 	if survivor.Itype == "" {
 		survivor.Itype = absorbed.Itype
@@ -344,20 +511,38 @@ func mergeSetFields(survivor, absorbed *ImageSetMongo) {
 	}
 }
 
-// filesToRemove returns the absorbed images whose files can go once the combine
-// is saved. In the same folder, images the survivor kept under their own ID are
-// its files now, so they stay.
-func filesToRemove(absorbed []ImageInfo, survivorIDs map[bson.ObjectID]bool, samePath bool) []ImageInfo {
+// filesToRemove returns the absorbed images whose files can go once it's merged.
+// An image a survivor in the same folder holds under the same ID is that
+// survivor's file now, so it stays.
+func filesToRemove(absorbed *ImageSetMongo, survivors []*ImageSetMongo) ([]ImageInfo, error) {
 
-	if !samePath {
-		return slices.Clone(absorbed)
+	absorbedFolder, err := os.Stat(absorbed.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	keep := make(map[bson.ObjectID]bool)
+	for _, survivor := range survivors {
+
+		survivorFolder, err := os.Stat(survivor.Path)
+		if err != nil {
+			return nil, err
+		}
+
+		if !os.SameFile(absorbedFolder, survivorFolder) {
+			continue
+		}
+
+		for _, img := range survivor.Image {
+			keep[img.ID] = true
+		}
 	}
 
 	var leftovers []ImageInfo
-	for _, img := range absorbed {
-		if !survivorIDs[img.ID] {
+	for _, img := range absorbed.Image {
+		if !keep[img.ID] {
 			leftovers = append(leftovers, img)
 		}
 	}
-	return leftovers
+	return leftovers, nil
 }

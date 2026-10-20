@@ -50,7 +50,7 @@ func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.Obj
 // candidate): an addition inserts its new images, and incoming's source is
 // attached to the images it covers. Nothing is written before checkAttribution,
 // and a failure removes the new files and undoes the recorded tag counts.
-// imagesAdded (the set needs a full-set check) and sourceAdded (a source new to
+// imagesAdded (the set needs checking in turn) and sourceAdded (a source new to
 // the set) are only reported for a write that landed. The caller holds
 // LockUserSets.
 func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []PreparedImage, match candidateMatch) (item notification.ItemResult, imagesAdded, sourceAdded bool) {
@@ -142,20 +142,11 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 		}
 	}
 
-	oldThumbnail := target.ThumbNail
-	thumbnailCleared, err := saveMergedSet(target, before)
-	if err != nil {
+	if err := saveMergedSet(target, before); err != nil {
 		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false, false
 	}
 	committed = true
 	refreshUntagged(userID)
-
-	if thumbnailCleared {
-		target.ThumbNail = ""
-		if err := DeleteLowResFile(target.Path, oldThumbnail); err != nil {
-			log.Printf("------ Warning: removing the old thumbnail of %s: %s ------", target.ID.Hex(), err)
-		}
-	}
 
 	switch {
 	case !realChange:
