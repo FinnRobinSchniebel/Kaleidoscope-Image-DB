@@ -18,17 +18,17 @@ const (
 	scenarioSimilar   mergeScenario = "similar"   //the same pictures, but no identical images
 )
 
-// candidateMatch is a stored set some incoming images matched, and how.
-type candidateMatch struct {
+// mergeCandidate is a stored set some incoming images matched, and how.
+type mergeCandidate struct {
 	set      *ImageSetMongo
 	scenario mergeScenario
 	exactOf  [][]bson.ObjectID        //per incoming image, the set's pixel-identical images in set order
 	pairs    []notification.ImagePair //uses the incoming images' IDs, so valid for a suggestion on the set they belong to
 }
 
-// findCandidates returns the sets with at least one non-plain hit among the
-// first count incoming images, in order of their first hit.
-func findCandidates(matches CollisionMap, count int) []bson.ObjectID {
+// findMergeCandidateIDs returns the sets with at least one non-plain hit among
+// the first count incoming images, in order of their first hit.
+func findMergeCandidateIDs(matches CollisionMap, count int) []bson.ObjectID {
 
 	var candidates []bson.ObjectID
 	seen := make(map[bson.ObjectID]bool)
@@ -46,12 +46,12 @@ func findCandidates(matches CollisionMap, count int) []bson.ObjectID {
 	return candidates
 }
 
-// classifyCandidate decides set's scenario. A stored image only counts as hit
-// by an exact match; an incoming image with only similar matches makes the
+// classifyMergeCandidate decides set's scenario. A stored image only counts as
+// hit by an exact match; an incoming image with only similar matches makes the
 // result partial (with any exact match) or similar.
-func classifyCandidate(set *ImageSetMongo, incoming []PreparedImage, matches CollisionMap) candidateMatch {
+func classifyMergeCandidate(set *ImageSetMongo, incoming []PreparedImage, matches CollisionMap) mergeCandidate {
 
-	match := candidateMatch{set: set, exactOf: make([][]bson.ObjectID, len(incoming))}
+	match := mergeCandidate{set: set, exactOf: make([][]bson.ObjectID, len(incoming))}
 	storedHit := make(map[bson.ObjectID]bool)
 	anyExact, anySimilarOnly, allIncomingExact := false, false, true
 
@@ -110,9 +110,9 @@ func classifyCandidate(set *ImageSetMongo, incoming []PreparedImage, matches Col
 	return match
 }
 
-// splitCandidates separates classified candidates into automatic merges
+// splitMergeCandidates separates classified candidates into automatic merges
 // (duplicate, addition, less) and suggestions (partial, similar), keeping order.
-func splitCandidates(candidates []candidateMatch) (automatic, suggested []candidateMatch) {
+func splitMergeCandidates(candidates []mergeCandidate) (automatic, suggested []mergeCandidate) {
 
 	for _, candidate := range candidates {
 		switch candidate.scenario {
@@ -125,11 +125,11 @@ func splitCandidates(candidates []candidateMatch) (automatic, suggested []candid
 	return automatic, suggested
 }
 
-// planNewImages picks the incoming images match's set doesn't have. keeperOf[i]
-// is -1 for an image the set has, otherwise the index of the first new image
-// with the same pixels, so repeats are planned once. added holds each planned
-// image with a fresh ID and no file name yet.
-func planNewImages(incoming []PreparedImage, match candidateMatch) (keeperOf []int, added map[int]ImageInfo) {
+// planImagesToMerge picks the incoming images match's set doesn't have.
+// keeperOf[i] is -1 for an image the set has, otherwise the index of the first
+// new image with the same pixels, so repeats are planned once. added holds each
+// planned image with a fresh ID and no file name yet.
+func planImagesToMerge(incoming []PreparedImage, match mergeCandidate) (keeperOf []int, added map[int]ImageInfo) {
 
 	keeperOf = make([]int, len(incoming))
 	added = make(map[int]ImageInfo)
@@ -160,10 +160,10 @@ func planNewImages(incoming []PreparedImage, match candidateMatch) (keeperOf []i
 	return keeperOf, added
 }
 
-// placeInsertedImages returns existing with each planned image placed after the
+// placeMergedImages returns existing with each planned image placed after the
 // stored image matched by the nearest earlier incoming image; planned images
 // before the first match go at the start.
-func placeInsertedImages(existing []ImageInfo, match candidateMatch, keeperOf []int, added map[int]ImageInfo) []ImageInfo {
+func placeMergedImages(existing []ImageInfo, match mergeCandidate, keeperOf []int, added map[int]ImageInfo) []ImageInfo {
 
 	var atStart []ImageInfo
 	after := make(map[bson.ObjectID][]ImageInfo)
@@ -197,10 +197,10 @@ func placeInsertedImages(existing []ImageInfo, match candidateMatch, keeperOf []
 	return placed
 }
 
-// targetImageIDs returns the set images the incoming source covers, in its page
-// order without repeats: every pixel-identical copy of a matched image, or the
-// planned new image.
-func targetImageIDs(match candidateMatch, keeperOf []int, added map[int]ImageInfo) []bson.ObjectID {
+// findMergedAttributionImageIDs returns the set images the incoming source
+// covers, in its page order without repeats: every pixel-identical copy of a
+// matched image, or the planned new image.
+func findMergedAttributionImageIDs(match mergeCandidate, keeperOf []int, added map[int]ImageInfo) []bson.ObjectID {
 
 	var ids []bson.ObjectID
 	seen := make(map[bson.ObjectID]bool)

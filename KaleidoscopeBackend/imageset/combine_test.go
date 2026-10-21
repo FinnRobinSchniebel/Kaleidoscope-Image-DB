@@ -32,14 +32,14 @@ func imageIDs(images []ImageInfo) []bson.ObjectID {
 	return ids
 }
 
-func TestCollapseImages(t *testing.T) {
+func TestCollapseMergedSetImages(t *testing.T) {
 
 	imgA, imgB := storedImage(1, false), storedImage(2, true)
 	copyOfB, imgC, copyOfA, repeatOfC := storedImage(2, true), storedImage(3, false), storedImage(1, true), storedImage(3, true)
 	survivor := &ImageSetMongo{ID: bson.NewObjectID(), Image: []ImageInfo{imgA, imgB}}
 	absorbed := &ImageSetMongo{ID: bson.NewObjectID(), Image: []ImageInfo{copyOfB, imgC, copyOfA, repeatOfC}}
 
-	images, idMap, err := collapseImages(survivor, absorbed, false)
+	images, idMap, err := collapseMergedSetImages(survivor, absorbed, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestCollapseImages(t *testing.T) {
 	}
 
 	//fresh IDs: the kept C becomes a copy under a new ID that its repeat follows, with C's own flag
-	images, idMap, err = collapseImages(survivor, absorbed, true)
+	images, idMap, err = collapseMergedSetImages(survivor, absorbed, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestCollapseImages(t *testing.T) {
 
 	//images without a pixel hash are never the same image
 	unknownA, unknownB := storedImage(0, true), storedImage(0, true)
-	images, idMap, err = collapseImages(&ImageSetMongo{Image: []ImageInfo{unknownA}}, &ImageSetMongo{Image: []ImageInfo{unknownB}}, false)
+	images, idMap, err = collapseMergedSetImages(&ImageSetMongo{Image: []ImageInfo{unknownA}}, &ImageSetMongo{Image: []ImageInfo{unknownB}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,15 +194,15 @@ func TestOrderedImages(t *testing.T) {
 	}
 }
 
-func TestNeedsFreshIDs(t *testing.T) {
+func TestDoesMergeNeedNewImageIDs(t *testing.T) {
 
-	duplicate, addition, less := candidateMatch{scenario: scenarioDuplicate}, candidateMatch{scenario: scenarioAddition}, candidateMatch{scenario: scenarioLess}
+	duplicate, addition, less := mergeCandidate{scenario: scenarioDuplicate}, mergeCandidate{scenario: scenarioAddition}, mergeCandidate{scenario: scenarioLess}
 
-	if needsFreshIDs([]candidateMatch{duplicate, addition, less}) {
+	if doesMergeNeedNewImageIDs([]mergeCandidate{duplicate, addition, less}) {
 		t.Error("one gaining target asked for fresh IDs")
 	}
 
-	if !needsFreshIDs([]candidateMatch{addition, duplicate, addition}) {
+	if !doesMergeNeedNewImageIDs([]mergeCandidate{addition, duplicate, addition}) {
 		t.Error("two gaining targets didn't ask for fresh IDs")
 	}
 }
@@ -254,7 +254,7 @@ func TestMergeSourcesInto(t *testing.T) {
 	}
 }
 
-func TestCollapseSourceBookkeeping(t *testing.T) {
+func TestCollapseMergedSourceBookkeeping(t *testing.T) {
 
 	t1, t2 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
 	exact := time.Date(2026, 9, 5, 14, 30, 0, 0, time.UTC)
@@ -263,7 +263,7 @@ func TestCollapseSourceBookkeeping(t *testing.T) {
 	other := SourceInfo{LastChecked: t2, SourceMissing: true, ImageChangeState: ImageChangePending, Date: dayOnly, LastImageUpdate: t2, LastAppliedUpdate: t1}
 
 	kept := survivorBefore
-	collapseSourceBookkeeping(&kept, survivorBefore, other)
+	collapseMergedSourceBookkeeping(&kept, survivorBefore, other)
 	if !kept.LastChecked.Equal(t2) || !kept.SourceMissing || kept.ImageChangeState != ImageChangePending {
 		t.Errorf("kept %+v: want the later-checked copy's LastChecked, missing flag and state", kept)
 	}
@@ -279,7 +279,7 @@ func TestCollapseSourceBookkeeping(t *testing.T) {
 	tie := other
 	tie.LastChecked = t1
 	kept = survivorBefore
-	collapseSourceBookkeeping(&kept, survivorBefore, tie)
+	collapseMergedSourceBookkeeping(&kept, survivorBefore, tie)
 	if kept.SourceMissing || kept.ImageChangeState != ImageChangeNone {
 		t.Errorf("tie: kept %+v, want the survivor's copy to win", kept)
 	}
@@ -296,7 +296,7 @@ func TestMergeSetFields(t *testing.T) {
 	}
 }
 
-func TestFilesToRemove(t *testing.T) {
+func TestMergedSetFilesToRemove(t *testing.T) {
 
 	folder, otherFolder := t.TempDir()+"/", t.TempDir()+"/"
 	moved, collapsed := storedImage(1, true), storedImage(2, true)
@@ -304,7 +304,7 @@ func TestFilesToRemove(t *testing.T) {
 	sameFolder := &ImageSetMongo{Path: folder, Image: []ImageInfo{moved}}
 	elsewhere := &ImageSetMongo{Path: otherFolder, Image: []ImageInfo{collapsed}}
 
-	got, err := filesToRemove(absorbed, []*ImageSetMongo{sameFolder, elsewhere})
+	got, err := mergedSetFilesToRemove(absorbed, []*ImageSetMongo{sameFolder, elsewhere})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestFilesToRemove(t *testing.T) {
 		t.Errorf("files to remove = %v; want all but the image a same-folder survivor now holds", imageIDs(got))
 	}
 
-	if got, err := filesToRemove(absorbed, []*ImageSetMongo{elsewhere}); err != nil || !slices.Equal(imageIDs(got), imageIDs(absorbed.Image)) {
+	if got, err := mergedSetFilesToRemove(absorbed, []*ImageSetMongo{elsewhere}); err != nil || !slices.Equal(imageIDs(got), imageIDs(absorbed.Image)) {
 		t.Errorf("only another folder's survivor: %v, %v; want every absorbed image", imageIDs(got), err)
 	}
 }

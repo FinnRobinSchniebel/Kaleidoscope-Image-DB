@@ -13,7 +13,7 @@ func preparedWithPixels(pixels byte) PreparedImage {
 	return PreparedImage{Info: ImageInfo{ID: bson.NewObjectID(), ImageHashes: ImageHashes{Pixel: bytes.Repeat([]byte{pixels}, pixelHashBytes)}}}
 }
 
-func TestClassifyCandidate(t *testing.T) {
+func TestClassifyMergeCandidate(t *testing.T) {
 
 	type hit struct {
 		incoming, stored int
@@ -52,7 +52,7 @@ func TestClassifyCandidate(t *testing.T) {
 			matches[h.incoming] = append(matches[h.incoming], HashMatch{SetID: set.ID, ImageID: set.Image[h.stored].ID, Exact: h.exact, Plain: h.plain})
 		}
 
-		if got := classifyCandidate(set, incoming, matches); got.scenario != tt.want {
+		if got := classifyMergeCandidate(set, incoming, matches); got.scenario != tt.want {
 			t.Errorf("%s: scenario = %s, want %s", tt.name, got.scenario, tt.want)
 		}
 	}
@@ -62,21 +62,21 @@ func TestClassifyCandidate(t *testing.T) {
 		0: {{SetID: setA, Exact: true, Plain: true}, {SetID: setC, Exact: true, Plain: true}},
 		1: {{SetID: setB, Exact: true}, {SetID: setA}},
 	}
-	if got := findCandidates(matches, 2); !slices.Equal(got, []bson.ObjectID{setB, setA}) {
-		t.Errorf("findCandidates = %v, want B then A in first-hit order, and not C (only a plain page)", got)
+	if got := findMergeCandidateIDs(matches, 2); !slices.Equal(got, []bson.ObjectID{setB, setA}) {
+		t.Errorf("findMergeCandidateIDs = %v, want B then A in first-hit order, and not C (only a plain page)", got)
 	}
 
 }
 
-func TestSplitCandidates(t *testing.T) {
+func TestSplitMergeCandidates(t *testing.T) {
 
 	scenarios := []mergeScenario{scenarioDuplicate, scenarioPartial, scenarioAddition, scenarioSimilar, scenarioLess}
-	candidates := make([]candidateMatch, len(scenarios))
+	candidates := make([]mergeCandidate, len(scenarios))
 	for i, scenario := range scenarios {
-		candidates[i] = candidateMatch{scenario: scenario}
+		candidates[i] = mergeCandidate{scenario: scenario}
 	}
 
-	scenariosOf := func(list []candidateMatch) []mergeScenario {
+	scenariosOf := func(list []mergeCandidate) []mergeScenario {
 		var got []mergeScenario
 		for _, candidate := range list {
 			got = append(got, candidate.scenario)
@@ -84,7 +84,7 @@ func TestSplitCandidates(t *testing.T) {
 		return got
 	}
 
-	automatic, suggested := splitCandidates(candidates)
+	automatic, suggested := splitMergeCandidates(candidates)
 	if want := []mergeScenario{scenarioDuplicate, scenarioAddition, scenarioLess}; !slices.Equal(scenariosOf(automatic), want) {
 		t.Errorf("automatic = %v, want %v in order", scenariosOf(automatic), want)
 	}
@@ -95,7 +95,7 @@ func TestSplitCandidates(t *testing.T) {
 }
 
 // insertFixture is a stored set [A,B] and an import [N0, A, N1, N1 again, B, N2].
-func insertFixture() (existing []ImageInfo, incoming []PreparedImage, match candidateMatch) {
+func insertFixture() (existing []ImageInfo, incoming []PreparedImage, match mergeCandidate) {
 
 	idA, idB := bson.NewObjectID(), bson.NewObjectID()
 	existing = []ImageInfo{{ID: idA}, {ID: idB}}
@@ -103,14 +103,14 @@ func insertFixture() (existing []ImageInfo, incoming []PreparedImage, match cand
 	repeat := preparedWithPixels(3)
 	repeat.Info.ID = bson.NewObjectID()
 	incoming = []PreparedImage{preparedWithPixels(1), preparedWithPixels(2), preparedWithPixels(3), repeat, preparedWithPixels(4), preparedWithPixels(5)}
-	match = candidateMatch{scenario: scenarioAddition, exactOf: [][]bson.ObjectID{nil, {idA}, nil, nil, {idB}, nil}}
+	match = mergeCandidate{scenario: scenarioAddition, exactOf: [][]bson.ObjectID{nil, {idA}, nil, nil, {idB}, nil}}
 	return existing, incoming, match
 }
 
-func TestPlanAndPlaceInsertedImages(t *testing.T) {
+func TestPlanAndPlaceMergedImages(t *testing.T) {
 
 	existing, incoming, match := insertFixture()
-	keeperOf, added := planNewImages(incoming, match)
+	keeperOf, added := planImagesToMerge(incoming, match)
 
 	if want := []int{0, -1, 2, 2, -1, 5}; !slices.Equal(keeperOf, want) {
 		t.Fatalf("keeperOf = %v, want %v: the repeat of N1 planned once", keeperOf, want)
@@ -122,7 +122,7 @@ func TestPlanAndPlaceInsertedImages(t *testing.T) {
 		}
 	}
 
-	placed := placeInsertedImages(existing, match, keeperOf, added)
+	placed := placeMergedImages(existing, match, keeperOf, added)
 	want := []bson.ObjectID{added[0].ID, existing[0].ID, added[2].ID, existing[1].ID, added[5].ID}
 	got := make([]bson.ObjectID, len(placed))
 	for i, img := range placed {
@@ -134,17 +134,17 @@ func TestPlanAndPlaceInsertedImages(t *testing.T) {
 	}
 }
 
-func TestTargetImageIDsAndMergeAttribution(t *testing.T) {
+func TestFindMergedAttributionImageIDsAndMergeAttribution(t *testing.T) {
 
 	existing, incoming, match := insertFixture()
 	copyOfA := bson.NewObjectID()
 	match.exactOf[1] = append(match.exactOf[1], copyOfA)
 
-	keeperOf, added := planNewImages(incoming, match)
-	got := targetImageIDs(match, keeperOf, added)
+	keeperOf, added := planImagesToMerge(incoming, match)
+	got := findMergedAttributionImageIDs(match, keeperOf, added)
 	want := []bson.ObjectID{added[0].ID, existing[0].ID, copyOfA, added[2].ID, existing[1].ID, added[5].ID}
 	if !slices.Equal(got, want) {
-		t.Errorf("targetImageIDs = %v, want page order with both copies of A and the repeat once: %v", got, want)
+		t.Errorf("findMergedAttributionImageIDs = %v, want page order with both copies of A and the repeat once: %v", got, want)
 	}
 
 	oldOnly := bson.NewObjectID()

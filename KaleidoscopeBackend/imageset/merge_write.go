@@ -53,7 +53,7 @@ func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.Obj
 // imagesAdded (the set needs checking in turn) and sourceAdded (a source new to
 // the set) are only reported for a write that landed. The caller holds
 // LockUserSets.
-func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []PreparedImage, match candidateMatch) (item notification.ItemResult, imagesAdded, sourceAdded bool) {
+func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []PreparedImage, match mergeCandidate) (item notification.ItemResult, imagesAdded, sourceAdded bool) {
 
 	target := match.set
 	before := slices.Clone(target.Image)
@@ -64,11 +64,11 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 		sourcesBefore[i].Tags = slices.Clone(sourcesBefore[i].Tags)
 	}
 
-	keeperOf, added := planNewImages(prepared, match)
+	keeperOf, added := planImagesToMerge(prepared, match)
 	if len(added) > 0 {
-		target.Image = placeInsertedImages(target.Image, match, keeperOf, added)
+		target.Image = placeMergedImages(target.Image, match, keeperOf, added)
 	}
-	index, isNew := attachIncomingSource(target, incoming, targetImageIDs(match, keeperOf, added))
+	index, isNew := attachIncomingSource(target, incoming, findMergedAttributionImageIDs(match, keeperOf, added))
 
 	if err := target.checkAttribution(); err != nil {
 		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false, false
@@ -166,7 +166,7 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 // holding one of sources that has an ID, without pairs. setID and the excluded
 // sets are never named, and no set twice. A failed publish or lookup is only
 // logged.
-func suggestMerge(userID, ref string, setID bson.ObjectID, candidates []candidateMatch, sources []SourceInfo, excluded []bson.ObjectID) []notification.ItemResult {
+func suggestMerge(userID, ref string, setID bson.ObjectID, candidates []mergeCandidate, sources []SourceInfo, excluded []bson.ObjectID) []notification.ItemResult {
 
 	skip := map[bson.ObjectID]bool{setID: true}
 	for _, id := range excluded {

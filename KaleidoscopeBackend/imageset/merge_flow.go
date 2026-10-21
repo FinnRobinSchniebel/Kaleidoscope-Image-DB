@@ -8,8 +8,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// targetOutcome is what one merge round did to one of its targets.
-type targetOutcome struct {
+// mergeTargetOutcome is what one merge round did to one of its targets.
+type mergeTargetOutcome struct {
 	setID       bson.ObjectID
 	imagesAdded bool         //the target joins the check queue
 	received    []SourceInfo //sources it now holds whose other sets get looked up
@@ -26,8 +26,8 @@ type mergeResult struct {
 // removed), and a match that gained images is checked in turn. Suggested merges
 // are published here and nowhere else; no set is created. set is an import not
 // stored yet when isNew, otherwise a stored set that changed, and prepared holds
-// its images (asPrepared for a stored set). err means the first lookup failed
-// and nothing was decided. The caller holds LockUserSets.
+// its images (storedSetAsPreparedImages for a stored set). err means the first
+// lookup failed and nothing was decided. The caller holds LockUserSets.
 func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage, isNew bool) (mergeResult, error) {
 
 	var result mergeResult
@@ -74,7 +74,7 @@ func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage,
 			}
 
 			entry, entryIsNew = &sets[0], false
-			if entryPrepared, err = asPrepared(entry.Image); err != nil {
+			if entryPrepared, err = storedSetAsPreparedImages(entry.Image); err != nil {
 				result.items = append(result.items, notification.FailedItem(userID, ref, id, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err)))
 				continue
 			}
@@ -100,7 +100,7 @@ func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage,
 		}
 
 		var items []notification.ItemResult
-		var outcomes []targetOutcome
+		var outcomes []mergeTargetOutcome
 		if entryIsNew {
 			items, outcomes = mergeImportIntoTargets(userID, ref, entry, entryPrepared, automatic)
 		} else {
@@ -151,7 +151,7 @@ func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage,
 // findMergeCandidates looks images up in userID's library, ignoring hits on
 // ownID, and returns the matched sets classified as automatic merges or
 // suggestions. An error means the library couldn't be read.
-func findMergeCandidates(userID string, images []PreparedImage, ownID bson.ObjectID) (automatic, suggested []candidateMatch, err error) {
+func findMergeCandidates(userID string, images []PreparedImage, ownID bson.ObjectID) (automatic, suggested []mergeCandidate, err error) {
 
 	matches, err := findImageMatches(userID, images)
 	if err != nil {
@@ -162,31 +162,31 @@ func findMergeCandidates(userID string, images []PreparedImage, ownID bson.Objec
 		matches[i] = slices.DeleteFunc(matches[i], func(hit HashMatch) bool { return hit.SetID == ownID })
 	}
 
-	candidateSets, err := loadOwnedSets(userID, findCandidates(matches, len(images)))
+	candidateSets, err := loadOwnedSets(userID, findMergeCandidateIDs(matches, len(images)))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	candidates := make([]candidateMatch, len(candidateSets))
+	candidates := make([]mergeCandidate, len(candidateSets))
 	for i := range candidateSets {
-		candidates[i] = classifyCandidate(&candidateSets[i], images, matches)
+		candidates[i] = classifyMergeCandidate(&candidateSets[i], images, matches)
 	}
 
-	automatic, suggested = splitCandidates(candidates)
+	automatic, suggested = splitMergeCandidates(candidates)
 	return automatic, suggested, nil
 }
 
 // mergeImportIntoTargets writes an import into each of its automatic targets,
 // each on its own, so a failed write leaves the others. The caller holds
 // LockUserSets.
-func mergeImportIntoTargets(userID, ref string, set *ImageSetMongo, prepared []PreparedImage, targets []candidateMatch) (items []notification.ItemResult, outcomes []targetOutcome) {
+func mergeImportIntoTargets(userID, ref string, set *ImageSetMongo, prepared []PreparedImage, targets []mergeCandidate) (items []notification.ItemResult, outcomes []mergeTargetOutcome) {
 
 	for _, target := range targets {
 
 		item, imagesAdded, sourceAdded := mergeIntoSet(userID, ref, set, prepared, target)
 		items = append(items, item)
 
-		outcome := targetOutcome{setID: target.set.ID, imagesAdded: imagesAdded}
+		outcome := mergeTargetOutcome{setID: target.set.ID, imagesAdded: imagesAdded}
 		if imagesAdded || sourceAdded {
 			outcome.received = set.Sources
 		}

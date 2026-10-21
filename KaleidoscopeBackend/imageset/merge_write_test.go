@@ -95,7 +95,7 @@ func TestMergeIntoSetChecksAttributionFirst(t *testing.T) {
 	}
 	incoming := &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501"}}}
 	prepared := []PreparedImage{preparedWithPixels(1), preparedWithPixels(2)}
-	match := candidateMatch{set: target, scenario: scenarioAddition, exactOf: [][]bson.ObjectID{{imageA}, nil}}
+	match := mergeCandidate{set: target, scenario: scenarioAddition, exactOf: [][]bson.ObjectID{{imageA}, nil}}
 
 	//no Tagger here, so getting past the check would crash in ProcessSourceTags
 	item, _, _ := mergeIntoSet("user1", "group", incoming, prepared, match)
@@ -129,7 +129,7 @@ func TestMergeIntoSetUnchanged(t *testing.T) {
 	}
 	incoming := &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "Title"}}}
 	prepared := []PreparedImage{preparedWithPixels(1), preparedWithPixels(2)}
-	match := candidateMatch{set: target, scenario: scenarioDuplicate, exactOf: [][]bson.ObjectID{{imageA}, {imageB}}}
+	match := mergeCandidate{set: target, scenario: scenarioDuplicate, exactOf: [][]bson.ObjectID{{imageA}, {imageB}}}
 
 	//no database here, so attempting the write would crash on the nil Collection
 	item, imagesAdded, sourceAdded := mergeIntoSet("user1", "group", incoming, prepared, match)
