@@ -12,13 +12,18 @@ import (
 
 // fakeTagger records nothing and changes no tags, so a merge can run without a database.
 type fakeTagger struct {
-	processed  *bool //set when ProcessSourceTags runs, if non-nil
-	processErr error //returned by ProcessSourceTags
+	processed  *bool  //set when ProcessSourceTags runs, if non-nil
+	onProcess  func() //called when ProcessSourceTags runs, if non-nil
+	processErr error  //returned by ProcessSourceTags
 }
 
 func (f fakeTagger) ProcessSourceTags(string, *ImageSetMongo, int, []SourceTag) (TagCountChange, error) {
 	if f.processed != nil {
 		*f.processed = true
+	}
+
+	if f.onProcess != nil {
+		f.onProcess()
 	}
 	return TagCountChange{}, f.processErr
 }

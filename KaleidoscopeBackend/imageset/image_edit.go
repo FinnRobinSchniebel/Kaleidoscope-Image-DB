@@ -1,64 +1,16 @@
 package imageset
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"fmt"
 	"image"
 	"image/gif"
-	"image/jpeg"
 	_ "image/jpeg"
-	"image/png"
 	_ "image/png"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
-
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
-
-/*
-Used to save images to the  correct location on the file system, named by imageID. It does not modify the imageset
-Out: fileName, error
-
-Warning: this function does not save gifs
-*/
-func SaveImage(imageToSave image.Image, path string, title string, imageID bson.ObjectID, fileType string) (string, error) {
-
-	/**		Test FilePath	 **/
-	_, err := os.Stat(BackendVolumeLocation)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Printf("File or directory does not exist at: %s\n", BackendVolumeLocation)
-		} else {
-			fmt.Printf("Error accessing path %s: %v\n", BackendVolumeLocation, err)
-		}
-	} else {
-		log.Printf("File or directory exists at: %s\n", BackendVolumeLocation)
-	}
-	/**		save file 	**/
-	fileName := ImageFileName(title, imageID, fileType)
-	log.Print("FilePath: " + path + fileName)
-
-	var encode func(io.Writer) error
-	switch fileType {
-	case "png", "PNG":
-		encode = func(w io.Writer) error { return png.Encode(w, imageToSave) }
-	case "jpeg", "jpg":
-		encode = func(w io.Writer) error { return jpeg.Encode(w, imageToSave, &jpeg.Options{Quality: 100}) }
-	case "gif":
-		// TODO: gif writing belongs here once supported; use SaveGif until then
-		return "", fmt.Errorf("SaveImage does not write gifs yet")
-	default:
-		return "", fmt.Errorf("file type could not be determined")
-	}
-
-	if err := writeFileAtomic(path, fileName, encode); err != nil {
-		return "", fmt.Errorf("could not write the image to the server file: %w", err)
-	}
-
-	return fileName, nil
-
-}
 
 // writeFileAtomic writes to a file in tempDir, then renames it to dir/name,
 // so readers never see a partial file.
@@ -79,53 +31,37 @@ func writeFileAtomic(dir, name string, encode func(io.Writer) error) error {
 	return os.Rename(tmp.Name(), filepath.Join(dir, name))
 }
 
-/*
-Used only to save gifs at full size, named by imageID. Cannot be used to save dowscaled images and only accepts decoded gifs
-Out: fileName, error
-*/
-func SaveGif(imageToSave *gif.GIF, path string, title string, imageID bson.ObjectID) (string, error) {
-	/**		Test FilePath	 **/
-	_, err := os.Stat(BackendVolumeLocation)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Printf("File or directory does not exist at: %s\n", BackendVolumeLocation)
-		} else {
-			fmt.Printf("Error accessing path %s: %v\n", BackendVolumeLocation, err)
-		}
-	} else {
-		fmt.Printf("File or directory exists at: %s\n", BackendVolumeLocation)
-	}
+// maxImagePixels caps an image's width times height (a GIF's canvas), checked
+// from its header: a small file can claim a size whose decode exhausts memory.
+const maxImagePixels = 200_000_000
 
-	if len(imageToSave.Image) == 0 {
-		return "", fmt.Errorf("empty gif")
-	}
+// checkImageHeader reads media's header and returns its format: png, jpeg or
+// gif, which is also the stored file's extension. Any other format is an
+// error, and a size over maxImagePixels is notification.ErrImageTooLarge.
+// Nothing is decoded.
+func checkImageHeader(media MediaSource) (format string, err error) {
 
-	fileName := ImageFileName(title, imageID, "gif")
-	log.Print("FilePath: " + path + fileName)
-
-	encode := func(w io.Writer) error { return gif.EncodeAll(w, imageToSave) }
-	if err := writeFileAtomic(path, fileName, encode); err != nil {
-		return "", fmt.Errorf("could not write the image to the server file: %w", err)
-	}
-
-	return fileName, nil
-}
-
-func getFileTypeFromHeader(MediaSource MediaSource) (string, error) {
-	file, err := MediaSource.Open()
+	file, err := media.Open()
 	if err != nil {
 		return "", fmt.Errorf("could not open uploaded file: %w", err)
 	}
 	defer file.Close()
 
-	_, ftype, err := image.DecodeConfig(file)
-	//Important decodeConfig eats the first bytes of the file reader and does not reset to the start
-	file.Seek(0, 0)
-
+	config, format, err := image.DecodeConfig(file)
 	if err != nil {
-		return "", fmt.Errorf("failed to read image info")
+		return "", fmt.Errorf("failed to read image info: %w", err)
 	}
-	return ftype, nil
+
+	switch format {
+	case "png", "jpeg", "gif":
+	default:
+		return "", fmt.Errorf("unsupported image format %q", format)
+	}
+
+	if pixels := int64(config.Width) * int64(config.Height); pixels > maxImagePixels {
+		return "", fmt.Errorf("%w: %dx%d pixels, over %d", notification.ErrImageTooLarge, config.Width, config.Height, maxImagePixels)
+	}
+	return format, nil
 }
 
 func FileHeaderToImage(fileHeader MediaSource) (image.Image, string, error) {

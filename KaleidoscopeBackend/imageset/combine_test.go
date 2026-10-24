@@ -39,54 +39,41 @@ func TestCollapseMergedSetImages(t *testing.T) {
 	survivor := &ImageSetMongo{ID: bson.NewObjectID(), Image: []ImageInfo{imgA, imgB}}
 	absorbed := &ImageSetMongo{ID: bson.NewObjectID(), Image: []ImageInfo{copyOfB, imgC, copyOfA, repeatOfC}}
 
-	images, idMap, err := collapseMergedSetImages(survivor, absorbed, false)
+	images, idMap, err := collapseMergedSetImages(survivor, absorbed)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if want := []bson.ObjectID{imgA.ID, imgB.ID, imgC.ID}; !slices.Equal(imageIDs(images), want) {
-		t.Errorf("images = %v, want [A B C] with C keeping its ID: %v", imageIDs(images), want)
+	freshC := idMap[imgC.ID]
+	if freshC.IsZero() || freshC == imgC.ID || idMap[repeatOfC.ID] != freshC {
+		t.Errorf("C kept as %v, its repeat as %v; want both on one fresh ID, not C's own %v", freshC, idMap[repeatOfC.ID], imgC.ID)
 	}
 
-	wantMap := map[bson.ObjectID]bson.ObjectID{copyOfB.ID: imgB.ID, imgC.ID: imgC.ID, copyOfA.ID: imgA.ID, repeatOfC.ID: imgC.ID}
-	for from, to := range wantMap {
-		if idMap[from] != to {
-			t.Errorf("idMap[%v] = %v, want %v", from, idMap[from], to)
-		}
+	if idMap[copyOfB.ID] != imgB.ID || idMap[copyOfA.ID] != imgA.ID {
+		t.Errorf("idMap = %v; want the collapsed copies on the survivor's B and A", idMap)
 	}
 
-	if images[0].IsImageActive || images[2].IsImageActive {
-		t.Errorf("A and C active %t/%t; want their stored flags, since the active-if-either rule is the plan's", images[0].IsImageActive, images[2].IsImageActive)
+	if want := []bson.ObjectID{imgA.ID, imgB.ID, freshC}; !slices.Equal(imageIDs(images), want) {
+		t.Errorf("images = %v, want [A B C'] with C's copy after B: %v", imageIDs(images), want)
+	}
+
+	if images[0].IsImageActive || images[2].IsImageActive || !bytes.Equal(images[2].Pixel, imgC.Pixel) || images[2].Name != imgC.Name {
+		t.Errorf("A and C' active %t/%t, C' %+v; want the stored flags (the active-if-either rule is the plan's), and C's hashes and name", images[0].IsImageActive, images[2].IsImageActive, images[2])
 	}
 
 	if !slices.Equal(imageIDs(survivor.Image), []bson.ObjectID{imgA.ID, imgB.ID}) || survivor.Image[0].IsImageActive {
 		t.Errorf("the survivor's own images changed: %+v", survivor.Image)
 	}
 
-	//fresh IDs: the kept C becomes a copy under a new ID that its repeat follows, with C's own flag
-	images, idMap, err = collapseMergedSetImages(survivor, absorbed, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	freshC := idMap[imgC.ID]
-	if freshC == imgC.ID || idMap[repeatOfC.ID] != freshC || idMap[copyOfB.ID] != imgB.ID || idMap[copyOfA.ID] != imgA.ID {
-		t.Errorf("fresh idMap = %v; want C and its repeat on one new ID, collapsed copies unchanged", idMap)
-	}
-
-	if len(images) != 3 || images[2].ID != freshC || images[2].IsImageActive {
-		t.Errorf("fresh images %v; want C's copy last under the new ID, still inactive", imageIDs(images))
-	}
-
 	//images without a pixel hash are never the same image
 	unknownA, unknownB := storedImage(0, true), storedImage(0, true)
-	images, idMap, err = collapseMergedSetImages(&ImageSetMongo{Image: []ImageInfo{unknownA}}, &ImageSetMongo{Image: []ImageInfo{unknownB}}, false)
+	images, idMap, err = collapseMergedSetImages(&ImageSetMongo{Image: []ImageInfo{unknownA}}, &ImageSetMongo{Image: []ImageInfo{unknownB}})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(images) != 2 || idMap[unknownB.ID] != unknownB.ID {
-		t.Errorf("two images without hashes: %d images, the absorbed one kept as %v; want both kept", len(images), idMap[unknownB.ID])
+	if kept := idMap[unknownB.ID]; len(images) != 2 || kept.IsZero() || kept == unknownB.ID {
+		t.Errorf("two images without hashes: %d images, the absorbed one kept as %v; want both, the absorbed one under a fresh ID", len(images), kept)
 	}
 }
 
@@ -97,21 +84,23 @@ func TestMakeAutoMergePlan(t *testing.T) {
 	survivor := &ImageSetMongo{ID: bson.NewObjectID(), Description: "one", Image: []ImageInfo{imgA, imgB}}
 	absorbed := &ImageSetMongo{ID: bson.NewObjectID(), Description: "two", Image: []ImageInfo{copyOfA, imgC, repeatOfC, imgD}}
 
-	plan, err := makeAutoMergePlan(survivor, absorbed, false)
+	plan, err := makeAutoMergePlan(survivor, absorbed)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if want := []bson.ObjectID{imgA.ID, imgC.ID, imgD.ID, imgB.ID}; plan.survivor != survivor || plan.absorbed != absorbed || !slices.Equal(plan.order, want) {
-		t.Errorf("order = %v, want the automatic [A C D B]: %v", plan.order, want)
+	freshC, freshD := plan.idMap[imgC.ID], plan.idMap[imgD.ID]
+	if want := []bson.ObjectID{imgA.ID, freshC, freshD, imgB.ID}; plan.survivor != survivor || plan.absorbed != absorbed || !slices.Equal(plan.order, want) {
+		t.Errorf("order = %v, want the automatic [A C' D' B]: %v", plan.order, want)
 	}
 
-	if len(plan.copiedFrom) != 0 {
-		t.Errorf("copiedFrom = %v; kept IDs make no copies, not even for a repeat", plan.copiedFrom)
+	wantCopies := map[bson.ObjectID]bson.ObjectID{freshC: imgC.ID, freshD: imgD.ID}
+	if freshC == imgC.ID || freshD == imgD.ID || !maps.Equal(plan.copiedFrom, wantCopies) {
+		t.Errorf("copiedFrom = %v, want each fresh ID mapped to the absorbed image it copies, the repeat not again: %v", plan.copiedFrom, wantCopies)
 	}
 
-	if len(plan.inactive) != 1 || !plan.inactive[imgD.ID] {
-		t.Errorf("inactive = %v; want only D, since A and C have an active copy", plan.inactive)
+	if len(plan.inactive) != 1 || !plan.inactive[freshD] {
+		t.Errorf("inactive = %v; want only D', since A and C have an active copy", plan.inactive)
 	}
 
 	if plan.description != "one\n\ntwo" {
@@ -122,17 +111,7 @@ func TestMakeAutoMergePlan(t *testing.T) {
 		t.Errorf("a set changed: survivor %+v, absorbed %+v", survivor, absorbed)
 	}
 
-	fresh, err := makeAutoMergePlan(survivor, absorbed, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	wantCopies := map[bson.ObjectID]bson.ObjectID{fresh.idMap[imgC.ID]: imgC.ID, fresh.idMap[imgD.ID]: imgD.ID}
-	if !maps.Equal(fresh.copiedFrom, wantCopies) {
-		t.Errorf("copiedFrom = %v, want each fresh ID mapped to the absorbed image it copies: %v", fresh.copiedFrom, wantCopies)
-	}
-
-	same, err := makeAutoMergePlan(&ImageSetMongo{Description: "same"}, &ImageSetMongo{Description: "same"}, false)
+	same, err := makeAutoMergePlan(&ImageSetMongo{Description: "same"}, &ImageSetMongo{Description: "same"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,14 +123,14 @@ func TestMakeAutoMergePlan(t *testing.T) {
 
 func TestOrderedImages(t *testing.T) {
 
-	imgA, held, imgC := storedImage(1, true), storedImage(2, true), storedImage(3, false)
-	absorbedCopy := held
-	absorbedCopy.Name = "absorbed-copy.png"
+	imgA, imgB, imgC := storedImage(1, true), storedImage(2, true), storedImage(3, false)
+	copyOfC := bson.NewObjectID()
 	plan := mergePlan{
-		survivor: &ImageSetMongo{Image: []ImageInfo{imgA, held}},
-		absorbed: &ImageSetMongo{Image: []ImageInfo{absorbedCopy, imgC}},
-		order:    []bson.ObjectID{imgC.ID, held.ID, imgA.ID},
-		inactive: map[bson.ObjectID]bool{held.ID: true},
+		survivor:   &ImageSetMongo{Image: []ImageInfo{imgA, imgB}},
+		absorbed:   &ImageSetMongo{Image: []ImageInfo{imgC}},
+		order:      []bson.ObjectID{copyOfC, imgB.ID, imgA.ID},
+		inactive:   map[bson.ObjectID]bool{imgB.ID: true},
+		copiedFrom: map[bson.ObjectID]bson.ObjectID{copyOfC: imgC.ID},
 	}
 
 	images, err := plan.orderedImages()
@@ -159,12 +138,19 @@ func TestOrderedImages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !slices.Equal(imageIDs(images), plan.order) || images[1].Name != held.Name {
-		t.Errorf("images %v, held named %q; want the plan's order and the survivor's entry %q", imageIDs(images), images[1].Name, held.Name)
+	if !slices.Equal(imageIDs(images), plan.order) || images[1].Name != imgB.Name {
+		t.Errorf("images %v, B named %q; want the plan's order and the survivor's entry %q", imageIDs(images), images[1].Name, imgB.Name)
 	}
 
 	if !images[0].IsImageActive || images[1].IsImageActive || !images[2].IsImageActive {
 		t.Errorf("active flags %t/%t/%t; want them from inactive, not the stored flags", images[0].IsImageActive, images[1].IsImageActive, images[2].IsImageActive)
+	}
+
+	//an absorbed image under its own ID would make the survivor list the absorbed set's file
+	ownID := plan
+	ownID.order = append(slices.Clone(plan.order), imgC.ID)
+	if _, err := ownID.orderedImages(); err == nil {
+		t.Error("an absorbed image under its own ID was accepted")
 	}
 
 	plan.order = append(plan.order, bson.NewObjectID())
@@ -191,19 +177,6 @@ func TestOrderedImages(t *testing.T) {
 	copied := images[1]
 	if copied.ID != copyID || !bytes.Equal(copied.Pixel, animated.Pixel) || copied.Name != ImageFileName("Kept", copyID, "gif") || copied.LowResName != "" {
 		t.Errorf("copy = %+v; want the absorbed hashes under the fresh ID, a new .gif name and no low-res", copied)
-	}
-}
-
-func TestDoesMergeNeedNewImageIDs(t *testing.T) {
-
-	duplicate, addition, less := mergeCandidate{scenario: scenarioDuplicate}, mergeCandidate{scenario: scenarioAddition}, mergeCandidate{scenario: scenarioLess}
-
-	if doesMergeNeedNewImageIDs([]mergeCandidate{duplicate, addition, less}) {
-		t.Error("one gaining target asked for fresh IDs")
-	}
-
-	if !doesMergeNeedNewImageIDs([]mergeCandidate{addition, duplicate, addition}) {
-		t.Error("two gaining targets didn't ask for fresh IDs")
 	}
 }
 
@@ -296,28 +269,6 @@ func TestMergeSetFields(t *testing.T) {
 	}
 }
 
-func TestMergedSetFilesToRemove(t *testing.T) {
-
-	folder, otherFolder := t.TempDir()+"/", t.TempDir()+"/"
-	moved, collapsed := storedImage(1, true), storedImage(2, true)
-	absorbed := &ImageSetMongo{Path: folder, Image: []ImageInfo{moved, collapsed}}
-	sameFolder := &ImageSetMongo{Path: folder, Image: []ImageInfo{moved}}
-	elsewhere := &ImageSetMongo{Path: otherFolder, Image: []ImageInfo{collapsed}}
-
-	got, err := mergedSetFilesToRemove(absorbed, []*ImageSetMongo{sameFolder, elsewhere})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !slices.Equal(imageIDs(got), []bson.ObjectID{collapsed.ID}) {
-		t.Errorf("files to remove = %v; want all but the image a same-folder survivor now holds", imageIDs(got))
-	}
-
-	if got, err := mergedSetFilesToRemove(absorbed, []*ImageSetMongo{elsewhere}); err != nil || !slices.Equal(imageIDs(got), imageIDs(absorbed.Image)) {
-		t.Errorf("only another folder's survivor: %v, %v; want every absorbed image", imageIDs(got), err)
-	}
-}
-
 func TestLinkIntoFolder(t *testing.T) {
 
 	from, to := t.TempDir(), t.TempDir()
@@ -377,7 +328,7 @@ func twoSetPlan(t *testing.T, attributed []bson.ObjectID) mergePlan {
 		t.Fatal(err)
 	}
 
-	plan, err := makeAutoMergePlan(survivor, absorbed, false)
+	plan, err := makeAutoMergePlan(survivor, absorbed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +344,7 @@ func TestApplyMergePlanRejectsBadPlans(t *testing.T) {
 	missingImage := twoSetPlan(t, nil)
 	missingImage.order = missingImage.order[:1]
 	self := twoSetPlan(t, nil)
-	self, err := makeAutoMergePlan(self.survivor, self.survivor, false)
+	self, err := makeAutoMergePlan(self.survivor, self.survivor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,6 +370,34 @@ func TestApplyMergePlanRejectsBadPlans(t *testing.T) {
 			t.Errorf("%s: %d files were linked", tt.name, len(entries))
 		}
 	}
+
+	//sets sharing an image are refused: removing the absorbed set would delete the shared file
+	folder := t.TempDir() + "/"
+	shared, imgC := storedImage(2, true), storedImage(3, true)
+	survivor := &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: "user1", Path: folder, Image: []ImageInfo{shared},
+		Sources: []SourceInfo{{Name: "a", SourceID: "1", AttributedTo: []bson.ObjectID{shared.ID}}}}
+	absorbed := &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: "user1", Path: folder, Image: []ImageInfo{shared, imgC},
+		Sources: []SourceInfo{{Name: "b", SourceID: "2", AttributedTo: []bson.ObjectID{shared.ID, imgC.ID}}}}
+	for _, name := range []string{shared.Name, imgC.Name} {
+		if err := os.WriteFile(filepath.Join(folder, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	plan, err := makeAutoMergePlan(survivor, absorbed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	processed := false
+	Tagger = fakeTagger{processed: &processed, processErr: errors.New("stop before the database")}
+	if _, _, err := applyMergePlan("user1", plan); err == nil || processed {
+		t.Errorf("shared image: err %v, tags processed %t; want it refused before any link or tag work", err, processed)
+	}
+
+	if entries, _ := os.ReadDir(folder); len(entries) != 2 {
+		t.Errorf("shared image: %d files in the folder, want the 2 untouched", len(entries))
+	}
 }
 
 func TestApplyMergePlanAppliesPlan(t *testing.T) {
@@ -430,8 +409,9 @@ func TestApplyMergePlanAppliesPlan(t *testing.T) {
 	Tagger = fakeTagger{processed: &processed, processErr: errors.New("stop before the database")}
 	plan := twoSetPlan(t, nil)
 	survivor, imgA, imgC := plan.survivor, plan.survivor.Image[0], plan.absorbed.Image[0]
-	plan.order = []bson.ObjectID{imgA.ID, imgC.ID}
-	plan.inactive = map[bson.ObjectID]bool{imgC.ID: true}
+	copyOfC := plan.idMap[imgC.ID]
+	plan.order = []bson.ObjectID{imgA.ID, copyOfC}
+	plan.inactive = map[bson.ObjectID]bool{copyOfC: true}
 	plan.description = "chosen"
 
 	if _, _, err := applyMergePlan("user1", plan); err == nil || !processed {
@@ -439,52 +419,72 @@ func TestApplyMergePlanAppliesPlan(t *testing.T) {
 	}
 
 	if !slices.Equal(imageIDs(survivor.Image), plan.order) || !survivor.Image[0].IsImageActive || survivor.Image[1].IsImageActive || survivor.Description != "chosen" {
-		t.Errorf("survivor %v, active %t/%t, description %q; want the plan's [A C], C inactive, \"chosen\"",
+		t.Errorf("survivor %v, active %t/%t, description %q; want the plan's [A C'], C' inactive, \"chosen\"",
 			imageIDs(survivor.Image), survivor.Image[0].IsImageActive, survivor.Image[1].IsImageActive, survivor.Description)
 	}
 
-	if survivor.Image[0].LowResName != "a-low.png" || survivor.Image[1].LowResName != "" {
-		t.Errorf("low-res names %q/%q; want A's kept and the moved C's cleared", survivor.Image[0].LowResName, survivor.Image[1].LowResName)
+	if copied := survivor.Image[1]; survivor.Image[0].LowResName != "a-low.png" || copied.LowResName != "" || copied.Name != ImageFileName("", copyOfC, "png") {
+		t.Errorf("A's low-res %q, copy %+v; want A's kept, and the copy named for its fresh ID with no low-res", survivor.Image[0].LowResName, copied)
 	}
 
 	if entries, _ := os.ReadDir(survivor.Path); len(entries) != 0 {
 		t.Errorf("the failed merge left %d linked files behind", len(entries))
 	}
 
-	//an image both sets already hold, as after an interrupted merge, isn't linked again
-	held := storedImage(2, true)
-	survivor = &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: "user1", Path: t.TempDir() + "/", Image: []ImageInfo{held},
-		Sources: []SourceInfo{{Name: "a", SourceID: "1", AttributedTo: []bson.ObjectID{held.ID}}}}
-	absorbed := &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: "user1", Path: t.TempDir() + "/", Image: []ImageInfo{held},
-		Sources: []SourceInfo{{Name: "b", SourceID: "2", AttributedTo: []bson.ObjectID{held.ID}}}}
-	for folder, content := range map[string]string{survivor.Path: "kept", absorbed.Path: "copy"} {
-		if err := os.WriteFile(filepath.Join(folder, held.Name), []byte(content), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	plan, err := makeAutoMergePlan(survivor, absorbed, false)
-	if err != nil {
+	//in one folder, the copy is a second name for the absorbed file; the survivor never lists the absorbed name
+	folder := t.TempDir() + "/"
+	imgA, imgC = storedImage(1, true), storedImage(3, true)
+	survivor = &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: "user1", Path: folder, Title: "Kept", Image: []ImageInfo{imgA},
+		Sources: []SourceInfo{{Name: "a", SourceID: "1", AttributedTo: []bson.ObjectID{imgA.ID}}}}
+	absorbed := &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: "user1", Path: folder, Image: []ImageInfo{imgC},
+		Sources: []SourceInfo{{Name: "b", SourceID: "2", AttributedTo: []bson.ObjectID{imgC.ID}}}}
+	if err := os.WriteFile(filepath.Join(folder, imgC.Name), []byte("pixels"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	processed = false
-	if _, _, err := applyMergePlan("user1", plan); err == nil || !processed {
-		t.Errorf("already held: err %v, tags processed %t; want it to reach ProcessSourceTags without linking again", err, processed)
+	plan, err := makeAutoMergePlan(survivor, absorbed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyName := ImageFileName("Kept", plan.idMap[imgC.ID], "png")
+
+	checked := false
+	Tagger = fakeTagger{processErr: errors.New("stop before the database"), onProcess: func() {
+
+		checked = true
+		original, originalErr := os.Stat(filepath.Join(folder, imgC.Name))
+		linked, linkedErr := os.Stat(filepath.Join(folder, copyName))
+		if originalErr != nil || linkedErr != nil || !os.SameFile(original, linked) {
+			t.Errorf("while linked: absorbed file %v, copy %v; want the copy to be a hard link of the absorbed file", originalErr, linkedErr)
+		}
+
+		for _, img := range survivor.Image {
+			if img.Name == imgC.Name {
+				t.Errorf("the survivor lists the absorbed file %s", img.Name)
+			}
+		}
+	}}
+
+	if _, _, err := applyMergePlan("user1", plan); err == nil || !checked {
+		t.Errorf("same folder: err %v, checked %t; want the merge to reach ProcessSourceTags", err, checked)
 	}
 
-	if got, _ := os.ReadFile(filepath.Join(survivor.Path, held.Name)); string(got) != "kept" {
-		t.Errorf("the survivor's own file became %q", got)
+	if entries, _ := os.ReadDir(folder); len(entries) != 1 || entries[0].Name() != imgC.Name {
+		t.Errorf("after the failure: %v; want only the absorbed file left", entries)
+	}
+
+	if got, _ := os.ReadFile(filepath.Join(folder, imgC.Name)); string(got) != "pixels" {
+		t.Errorf("the absorbed file became %q", got)
 	}
 
 	//a copy is linked under its new name even within one folder, so a file already at that name stops the merge
-	folder := t.TempDir() + "/"
+	folder = t.TempDir() + "/"
 	imgA, imgC = storedImage(1, true), storedImage(3, true)
 	survivor = &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: "user1", Path: folder, Title: "Kept", Image: []ImageInfo{imgA},
 		Sources: []SourceInfo{{Name: "a", SourceID: "1", AttributedTo: []bson.ObjectID{imgA.ID}}}}
 	absorbed = &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: "user1", Path: folder, Image: []ImageInfo{imgC},
 		Sources: []SourceInfo{{Name: "b", SourceID: "2", AttributedTo: []bson.ObjectID{imgC.ID}}}}
-	if plan, err = makeAutoMergePlan(survivor, absorbed, true); err != nil {
+	if plan, err = makeAutoMergePlan(survivor, absorbed); err != nil {
 		t.Fatal(err)
 	}
 
@@ -495,7 +495,8 @@ func TestApplyMergePlanAppliesPlan(t *testing.T) {
 	}
 
 	processed = false
+	Tagger = fakeTagger{processed: &processed, processErr: errors.New("stop before the database")}
 	if _, _, err := applyMergePlan("user1", plan); err == nil || processed {
-		t.Errorf("same-folder copy: err %v, tags processed %t; want the link to its taken name to fail first", err, processed)
+		t.Errorf("taken name: err %v, tags processed %t; want the link to its taken name to fail first", err, processed)
 	}
 }

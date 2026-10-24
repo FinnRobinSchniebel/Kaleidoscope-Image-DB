@@ -14,6 +14,7 @@ var (
 	ErrServiceSignIn   = errors.New("couldn't sign in to the service")
 	ErrServiceRequest  = errors.New("couldn't load your bookmarks from the service")
 	ErrDownloadFailed  = errors.New("couldn't download the images")
+	ErrImageTooLarge   = errors.New("an image is too large")
 	ErrSaveFailed      = errors.New("couldn't save the image set")
 	ErrLibraryAccess   = errors.New("couldn't read or update your library")
 	ErrSyncStopped     = errors.New("the sync was stopped")
@@ -22,12 +23,14 @@ var (
 const serverErrorReason = "server error"
 
 // userReasons is checked in order, so a joined error reports its original cause
-// before ErrSyncStopped. A new reason must be added here too.
+// before ErrSyncStopped, and a too-large image before the ErrSaveFailed its
+// import wraps it in. A new reason must be added here too.
 var userReasons = []error{
 	ErrServiceSettings,
 	ErrServiceSignIn,
 	ErrServiceRequest,
 	ErrDownloadFailed,
+	ErrImageTooLarge,
 	ErrSaveFailed,
 	ErrLibraryAccess,
 	ErrSyncStopped,

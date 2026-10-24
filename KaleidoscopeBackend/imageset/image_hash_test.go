@@ -2,6 +2,7 @@ package imageset
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"image"
 	"image/color"
 	"image/color/palette"
@@ -231,5 +232,37 @@ func TestIsPlain(t *testing.T) {
 
 	if plain, err := isPlain(nil); err != nil || plain {
 		t.Errorf("a missing hash: plain = %t, err = %v; want not plain", plain, err)
+	}
+}
+
+// hiddenType hides an image's concrete type, so writePixels takes its generic branch.
+type hiddenType struct{ image.Image }
+
+func TestWritePixelsPalettedMatchesGeneric(t *testing.T) {
+
+	mixed := make(color.Palette, 256)
+	for i := range mixed {
+
+		value := uint8(i)
+		switch i % 3 {
+		case 0:
+			mixed[i] = color.RGBA{R: value / 2, G: value / 3, B: value / 4, A: value} //premultiplied and semi-transparent
+		case 1:
+			mixed[i] = color.NRGBA{R: value, G: 255 - value, B: 7, A: value}
+		default:
+			mixed[i] = color.Gray{Y: value}
+		}
+	}
+
+	paletted := image.NewPaletted(image.Rect(3, 5, 40, 21), mixed)
+	for i := range paletted.Pix {
+		paletted.Pix[i] = uint8(i * 7)
+	}
+
+	fast, generic := sha256.New(), sha256.New()
+	writePixels(fast, paletted)
+	writePixels(generic, hiddenType{paletted})
+	if !bytes.Equal(fast.Sum(nil), generic.Sum(nil)) {
+		t.Error("the paletted case writes different bytes from the generic conversion")
 	}
 }

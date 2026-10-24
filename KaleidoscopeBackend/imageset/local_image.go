@@ -1,6 +1,7 @@
 package imageset
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"errors"
 	"fmt"
 	"image"
@@ -43,13 +44,13 @@ func ResetTempDir() error {
 // disk. A cached low-res or thumbnail can be regenerated; a full-res can't.
 var ErrImageFileMissing = errors.New("image file missing")
 
+// CheckImageSize rejects a file over 500 MB with notification.ErrImageTooLarge.
 func CheckImageSize(m MediaSource) error {
-	//image is larger then a 500mb
+
 	if m.Size() > 500000000 {
-		return fmt.Errorf("the Image is too large")
+		return fmt.Errorf("%w: %d bytes, over 500 MB", notification.ErrImageTooLarge, m.Size())
 	}
 	return nil
-
 }
 
 // maxFileNameBytes caps a whole file name; ext4 allows 255 bytes.

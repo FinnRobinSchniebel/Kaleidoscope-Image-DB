@@ -5,8 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
-	"image/gif"
 	"io"
 	"log"
 	"mime"
@@ -181,27 +179,27 @@ func ProcessImageSet(set *ImageSetMongo, files []MediaSource, userID string, ref
 }
 
 // PreparedImage is an incoming file decoded once to hash and measure it. Its
-// pixels aren't kept: addImageSet decodes the file again to save it.
+// pixels aren't kept: saving copies the file itself (writePreparedImages).
 type PreparedImage struct {
-	Info  ImageInfo //ID, hashes and size; addImageSet adds the file name
-	Media MediaSource
-	IsGif bool
-	Plain bool //a plain page (see isPlain), which never makes a stored set a merge candidate
+	Info   ImageInfo //ID, hashes and size; writePreparedImages adds the file name
+	Media  MediaSource
+	Format string //png, jpeg or gif, also the stored file's extension
+	Plain  bool   //a plain page (see isPlain), which never makes a stored set a merge candidate
 }
 
-// prepareImages gives each file a new image ID and decodes it once to hash
-// and measure it, so matching can run before anything is written. A file
-// that can't be read fails the whole list.
+// prepareImages gives each file a new image ID, checks its header and decodes
+// it once to hash and measure it, so matching can run before anything is
+// written. A file that can't be read or is too large fails the whole list.
 func prepareImages(files []MediaSource) ([]PreparedImage, error) {
 	prepared := make([]PreparedImage, 0, len(files))
 	for _, file := range files {
-		itype, err := getFileTypeFromHeader(file)
+		format, err := checkImageHeader(file)
 		if err != nil {
-			return nil, fmt.Errorf("reading media type of %s: %w", file.Name(), err)
+			return nil, fmt.Errorf("checking %s: %w", file.Name(), err)
 		}
-		preparedImage := PreparedImage{Info: ImageInfo{ID: bson.NewObjectID()}, Media: file, IsGif: itype == "gif"}
+		preparedImage := PreparedImage{Info: ImageInfo{ID: bson.NewObjectID()}, Media: file, Format: format}
 
-		if preparedImage.IsGif {
+		if format == "gif" {
 			decodedGif, err := FileHeaderToGif(file)
 			if err != nil {
 				return nil, fmt.Errorf("decoding gif %s: %w", file.Name(), err)
@@ -344,10 +342,10 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 	return nil
 }
 
-// writePreparedImages saves each image in toWrite (keyed by image ID) into
-// set's folder, decoding it again since prepareImages keeps no pixels, and
-// records its file name on that ID's entry in set.Image. A failure leaves the
-// files already written named in set.Image, for the caller's cleanup.
+// writePreparedImages copies each file in toWrite (keyed by image ID) into
+// set's folder as uploaded, named by its ID and format, and records the name on
+// that ID's entry in set.Image. A failure leaves the files already written
+// named in set.Image, for the caller's cleanup.
 func writePreparedImages(set *ImageSetMongo, toWrite map[bson.ObjectID]PreparedImage) error {
 
 	for i := range set.Image {
@@ -357,27 +355,20 @@ func writePreparedImages(set *ImageSetMongo, toWrite map[bson.ObjectID]PreparedI
 			continue
 		}
 
-		var fileName string
-		var err error
-		if preparedImage.IsGif {
-
-			var decodedGif *gif.GIF
-			if decodedGif, err = FileHeaderToGif(preparedImage.Media); err != nil {
-				return fmt.Errorf("decoding gif %s: %w", preparedImage.Media.Name(), err)
-			}
-			fileName, err = SaveGif(decodedGif, set.Path, set.Title, set.Image[i].ID)
-
-		} else {
-
-			var decoded image.Image
-			if decoded, _, err = FileHeaderToImage(preparedImage.Media); err != nil {
-				return fmt.Errorf("decoding image %s: %w", preparedImage.Media.Name(), err)
-			}
-			fileName, err = SaveImage(decoded, set.Path, set.Title, set.Image[i].ID, "png")
+		source, err := preparedImage.Media.Open()
+		if err != nil {
+			return fmt.Errorf("opening %s: %w", preparedImage.Media.Name(), err)
 		}
 
+		fileName := ImageFileName(set.Title, set.Image[i].ID, preparedImage.Format)
+		err = writeFileAtomic(set.Path, fileName, func(w io.Writer) error {
+			_, err := io.Copy(w, source)
+			return err
+		})
+		source.Close()
+
 		if err != nil {
-			return fmt.Errorf("saving media: %w", err)
+			return fmt.Errorf("saving %s: %w", preparedImage.Media.Name(), err)
 		}
 		set.Image[i].Name = fileName
 	}

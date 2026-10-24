@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/gif"
+	"image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -45,7 +46,16 @@ func TestPrepareImages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prepared, err := prepareImages([]MediaSource{DiskSource{Path: pngPath}, DiskSource{Path: gifPath}})
+	var jpegBytes bytes.Buffer
+	if err := jpeg.Encode(&jpegBytes, picture, nil); err != nil {
+		t.Fatal(err)
+	}
+	jpegPath := filepath.Join(dir, "photo.jpg")
+	if err := os.WriteFile(jpegPath, jpegBytes.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	prepared, err := prepareImages([]MediaSource{DiskSource{Path: pngPath}, DiskSource{Path: gifPath}, DiskSource{Path: jpegPath}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,21 +79,30 @@ func TestPrepareImages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	decodedJPEG, err := jpeg.Decode(bytes.NewReader(jpegBytes.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantJPEG, err := HashImage(decodedJPEG)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name          string
 		got           PreparedImage
-		isGif         bool
+		format        string
 		width, height int
 		hashes        ImageHashes
 	}{
-		{"png", prepared[0], false, 128, 96, wantPNG},
-		{"gif", prepared[1], true, 10, 12, wantGif},
+		{"png", prepared[0], "png", 128, 96, wantPNG},
+		{"gif", prepared[1], "gif", 10, 12, wantGif},
+		{"jpeg", prepared[2], "jpeg", 128, 96, wantJPEG},
 	}
 	for _, tt := range tests {
 		info := tt.got.Info
-		if tt.got.IsGif != tt.isGif || info.Width != tt.width || info.Height != tt.height {
-			t.Errorf("%s: IsGif %t, size %dx%d; want %t, %dx%d", tt.name, tt.got.IsGif, info.Width, info.Height, tt.isGif, tt.width, tt.height)
+		if tt.got.Format != tt.format || info.Width != tt.width || info.Height != tt.height {
+			t.Errorf("%s: Format %q, size %dx%d; want %q, %dx%d", tt.name, tt.got.Format, info.Width, info.Height, tt.format, tt.width, tt.height)
 		}
 		if !bytes.Equal(info.Pixel, tt.hashes.Pixel) || !bytes.Equal(info.PDQ, tt.hashes.PDQ) {
 			t.Errorf("%s: hashes differ from hashing the decoded file directly", tt.name)
@@ -96,6 +115,69 @@ func TestPrepareImages(t *testing.T) {
 	}
 	if _, err := prepareImages([]MediaSource{DiskSource{Path: notAnImage}}); err == nil {
 		t.Error("an unreadable file prepared without an error")
+	}
+
+	//the header check runs first, so an oversized claim fails before any decode
+	if _, err := prepareImages([]MediaSource{writeTestFile(t, "huge.png", pngClaiming(t, 20000, 10001))}); !errors.Is(err, notification.ErrImageTooLarge) {
+		t.Errorf("a header claiming 20000x10001: err %v, want ErrImageTooLarge", err)
+	}
+}
+
+func TestWritePreparedImagesCopiesOriginal(t *testing.T) {
+
+	old := BackendVolumeLocation
+	BackendVolumeLocation = t.TempDir()
+	defer func() { BackendVolumeLocation = old }()
+	if err := os.MkdirAll(tempDir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	//bytes after the image's end, which every decoder ignores and a re-encode would drop
+	trailing := []byte("trailing bytes")
+	encoded := map[string]*bytes.Buffer{"png": {}, "jpeg": {}, "gif": {}}
+	if err := png.Encode(encoded["png"], testPicture(1, false)); err != nil {
+		t.Fatal(err)
+	}
+	if err := jpeg.Encode(encoded["jpeg"], testPicture(2, false), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := gif.Encode(encoded["gif"], testPicture(3, false), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var files []MediaSource
+	sources := make(map[string][]byte)
+	for _, format := range []string{"png", "jpeg", "gif"} {
+		sources[format] = append(encoded[format].Bytes(), trailing...)
+		files = append(files, writeTestFile(t, "upload."+format, sources[format]))
+	}
+
+	prepared, err := prepareImages(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	set := &ImageSetMongo{Title: "Title", Path: t.TempDir() + "/"}
+	toWrite := make(map[bson.ObjectID]PreparedImage, len(prepared))
+	for _, preparedImage := range prepared {
+		set.Image = append(set.Image, preparedImage.Info)
+		toWrite[preparedImage.Info.ID] = preparedImage
+	}
+
+	if err := writePreparedImages(set, toWrite); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, format := range []string{"png", "jpeg", "gif"} {
+
+		img := set.Image[i]
+		if want := ImageFileName("Title", img.ID, format); img.Name != want {
+			t.Errorf("%s: named %q, want %q", format, img.Name, want)
+		}
+
+		if stored, err := os.ReadFile(filepath.Join(set.Path, img.Name)); err != nil || !bytes.Equal(stored, sources[format]) {
+			t.Errorf("%s: stored file differs from the upload (err %v); want it byte for byte", format, err)
+		}
 	}
 }
 

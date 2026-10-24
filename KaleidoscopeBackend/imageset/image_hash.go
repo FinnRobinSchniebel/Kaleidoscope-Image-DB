@@ -72,12 +72,27 @@ func writePixels(hasher hash.Hash, img image.Image) {
 	binary.BigEndian.PutUint32(size[4:], uint32(bounds.Dy()))
 	hasher.Write(size[:])
 
+	//a paletted image's colors are converted once instead of per pixel
+	var palette [][4]byte
+	if paletted, ok := img.(*image.Paletted); ok {
+		palette = make([][4]byte, len(paletted.Palette))
+		for i, entry := range paletted.Palette {
+			pixel := color.NRGBAModel.Convert(entry).(color.NRGBA)
+			palette[i] = [4]byte{pixel.R, pixel.G, pixel.B, pixel.A}
+		}
+	}
+
 	row := make([]byte, 4*bounds.Dx())
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		switch typed := img.(type) {
 		case *image.NRGBA:
 			start := typed.PixOffset(bounds.Min.X, y)
 			copy(row, typed.Pix[start:start+len(row)])
+		case *image.Paletted:
+			start := typed.PixOffset(bounds.Min.X, y)
+			for x, index := range typed.Pix[start : start+bounds.Dx()] {
+				copy(row[4*x:], palette[index][:])
+			}
 		case *image.NRGBA64:
 			for x := bounds.Min.X; x < bounds.Max.X; x++ {
 				pixel := typed.NRGBA64At(x, y)

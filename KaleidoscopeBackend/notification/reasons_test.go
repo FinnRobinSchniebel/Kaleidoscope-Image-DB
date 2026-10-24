@@ -12,13 +12,19 @@ import (
 func TestReasonFor(t *testing.T) {
 	sentinels := []error{
 		ErrServiceSettings, ErrServiceSignIn, ErrServiceRequest, ErrDownloadFailed,
-		ErrSaveFailed, ErrLibraryAccess, ErrSyncStopped,
+		ErrImageTooLarge, ErrSaveFailed, ErrLibraryAccess, ErrSyncStopped,
 	}
 	for _, sentinel := range sentinels {
 		wrapped := fmt.Errorf("outer: %w", fmt.Errorf("%w: inner: %w", sentinel, errors.New("raw detail")))
 		if got := reasonFor(wrapped); got != sentinel.Error() {
 			t.Errorf("reasonFor(%v) = %q, want %q", wrapped, got, sentinel.Error())
 		}
+	}
+
+	//an import wraps every prepare error in ErrSaveFailed, so a too-large image must still be named
+	tooLarge := fmt.Errorf("%w: checking huge.png: %w", ErrSaveFailed, fmt.Errorf("%w: 20000x10001 pixels", ErrImageTooLarge))
+	if got := reasonFor(tooLarge); got != ErrImageTooLarge.Error() {
+		t.Errorf("a too-large image inside ErrSaveFailed gave %q, want %q", got, ErrImageTooLarge.Error())
 	}
 	if got := reasonFor(errors.New("mongo: no documents in result")); got != serverErrorReason {
 		t.Errorf("a plain error gave %q, want %q", got, serverErrorReason)
