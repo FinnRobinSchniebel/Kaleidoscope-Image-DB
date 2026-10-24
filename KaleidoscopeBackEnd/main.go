@@ -18,6 +18,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	fiberrecover "github.com/gofiber/fiber/v2/middleware/recover"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -161,6 +162,9 @@ func StartAPI() {
 
 	log.Print("Starting API")
 	app := fiber.New(fiber.Config{BodyLimit: MaxFileSize})
+
+	//first, so a panic in any handler or middleware answers 500 instead of crashing the server
+	app.Use(fiberrecover.New(fiberrecover.Config{EnableStackTrace: true}))
 
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     "http://localhost:3000",

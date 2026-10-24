@@ -1,6 +1,7 @@
 package imageset
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -33,13 +34,18 @@ func findStoredSource(userID, name, sourceID string) (*ImageSetMongo, int, error
 }
 
 // ApplySourceMetadataUpdate updates the stored source matching newSrc's Name and
-// SourceID with its metadata and tags, holding LockUserSets (see
-// applySourceMetadata for which fields and when). Only metadata is read from newSrc; the stored source keeps its ID and
+// SourceID with its metadata and tags, holding the user's set lock (taken by
+// lockUserSetsOrPause; see applySourceMetadata for which fields and when). Only
+// metadata is read from newSrc; the stored source keeps its ID and
 // attribution. Callers must confirm the source's images are unchanged first;
 // images are never touched here. changed reports whether data from the source
 // changed, which also stamps LastAppliedUpdate.
-func ApplySourceMetadataUpdate(userID string, newSrc SourceInfo, checkedAt time.Time) (setID bson.ObjectID, changed bool, err error) {
-	defer LockUserSets(userID)()
+func ApplySourceMetadataUpdate(ctx context.Context, userID string, newSrc SourceInfo, checkedAt time.Time) (setID bson.ObjectID, changed bool, err error) {
+	unlock, err := lockUserSetsOrPause(ctx, userID)
+	if err != nil {
+		return bson.NilObjectID, false, err
+	}
+	defer unlock()
 	set, index, err := findStoredSource(userID, newSrc.Name, newSrc.SourceID)
 	if err != nil {
 		return bson.NilObjectID, false, err
@@ -119,12 +125,16 @@ func sourceDataChanged(before, after SourceInfo) bool {
 }
 
 // MarkSourcePendingImageChange records that the stored source's images no longer
-// match what's stored, holding LockUserSets and writing no image or metadata
-// change. sourceDate is
-// the source's own Date as of this check; storing it lets a later sync tell whether
-// the source has moved on again since this still-unresolved change was detected.
-func MarkSourcePendingImageChange(userID, name, sourceID string, sourceDate, checkedAt time.Time) (setID bson.ObjectID, err error) {
-	defer LockUserSets(userID)()
+// match what's stored, holding the user's set lock (lockUserSetsOrPause) and
+// writing no image or metadata change. sourceDate is the source's own Date as of
+// this check; storing it lets a later sync tell whether the source has moved on
+// again since this still-unresolved change was detected.
+func MarkSourcePendingImageChange(ctx context.Context, userID, name, sourceID string, sourceDate, checkedAt time.Time) (setID bson.ObjectID, err error) {
+	unlock, err := lockUserSetsOrPause(ctx, userID)
+	if err != nil {
+		return bson.NilObjectID, err
+	}
+	defer unlock()
 	set, index, err := findStoredSource(userID, name, sourceID)
 	if err != nil {
 		return bson.NilObjectID, err
@@ -158,13 +168,17 @@ func MarkSourcePendingImageChange(userID, name, sourceID string, sourceDate, che
 	return set.ID, nil
 }
 
-// MarkSourceMissing records, holding LockUserSets, that the stored source could no
-// longer be fetched. Any
-// prior image-change state is reset to none along with it: there's no source left
-// to update the images from, so an unresolved change can no longer be completed.
+// MarkSourceMissing records, holding the user's set lock (lockUserSetsOrPause),
+// that the stored source could no longer be fetched. Any prior image-change state
+// is reset to none along with it: there's no source left to update the images
+// from, so an unresolved change can no longer be completed.
 // newlyMissing reports whether this call flipped SourceMissing.
-func MarkSourceMissing(userID, name, sourceID string, checkedAt time.Time) (setID bson.ObjectID, newlyMissing bool, err error) {
-	defer LockUserSets(userID)()
+func MarkSourceMissing(ctx context.Context, userID, name, sourceID string, checkedAt time.Time) (setID bson.ObjectID, newlyMissing bool, err error) {
+	unlock, err := lockUserSetsOrPause(ctx, userID)
+	if err != nil {
+		return bson.NilObjectID, false, err
+	}
+	defer unlock()
 	set, index, err := findStoredSource(userID, name, sourceID)
 	if err != nil {
 		return bson.NilObjectID, false, err
@@ -196,12 +210,16 @@ func MarkSourceMissing(userID, name, sourceID string, checkedAt time.Time) (setI
 	return set.ID, !wasMissing, nil
 }
 
-// MarkSourceRecovered records, holding LockUserSets, that the stored source is
-// reachable again with nothing else to report. Metadata or image changes go through
-// ApplySourceMetadataUpdate / MarkSourcePendingImageChange instead, which clear
-// SourceMissing themselves.
-func MarkSourceRecovered(userID, name, sourceID string, checkedAt time.Time) (setID bson.ObjectID, err error) {
-	defer LockUserSets(userID)()
+// MarkSourceRecovered records, holding the user's set lock (lockUserSetsOrPause),
+// that the stored source is reachable again with nothing else to report.
+// Metadata or image changes go through ApplySourceMetadataUpdate /
+// MarkSourcePendingImageChange instead, which clear SourceMissing themselves.
+func MarkSourceRecovered(ctx context.Context, userID, name, sourceID string, checkedAt time.Time) (setID bson.ObjectID, err error) {
+	unlock, err := lockUserSetsOrPause(ctx, userID)
+	if err != nil {
+		return bson.NilObjectID, err
+	}
+	defer unlock()
 	set, index, err := findStoredSource(userID, name, sourceID)
 	if err != nil {
 		return bson.NilObjectID, err

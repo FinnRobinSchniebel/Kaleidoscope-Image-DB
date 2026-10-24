@@ -136,8 +136,10 @@ func (m MultipartSource) Remove() bool {
 // into userID's library and returns the import report's items, ref naming the
 // import in them. mergeFlow merges it into the stored sets it duplicates, extends
 // or is a subset of; with none, it becomes a new set. Failures are items carrying
-// a notification reason. Everything after decoding holds LockUserSets.
-func ProcessImageSet(set *ImageSetMongo, files []MediaSource, userID string, ref string) []notification.ItemResult {
+// a notification reason. Everything after decoding holds the user's set lock; in
+// a scheduler task (see WithPause) a busy lock pauses the task, and giving up
+// skips the import.
+func ProcessImageSet(ctx context.Context, set *ImageSetMongo, files []MediaSource, userID string, ref string) []notification.ItemResult {
 
 	//given first, overriding any caller's, so a suggestion can name the set before it's stored
 	set.ID = bson.NewObjectID()
@@ -156,7 +158,14 @@ func ProcessImageSet(set *ImageSetMongo, files []MediaSource, userID string, ref
 		return []notification.ItemResult{notification.FailedItem(userID, ref, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err))}
 	}
 
-	defer LockUserSets(userID)()
+	unlock, err := lockUserSetsOrPause(ctx, userID)
+	switch {
+	case errors.Is(err, ErrLibraryBusy):
+		return []notification.ItemResult{{Kind: notification.ItemSkipped, Ref: ref, Reason: ErrLibraryBusy.Error()}}
+	case err != nil:
+		return []notification.ItemResult{notification.FailedItem(userID, ref, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrSyncStopped, err))}
+	}
+	defer unlock()
 
 	merged, err := mergeFlow(userID, ref, set, prepared, true)
 	if err != nil {

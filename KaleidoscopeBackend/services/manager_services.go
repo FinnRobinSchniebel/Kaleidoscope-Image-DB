@@ -1,10 +1,18 @@
 package services
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
+	"context"
+	"errors"
 	"fmt"
+	"log"
+	"runtime/debug"
+	"slices"
 	"sync"
 	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // CREATING A SERVICE
@@ -13,10 +21,51 @@ import (
 // 2. Sync must call done(err) exactly once when the sync finishes (nil) or fails (the error) to allow for a new sync to start for the user and to publish its report. Failure to do so will result in the user being unable to sync again until a server restart
 // 3. Each task returns the results of what it did; the scheduler records them in the sync's report
 // 4. Rotation membership (AddUser/RemoveUser), periodic scheduling, and the active-sync guard are all managed centrally by the Scheduler (see RestoreAllSchedules, fireCredentialHook, fireSyncSettingsHook, RemoveService), which schedules jobs using the provider's own Sync method. OnCredentialsUpdated/OnCredentialsRemoved only need to handle service-specific state, e.g. invalidating a cached session.
+// 5. Each task gets a ctx: pass it to every imageset call and download, and never take imageset locks yourself. A busy library lock pauses the task while the scheduler serves other users, and removing the service cancels it. A task may call imageset.Pause(ctx) to yield on its own.
 
 // Task is a unit of work submitted to the scheduler by a service integration.
-// It returns what it did, for the sync's report; an error is only logged.
-type Task func() ([]notification.ItemResult, error)
+// It returns what it did, for the sync's report; an error is only logged. ctx is
+// cancelled when the user's service is removed or the scheduler stops; pass it to
+// every imageset call and download, so the task can pause on a busy lock or stop.
+type Task func(ctx context.Context) ([]notification.ItemResult, error)
+
+// publishReport stores a finished sync report; a variable so tests can record
+// reports instead of writing them.
+var publishReport = notification.Publish
+
+// logRecoveredPanic recovers a panic in the goroutine it's deferred in and logs
+// it with its stack. Defer it directly: recover only works there.
+func logRecoveredPanic(what string) {
+	if r := recover(); r != nil {
+		log.Printf("------ Warning: %s panicked: %v ------\n%s", what, r, debug.Stack())
+	}
+}
+
+// maxTaskPauses is how often a task pauses for a busy set lock before it gives
+// up, skipping its remaining items. The lock is never forced.
+const maxTaskPauses = 50
+
+var errTaskGaveUp = errors.New("gave up waiting for the library")
+
+// taskRun is one task between its start and its final event, which may pause
+// several times on the way.
+type taskRun struct {
+	scheduler *serviceScheduler
+	user      *userEntry
+	ctx       context.Context
+	progress  *syncProgress
+	resume    chan struct{}  //the run loop signals a paused task to continue
+	events    chan taskEvent //buffered, so a cancelled task's unread final event never blocks
+	pauses    int            //touched only by the task's own goroutine
+}
+
+// taskEvent is what a task reports to the run loop: that it paused, or that it
+// finished with these results.
+type taskEvent struct {
+	paused  bool
+	results []notification.ItemResult
+	err     error
+}
 
 // SyncFunc type is used to pass ServiceProvider.Sync(...) function between functions.
 // Warning: This function should not be called outside the manager_services and periodic scheduler!
@@ -34,6 +83,8 @@ type ServiceConfig struct {
 
 type userEntry struct {
 	userId      string
+	ctx         context.Context //parent of the user's task contexts
+	cancel      context.CancelFunc
 	tasks       []queuedTask
 	queriesDone int
 	mu          sync.Mutex
@@ -43,6 +94,7 @@ type userEntry struct {
 type queuedTask struct {
 	task     Task
 	progress *syncProgress
+	run      *taskRun //set on an unpause entry: resume this paused run instead of starting task
 }
 
 // syncProgress is the in-memory report of one running sync. Results arrive on
@@ -52,7 +104,7 @@ type queuedTask struct {
 type syncProgress struct {
 	mu        sync.Mutex
 	report    *notification.ImportReport
-	executing bool //one of this sync's tasks is running right now
+	executing bool //one of this sync's tasks is running or paused right now
 	published bool
 }
 
@@ -100,12 +152,14 @@ func (p *syncProgress) end(outcome notification.Outcome, err error) bool {
 }
 
 type serviceScheduler struct {
+	name    string
 	config  ServiceConfig
 	users   []*userEntry
 	byUser  map[string]*userEntry
 	mu      sync.Mutex
 	lastRun time.Time
 	stop    chan struct{}
+	baseCtx context.Context //parent of every user context; cancelled by Stop
 }
 
 // ServiceProvider is implemented by every external service integration.
@@ -125,6 +179,10 @@ type Scheduler struct {
 	services  map[string]*serviceScheduler
 	mu        sync.RWMutex
 	providers map[string]ServiceProvider // keyed by service name
+
+	// baseCtx is every task's root context; Stop cancels it, waking paused tasks.
+	baseCtx   context.Context
+	cancelAll context.CancelFunc
 
 	// sleeps until the soonest-due entry in periodicHeap, fires it in its own
 	// goroutine, reschedules it, and goes back to sleep. This avoids spinning
@@ -167,7 +225,8 @@ func (s *Scheduler) Start() {
 	})
 }
 
-// Stop signals all service goroutines and the periodic runner to exit.
+// Stop signals all service goroutines and the periodic runner to exit, and
+// cancels every task's context, which wakes paused tasks.
 func (s *Scheduler) Stop() {
 	s.mu.RLock()
 	for _, ss := range s.services {
@@ -175,13 +234,17 @@ func (s *Scheduler) Stop() {
 	}
 	s.mu.RUnlock()
 
+	s.cancelAll()
 	close(s.periodicStop)
 }
 
 func NewScheduler() *Scheduler {
+	baseCtx, cancelAll := context.WithCancel(context.Background())
 	return &Scheduler{
 		services:      make(map[string]*serviceScheduler),
 		providers:     make(map[string]ServiceProvider),
+		baseCtx:       baseCtx,
+		cancelAll:     cancelAll,
 		periodicByKey: make(map[string]*periodicEntry),
 		periodicWake:  make(chan struct{}, 1),
 		periodicStop:  make(chan struct{}),
@@ -221,9 +284,11 @@ func (s *Scheduler) RegisterService(name string, cfg ServiceConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.services[name] = &serviceScheduler{
-		config: cfg,
-		byUser: make(map[string]*userEntry),
-		stop:   make(chan struct{}),
+		name:    name,
+		config:  cfg,
+		byUser:  make(map[string]*userEntry),
+		stop:    make(chan struct{}),
+		baseCtx: s.baseCtx,
 	}
 	fmt.Printf("Services: A new service \"%s\" has been Registered by the service schedule. Delay: %s, QpT: %d", name, cfg.Delay, cfg.QueriesPerTurn)
 }
@@ -253,7 +318,10 @@ func (s *Scheduler) AddUser(serviceName, userId string) error {
 	if _, created := ss.ensureUser(userId); created {
 		fmt.Printf("Services: Added user [%s] to service: %s", userId, serviceName)
 		if RegistrationHook != nil {
-			go RegistrationHook.OnServiceRegistrationChanged(userId, serviceName)
+			go func() {
+				defer logRecoveredPanic("a registration hook")
+				RegistrationHook.OnServiceRegistrationChanged(userId, serviceName)
+			}()
 		}
 	}
 	return nil
@@ -285,7 +353,9 @@ func (s *Scheduler) RegisteredServiceNames() []string {
 	return names
 }
 
-// RemoveUser removes a user from a service's rotation and discards their queued tasks.
+// RemoveUser removes a user from a service's rotation and discards their queued
+// tasks. Cancelling the user's context wakes their paused tasks, which stop
+// without writing; each dropped unpause entry is finished in its sync report.
 func (s *Scheduler) RemoveUser(serviceName, userId string) error {
 	ss, ok := s.service(serviceName)
 	if !ok {
@@ -293,21 +363,39 @@ func (s *Scheduler) RemoveUser(serviceName, userId string) error {
 	}
 
 	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	if _, exists := ss.byUser[userId]; !exists {
+	u, exists := ss.byUser[userId]
+	if !exists {
+		ss.mu.Unlock()
 		return nil
 	}
 	delete(ss.byUser, userId)
-	for i, u := range ss.users {
-		if u.userId == userId {
-			ss.users = append(ss.users[:i], ss.users[i+1:]...)
-			break
+	if i := slices.Index(ss.users, u); i >= 0 {
+		ss.users = slices.Delete(ss.users, i, i+1)
+	}
+	ss.mu.Unlock()
+
+	u.cancel()
+
+	//u.mu alone: it can be held for a while by WithUserLock, and ss.mu must not wait on it
+	u.mu.Lock()
+	dropped := u.tasks
+	u.tasks = nil
+	u.mu.Unlock()
+
+	for _, entry := range dropped {
+		if entry.run != nil && entry.progress != nil && entry.progress.taskFinished(nil) {
+			if err := publishReport(userId, entry.progress.report); err != nil {
+				fmt.Printf("ERROR: Services: publishing sync report for user %s: %v\n", userId, err)
+			}
 		}
 	}
 
 	fmt.Printf("Services: Removed user [%s] from service: %s", userId, serviceName)
 	if RegistrationHook != nil {
-		go RegistrationHook.OnServiceRegistrationChanged(userId, serviceName)
+		go func() {
+			defer logRecoveredPanic("a registration hook")
+			RegistrationHook.OnServiceRegistrationChanged(userId, serviceName)
+		}()
 	}
 	return nil
 }
@@ -466,12 +554,13 @@ func (s *Scheduler) cancelSync(serviceName, userId string) {
 }
 
 // endSync ends progress's report and publishes it, unless one of its tasks is
-// still executing; the run loop publishes it once that task finishes.
+// still executing or paused; the run loop, or RemoveUser for a paused task it
+// drops, publishes it once that task finishes.
 func endSync(userId string, progress *syncProgress, outcome notification.Outcome, err error) {
 	if !progress.end(outcome, err) {
 		return
 	}
-	if err := notification.Publish(userId, progress.report); err != nil {
+	if err := publishReport(userId, progress.report); err != nil {
 		fmt.Printf("ERROR: Services: publishing sync report for user %s: %v\n", userId, err)
 	}
 }
@@ -554,12 +643,119 @@ func (ss *serviceScheduler) ensureUser(userId string) (*userEntry, bool) {
 	if u, exists := ss.byUser[userId]; exists {
 		return u, false
 	}
-	u := &userEntry{userId: userId}
+	ctx, cancel := context.WithCancel(ss.baseCtx)
+	u := &userEntry{userId: userId, ctx: ctx, cancel: cancel}
 	ss.users = append(ss.users, u)
 	ss.byUser[userId] = u
 	return u, true
 }
 
+// pauseTask is the scheduler's pause function (see imageset.WithPause), run on
+// the task's goroutine: it queues an unpause entry at the front of the user's
+// queue, tells the run loop the task paused, and waits until that entry comes
+// round. It never pauses once cancelled or after maxTaskPauses (errTaskGaveUp).
+func (run *taskRun) pauseTask(_ context.Context) error {
+
+	if err := run.ctx.Err(); err != nil {
+		return err
+	}
+
+	if run.pauses >= maxTaskPauses {
+		return errTaskGaveUp
+	}
+	run.pauses++
+
+	if !run.scheduler.queueAtFront(run.user, queuedTask{progress: run.progress, run: run}) {
+		return context.Canceled //the user was removed
+	}
+	run.events <- taskEvent{paused: true}
+
+	select {
+	case <-run.resume:
+		return nil
+	case <-run.ctx.Done():
+		return run.ctx.Err()
+	}
+}
+
+// startTask runs entry's task on its own goroutine, with a context that carries
+// pauseTask and is cancelled with user. The goroutine always sends exactly one
+// final event; a panic is logged and becomes a failed item instead of crashing
+// the backend.
+func (ss *serviceScheduler) startTask(user *userEntry, entry queuedTask) *taskRun {
+
+	run := &taskRun{
+		scheduler: ss,
+		user:      user,
+		ctx:       user.ctx,
+		progress:  entry.progress,
+		resume:    make(chan struct{}),
+		events:    make(chan taskEvent, 1),
+	}
+	ctx := imageset.WithPause(run.ctx, run.pauseTask)
+
+	go func() {
+
+		var final taskEvent
+		defer func() {
+
+			if r := recover(); r != nil {
+				log.Printf("------ Warning: a %s task for user [%s] panicked: %v ------\n%s", ss.name, user.userId, r, debug.Stack())
+				err := fmt.Errorf("task panicked: %v", r)
+				final = taskEvent{results: []notification.ItemResult{notification.FailedItem(user.userId, ss.name, bson.NilObjectID, err)}, err: err}
+			}
+			run.events <- final
+		}()
+		final.results, final.err = entry.task(ctx)
+	}()
+	return run
+}
+
+// queueAtFront puts entry at the front of user's queue. It returns false when
+// user has since been removed or replaced by a newer entry for the same id.
+func (ss *serviceScheduler) queueAtFront(user *userEntry, entry queuedTask) bool {
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.byUser[user.userId] != user {
+		return false
+	}
+
+	user.mu.Lock()
+	user.tasks = append([]queuedTask{entry}, user.tasks...)
+	user.mu.Unlock()
+	return true
+}
+
+// endTurn moves user to the back of the rotation and resets its turn count.
+func (ss *serviceScheduler) endTurn(user *userEntry) {
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	i := slices.Index(ss.users, user)
+	if i < 0 {
+		return
+	}
+	ss.users = append(slices.Delete(ss.users, i, i+1), user)
+
+	user.mu.Lock()
+	user.queriesDone = 0
+	user.mu.Unlock()
+}
+
+// awaitFinalEvent returns run's final event, skipping any paused event sent
+// before it was cancelled.
+func (run *taskRun) awaitFinalEvent() taskEvent {
+	for {
+		if event := <-run.events; !event.paused {
+			return event
+		}
+	}
+}
+
+// run is the service's loop: one entry at a time, it waits out Delay, starts the
+// task or resumes a paused one, and waits until it pauses or finishes. A pause
+// ends the user's turn; a finished task is recorded in its sync report.
 func (ss *serviceScheduler) run() {
 	for {
 		select {
@@ -568,7 +764,7 @@ func (ss *serviceScheduler) run() {
 		default:
 		}
 
-		next, userId, ok := ss.nextTask()
+		next, user, ok := ss.nextTask()
 		if !ok {
 			time.Sleep(50 * time.Millisecond)
 			continue
@@ -578,26 +774,47 @@ func (ss *serviceScheduler) run() {
 			time.Sleep(wait)
 		}
 
-		if next.progress != nil {
-			next.progress.taskStarted()
-		}
-		results, err := next.task()
-		if err != nil {
-			fmt.Printf("ERROR: Services: task failed for user %s: %v\n", userId, err)
-		}
-		if next.progress != nil && next.progress.taskFinished(results) {
-			if err := notification.Publish(userId, next.progress.report); err != nil {
-				fmt.Printf("ERROR: Services: publishing sync report for user %s: %v\n", userId, err)
+		var event taskEvent
+		if run := next.run; run == nil {
+
+			if next.progress != nil {
+				next.progress.taskStarted()
+			}
+			event = <-ss.startTask(user, next).events
+
+		} else {
+
+			select {
+			case run.resume <- struct{}{}:
+				event = <-run.events
+			case event = <-run.events:
+			case <-run.ctx.Done():
+				event = run.awaitFinalEvent()
 			}
 		}
 		ss.lastRun = time.Now()
+
+		if event.paused {
+			ss.endTurn(user)
+			continue
+		}
+
+		if event.err != nil {
+			fmt.Printf("ERROR: Services: task failed for user %s: %v\n", user.userId, event.err)
+		}
+
+		if next.progress != nil && next.progress.taskFinished(event.results) {
+			if err := publishReport(user.userId, next.progress.report); err != nil {
+				fmt.Printf("ERROR: Services: publishing sync report for user %s: %v\n", user.userId, err)
+			}
+		}
 	}
 }
 
 // nextTask picks the next task from the front user.
 // When a user exhausts their QueriesPerTurn quota, they are rotated to the back.
 // Users with no pending tasks are skipped (and rotated past).
-func (ss *serviceScheduler) nextTask() (queuedTask, string, bool) {
+func (ss *serviceScheduler) nextTask() (queuedTask, *userEntry, bool) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
@@ -624,10 +841,10 @@ func (ss *serviceScheduler) nextTask() (queuedTask, string, bool) {
 			ss.users = append(ss.users[1:], ss.users[0])
 		}
 
-		return next, front.userId, true
+		return next, front, true
 	}
 
-	return queuedTask{}, "", false
+	return queuedTask{}, nil, false
 }
 
 // fireCredentialHook runs the registered provider's service-specific

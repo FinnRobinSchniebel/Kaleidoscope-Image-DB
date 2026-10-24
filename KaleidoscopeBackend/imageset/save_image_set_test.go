@@ -3,6 +3,7 @@ package imageset
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"bytes"
+	"context"
 	"errors"
 	"image"
 	"image/color"
@@ -248,7 +249,7 @@ func TestProcessImageSetRejectsBadInput(t *testing.T) {
 
 		callerID := bson.NewObjectID()
 		set := &ImageSetMongo{ID: callerID, Sources: tt.sources}
-		results := ProcessImageSet(set, tt.files, "user1", "group")
+		results := ProcessImageSet(context.Background(), set, tt.files, "user1", "group")
 		if len(results) != 1 || results[0].Kind != notification.ItemFailed || results[0].Ref != "group" {
 			t.Errorf("%s: results = %+v, want one failed item for the group", tt.name, results)
 		}
@@ -257,5 +258,24 @@ func TestProcessImageSetRejectsBadInput(t *testing.T) {
 		if set.ID.IsZero() || set.ID == callerID {
 			t.Errorf("%s: set ID = %v, want a fresh one given up front", tt.name, set.ID)
 		}
+	}
+}
+
+func TestProcessImageSetSkipsWhenLibraryBusy(t *testing.T) {
+
+	//a readable file; the lock is held, and the task gives up before mergeFlow could reach the DB
+	var pngBytes bytes.Buffer
+	if err := png.Encode(&pngBytes, testPicture(0, false)); err != nil {
+		t.Fatal(err)
+	}
+	files := []MediaSource{writeTestFile(t, "page.png", pngBytes.Bytes())}
+
+	defer LockUserSets("busy-import-user")()
+	ctx := WithPause(context.Background(), func(context.Context) error { return errors.New("gave up") })
+	set := &ImageSetMongo{Sources: []SourceInfo{{Name: "pixiv", SourceID: "1"}}}
+
+	results := ProcessImageSet(ctx, set, files, "busy-import-user", "group")
+	if len(results) != 1 || results[0].Kind != notification.ItemSkipped || results[0].Reason != ErrLibraryBusy.Error() {
+		t.Errorf("results = %+v, want one skipped item with the busy reason", results)
 	}
 }

@@ -190,6 +190,9 @@ func (s *Scheduler) firePeriodicDue() {
 	s.periodicMu.Unlock()
 
 	for _, e := range toRun {
-		go e.job()
+		go func() {
+			defer logRecoveredPanic("a periodic sync")
+			e.job()
+		}()
 	}
 }

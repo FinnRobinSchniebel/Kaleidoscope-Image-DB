@@ -1,6 +1,9 @@
 package services
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 //this file will hold constants used throughout the services section.
 
@@ -26,6 +29,15 @@ const pixivServiceName = "pixiv"
 
 const PixivDelaySec = 1.0 //seconds between requests
 const PixivQpT = 1        //number of queries between delays
+
+// A Pixiv image download fails when no response starts within
+// pixivResponseTimeout, or no data arrives for pixivStallTimeout. There's no
+// total limit, since a large GIF can take minutes. Variables so tests can
+// shorten them.
+var (
+	pixivResponseTimeout = 30 * time.Second
+	pixivStallTimeout    = 60 * time.Second
+)
 
 //Accept-Language sent on every pixiv App API request, so Pixiv returns translated tag names (Tag.TranslatedName)
 const pixivAcceptLanguage = "en"

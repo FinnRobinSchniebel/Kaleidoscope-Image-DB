@@ -3,6 +3,7 @@ package services
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -188,8 +189,8 @@ func SyncPixivBookmarks(userId string, done func(error)) (err error) {
 // enqueueBookmarkPage adds a single bookmark-page task to the scheduler.
 // maxBookmarkID == 0  is  first page
 func enqueueBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int, done func(error)) error {
-	return DefaultScheduler.Enqueue(pixivServiceName, userId, func() ([]notification.ItemResult, error) {
-		return processBookmarkPage(userId, pixivUID, restrict, maxBookmarkID, done), nil
+	return DefaultScheduler.Enqueue(pixivServiceName, userId, func(ctx context.Context) ([]notification.ItemResult, error) {
+		return processBookmarkPage(ctx, userId, pixivUID, restrict, maxBookmarkID, done), nil
 	})
 }
 
@@ -197,7 +198,7 @@ func enqueueBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 // enqueues the next page task. Public pages are followed by private pages.
 // Returns the page's item results; new items report from their own save task.
 // A failure is handed to done rather than returned, so it's logged only once.
-func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int, done func(error)) []notification.ItemResult {
+func processBookmarkPage(ctx context.Context, userId string, pixivUID uint64, restrict pixiv.Restrict, maxBookmarkID int, done func(error)) []notification.ItemResult {
 	sess, err := GetPixivSession(userId)
 	if err != nil {
 		finishPixivSync(userId, done, fmt.Errorf("pixiv session: %w", err))
@@ -217,7 +218,7 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 
 	var results []notification.ItemResult
 	if len(illusts) > 0 {
-		results = processBookmarkItems(userId, illusts, restrict == pixiv.Private)
+		results = processBookmarkItems(ctx, userId, illusts, restrict == pixiv.Private)
 	}
 
 	// Chain to the next page, or move from public to private, or finish.
@@ -241,7 +242,7 @@ func processBookmarkPage(userId string, pixivUID uint64, restrict pixiv.Restrict
 // processBookmarkItems uses the page's DB snapshot only to decide what to do;
 // every write re-reads its set first. Returns one result per item, except new
 // items that were queued: their save task reports them.
-func processBookmarkItems(userId string, illusts []pixivmodel.Illust, isPrivate bool) []notification.ItemResult {
+func processBookmarkItems(ctx context.Context, userId string, illusts []pixivmodel.Illust, isPrivate bool) []notification.ItemResult {
 	sourceIDs := make([]string, len(illusts))
 	for i, il := range illusts {
 		sourceIDs[i] = strconv.FormatUint(il.ID, 10)
@@ -269,7 +270,7 @@ func processBookmarkItems(userId string, illusts []pixivmodel.Illust, isPrivate 
 			case !illustRemoved(il):
 				results = append(results, notification.ItemResult{Kind: notification.ItemSkipped, Ref: idStr, Reason: "hidden by the account's filter"})
 			case exists:
-				results = append(results, markPixivSourceMissing(userId, il.ID))
+				results = append(results, markPixivSourceMissing(ctx, userId, il.ID))
 			default:
 				results = append(results, notification.ItemResult{Kind: notification.ItemSkipped, Ref: idStr, Reason: "removed at source"})
 			}
@@ -289,7 +290,7 @@ func processBookmarkItems(userId string, illusts []pixivmodel.Illust, isPrivate 
 			results = append(results, notification.ItemResult{Kind: notification.ItemUnchanged, Ref: idStr})
 			continue
 		}
-		results = append(results, applyPixivSourceUpdate(userId, &il, isPrivate))
+		results = append(results, applyPixivSourceUpdate(ctx, userId, &il, isPrivate))
 	}
 	return results
 }
@@ -297,7 +298,7 @@ func processBookmarkItems(userId string, illusts []pixivmodel.Illust, isPrivate 
 // finishPixivSync queues done(err) behind the user's pending save tasks, or
 // calls it directly, with the queueing error added, if queueing fails.
 func finishPixivSync(userId string, done func(error), err error) {
-	if queueErr := DefaultScheduler.Enqueue(pixivServiceName, userId, func() ([]notification.ItemResult, error) {
+	if queueErr := DefaultScheduler.Enqueue(pixivServiceName, userId, func(context.Context) ([]notification.ItemResult, error) {
 		log.Printf("pixiv sync [%s]: bookmark sync ended", userId)
 		done(err)
 		return nil, nil
@@ -340,19 +341,21 @@ func sourceByID(set *imageset.ImageSetMongo, sourceID string) (src imageset.Sour
 // enqueueNewIllust is queued rather than run inline because it downloads images.
 // Its task reports what importing the illust did.
 func enqueueNewIllust(userId string, illust pixivmodel.Illust, isPrivate bool) error {
-	return DefaultScheduler.Enqueue(pixivServiceName, userId, func() ([]notification.ItemResult, error) {
-		return savePixivIllust(userId, &illust, isPrivate), nil
+	return DefaultScheduler.Enqueue(pixivServiceName, userId, func(ctx context.Context) ([]notification.ItemResult, error) {
+		return savePixivIllust(ctx, userId, &illust, isPrivate), nil
 	})
 }
 
 // markPixivSourceMissing marks the illust's stored source missing. Only a source
 // that wasn't missing yet is reported as missing.
-func markPixivSourceMissing(userId string, illustID uint64) notification.ItemResult {
+func markPixivSourceMissing(ctx context.Context, userId string, illustID uint64) notification.ItemResult {
 	sourceID := strconv.FormatUint(illustID, 10)
-	setID, newlyMissing, err := imageset.MarkSourceMissing(userId, pixivServiceName, sourceID, time.Now())
+	setID, newlyMissing, err := imageset.MarkSourceMissing(ctx, userId, pixivServiceName, sourceID, time.Now())
 	switch {
 	case errors.Is(err, imageset.ErrSourceNotStored):
 		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "removed at source"}
+	case errors.Is(err, imageset.ErrLibraryBusy):
+		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: imageset.ErrLibraryBusy.Error()}
 	case err != nil:
 		return notification.FailedItem(userId, sourceID, setID, fmt.Errorf("%w: marking missing: %w", notification.ErrLibraryAccess, err))
 	case newlyMissing:
@@ -380,7 +383,7 @@ func tagsChanged(have, want []imageset.SourceTag) bool {
 
 // savePixivIllust downloads illust's pages and imports them, returning the
 // report items for it: a new set, a merge into stored sets, or a failure.
-func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) []notification.ItemResult {
+func savePixivIllust(ctx context.Context, userId string, illust *pixivmodel.Illust, isPrivate bool) []notification.ItemResult {
 
 	illustID := illust.ID
 	ref := strconv.FormatUint(illustID, 10)
@@ -401,7 +404,7 @@ func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) [
 	files := make([]imageset.MediaSource, 0, len(urls))
 	for _, url := range urls {
 
-		path, err := downloadPixivImage(url, tmpDir)
+		path, err := downloadPixivImage(ctx, url, tmpDir)
 		if err != nil {
 			err = fmt.Errorf("%w: download %s: %w", notification.ErrDownloadFailed, url, err)
 			return []notification.ItemResult{notification.FailedItem(userId, ref, bson.NilObjectID, err)}
@@ -409,7 +412,7 @@ func savePixivIllust(userId string, illust *pixivmodel.Illust, isPrivate bool) [
 		files = append(files, imageset.DiskSource{Path: path})
 	}
 
-	results := imageset.ProcessImageSet(buildPixivImageSet(illust, userId, isPrivate), files, userId, ref)
+	results := imageset.ProcessImageSet(ctx, buildPixivImageSet(illust, userId, isPrivate), files, userId, ref)
 	log.Printf("pixiv: imported illust %d (%q)", illustID, illust.Title)
 	return results
 }
@@ -467,13 +470,14 @@ func illustCheckImageURLs(illust *pixivmodel.Illust) []string {
 // fills those in.
 func buildPixivImageSet(illust *pixivmodel.Illust, userId string, isPrivate bool) *imageset.ImageSetMongo {
 
+	authorName, authorID := readPixivAuthor(illust)
 	src := imageset.SourceInfo{
 		Name:         pixivServiceName,
 		SourceID:     strconv.FormatUint(illust.ID, 10),
 		Title:        illust.Title,
 		Description:  pixivIllustCaption(illust),
-		SourceAuthor: illust.User.Name,
-		AuthorID:     strconv.FormatUint(illust.User.ID, 10),
+		SourceAuthor: authorName,
+		AuthorID:     authorID,
 		Tags:         pixivIllustTags(illust, isPrivate),
 		Date:         illust.CreateDate,
 		LastChecked:  time.Now(),
@@ -516,29 +520,42 @@ func pixivIllustCaption(illust *pixivmodel.Illust) string {
 
 // pixivSourceInfo builds the incoming SourceInfo for illust's metadata update.
 func pixivSourceInfo(illust *pixivmodel.Illust, isPrivate bool) imageset.SourceInfo {
+	authorName, authorID := readPixivAuthor(illust)
 	return imageset.SourceInfo{
 		Name:         pixivServiceName,
 		SourceID:     strconv.FormatUint(illust.ID, 10),
 		Title:        illust.Title,
 		Description:  pixivIllustCaption(illust),
-		SourceAuthor: illust.User.Name,
-		AuthorID:     strconv.FormatUint(illust.User.ID, 10),
+		SourceAuthor: authorName,
+		AuthorID:     authorID,
 		Tags:         pixivIllustTags(illust, isPrivate),
 		Date:         illust.CreateDate,
 	}
 }
 
+// readPixivAuthor returns illust's author name and ID, both empty (an unknown
+// author) when the listing has no user.
+func readPixivAuthor(illust *pixivmodel.Illust) (name, id string) {
+
+	if illust.User == nil {
+		return "", ""
+	}
+	return illust.User.Name, strconv.FormatUint(illust.User.ID, 10)
+}
+
 // applyPixivSourceUpdate applies illust's metadata to its stored set. A re-apply
 // of identical values reports unchanged, and a set that no longer holds the
 // source since the page was read is skipped.
-func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust, isPrivate bool) notification.ItemResult {
+func applyPixivSourceUpdate(ctx context.Context, userId string, illust *pixivmodel.Illust, isPrivate bool) notification.ItemResult {
 	sourceID := strconv.FormatUint(illust.ID, 10)
 
 	// Image changes aren't checked yet: a changed CreateDate only updates the metadata.
-	setID, changed, err := imageset.ApplySourceMetadataUpdate(userId, pixivSourceInfo(illust, isPrivate), time.Now())
+	setID, changed, err := imageset.ApplySourceMetadataUpdate(ctx, userId, pixivSourceInfo(illust, isPrivate), time.Now())
 	switch {
 	case errors.Is(err, imageset.ErrSourceNotStored):
 		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "the set changed during the sync"}
+	case errors.Is(err, imageset.ErrLibraryBusy):
+		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: imageset.ErrLibraryBusy.Error()}
 	case err != nil:
 		return notification.FailedItem(userId, sourceID, setID, fmt.Errorf("%w: applying metadata update: %w", notification.ErrLibraryAccess, err))
 	case !changed:
@@ -548,11 +565,38 @@ func applyPixivSourceUpdate(userId string, illust *pixivmodel.Illust, isPrivate 
 	return notification.ItemResult{Kind: notification.ItemUpdated, Ref: sourceID, SetID: setID}
 }
 
+// errDownloadStalled is the cause a download's watchdog cancels it with.
+var errDownloadStalled = errors.New("the download stalled")
+
+// stallReader passes reads through to r and pushes watchdog back by timeout
+// after each read that brought data.
+type stallReader struct {
+	r        io.Reader
+	watchdog *time.Timer
+	timeout  time.Duration
+}
+
+func (s stallReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 {
+		s.watchdog.Reset(s.timeout)
+	}
+	return n, err
+}
+
 // downloadPixivImage fetches a single Pixiv image URL into dir and returns the
 // local file path. Pixiv image servers require Referer: https://www.pixiv.net/
-// which differs from the App API host used by the library's own downloader.
-func downloadPixivImage(url, dir string) (_ string, err error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+// which differs from the App API host used by the library's own downloader. It
+// fails when no response starts within pixivResponseTimeout, no data arrives for
+// pixivStallTimeout, or ctx is cancelled.
+func downloadPixivImage(ctx context.Context, url, dir string) (_ string, err error) {
+
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	watchdog := time.AfterFunc(pixivResponseTimeout, func() { cancel(errDownloadStalled) })
+	defer watchdog.Stop()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
@@ -561,6 +605,10 @@ func downloadPixivImage(url, dir string) (_ string, err error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+
+		if errors.Is(context.Cause(ctx), errDownloadStalled) {
+			return "", fmt.Errorf("no response within %s: %w", pixivResponseTimeout, errDownloadStalled)
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -578,7 +626,12 @@ func downloadPixivImage(url, dir string) (_ string, err error) {
 		err = errors.Join(err, f.Close())
 	}()
 
-	if _, err = io.Copy(f, resp.Body); err != nil {
+	watchdog.Reset(pixivStallTimeout)
+	if _, err = io.Copy(f, stallReader{r: resp.Body, watchdog: watchdog, timeout: pixivStallTimeout}); err != nil {
+
+		if errors.Is(context.Cause(ctx), errDownloadStalled) {
+			return "", fmt.Errorf("no data for %s: %w", pixivStallTimeout, errDownloadStalled)
+		}
 		return "", err
 	}
 	return dest, nil

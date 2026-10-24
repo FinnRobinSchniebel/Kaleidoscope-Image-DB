@@ -3,12 +3,14 @@ package imageset
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/authutil"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
+	"context"
 	"errors"
 	"fmt"
 	"image"
 	"image/gif"
 	"image/png"
 	"log"
+	"runtime/debug"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -95,7 +97,16 @@ func serveGenerated(c *fiber.Ctx, set ImageSetMongo, index, sizeX, sizeY int, ca
 		return c.Status(fiber.StatusInternalServerError).SendString("failed to generate image: " + err.Error())
 	}
 
-	go cache(img)
+	go func() {
+
+		//a panic here would otherwise take the whole server down
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("------ Warning: caching a generated image of set %s panicked: %v ------\n%s", set.ID.Hex(), r, debug.Stack())
+			}
+		}()
+		cache(img)
+	}()
 
 	c.Type("png")
 	return png.Encode(c.Response().BodyWriter(), img)
@@ -177,7 +188,7 @@ func PostImageSet(c *fiber.Ctx) error {
 		imageSet.Sources = []SourceInfo{{Name: UploadSourceName}}
 	}
 
-	results := ProcessImageSet(imageSet, files, userID, UploadSourceName)
+	results := ProcessImageSet(context.Background(), imageSet, files, userID, UploadSourceName)
 
 	status := fiber.StatusCreated
 	for _, result := range results {
