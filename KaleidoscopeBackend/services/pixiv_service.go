@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -240,8 +241,10 @@ func processBookmarkPage(ctx context.Context, userId string, pixivUID uint64, re
 }
 
 // processBookmarkItems uses the page's DB snapshot only to decide what to do;
-// every write re-reads its set first. Returns one result per item, except new
-// items that were queued: their save task reports them.
+// every write re-reads its sets first. Items are handled oldest bookmark first,
+// so new ones are queued in bookmark order. Returns the page's items, except new
+// items that were queued: their save task reports them. Works with nothing to
+// write get their LastChecked bumped once, after the loop.
 func processBookmarkItems(ctx context.Context, userId string, illusts []pixivmodel.Illust, isPrivate bool) []notification.ItemResult {
 	sourceIDs := make([]string, len(illusts))
 	for i, il := range illusts {
@@ -259,10 +262,13 @@ func processBookmarkItems(ctx context.Context, userId string, illusts []pixivmod
 		return results
 	}
 
+	checkedAt := time.Now()
+	var checked []string
 	results := make([]notification.ItemResult, 0, len(illusts))
-	for _, il := range illusts {
+	for _, il := range slices.Backward(illusts) {
 		idStr := strconv.FormatUint(il.ID, 10)
-		set, exists := existing[idStr]
+		sets := existing[idStr]
+		exists := len(sets) > 0
 
 		// Must stay first: placeholder entries look changed to every later check.
 		if !il.Visible {
@@ -270,7 +276,7 @@ func processBookmarkItems(ctx context.Context, userId string, illusts []pixivmod
 			case !illustRemoved(il):
 				results = append(results, notification.ItemResult{Kind: notification.ItemSkipped, Ref: idStr, Reason: "hidden by the account's filter"})
 			case exists:
-				results = append(results, markPixivSourceMissing(ctx, userId, il.ID))
+				results = append(results, markPixivSourceMissing(ctx, userId, il.ID)...)
 			default:
 				results = append(results, notification.ItemResult{Kind: notification.ItemSkipped, Ref: idStr, Reason: "removed at source"})
 			}
@@ -285,12 +291,16 @@ func processBookmarkItems(ctx context.Context, userId string, illusts []pixivmod
 			continue
 		}
 
-		src, idx := sourceByID(set, idStr)
-		if idx < 0 || !pixivSourceStale(il, src, isPrivate) {
+		if !isPixivSourceStaleInAnySet(il, sets, isPrivate) {
 			results = append(results, notification.ItemResult{Kind: notification.ItemUnchanged, Ref: idStr})
+			checked = append(checked, idStr)
 			continue
 		}
-		results = append(results, applyPixivSourceUpdate(ctx, userId, &il, isPrivate))
+		results = append(results, applyPixivSourceUpdate(ctx, userId, &il, isPrivate)...)
+	}
+
+	if err := imageset.MarkSourcesChecked(ctx, userId, pixivServiceName, checked, checkedAt); err != nil {
+		log.Printf("------ Warning: pixiv sync [%s]: marking unchanged items checked: %s ------", userId, err)
 	}
 	return results
 }
@@ -315,6 +325,20 @@ func pixivSourceStale(il pixivmodel.Illust, src imageset.SourceInfo, isPrivate b
 		src.SourceMissing ||
 		!imageset.SourceDateMatches(src.Date, il.CreateDate) ||
 		tagsChanged(src.Tags, pixivIllustTags(&il, isPrivate))
+}
+
+// isPixivSourceStaleInAnySet reports whether pixivSourceStale holds for any of
+// the sets' copies of il's source.
+func isPixivSourceStaleInAnySet(il pixivmodel.Illust, sets []*imageset.ImageSetMongo, isPrivate bool) bool {
+
+	sourceID := strconv.FormatUint(il.ID, 10)
+	for _, set := range sets {
+
+		if src, idx := sourceByID(set, sourceID); idx >= 0 && pixivSourceStale(il, src, isPrivate) {
+			return true
+		}
+	}
+	return false
 }
 
 // illustRemoved reports whether il is Pixiv's placeholder for a deleted or
@@ -346,23 +370,46 @@ func enqueueNewIllust(userId string, illust pixivmodel.Illust, isPrivate bool) e
 	})
 }
 
-// markPixivSourceMissing marks the illust's stored source missing. Only a source
-// that wasn't missing yet is reported as missing.
-func markPixivSourceMissing(ctx context.Context, userId string, illustID uint64) notification.ItemResult {
+// markPixivSourceMissing marks the illust's source missing in every set holding
+// it. Only a set whose copy wasn't missing yet is reported as missing.
+func markPixivSourceMissing(ctx context.Context, userId string, illustID uint64) []notification.ItemResult {
 	sourceID := strconv.FormatUint(illustID, 10)
-	setID, newlyMissing, err := imageset.MarkSourceMissing(ctx, userId, pixivServiceName, sourceID, time.Now())
+	results, err := imageset.MarkSourceMissing(ctx, userId, pixivServiceName, sourceID, time.Now())
 	switch {
 	case errors.Is(err, imageset.ErrSourceNotStored):
-		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "removed at source"}
+		return []notification.ItemResult{{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "removed at source"}}
 	case errors.Is(err, imageset.ErrLibraryBusy):
-		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: imageset.ErrLibraryBusy.Error()}
+		return []notification.ItemResult{{Kind: notification.ItemSkipped, Ref: sourceID, Reason: imageset.ErrLibraryBusy.Error()}}
+	case errors.Is(err, context.Canceled):
+		return []notification.ItemResult{notification.FailedItem(userId, sourceID, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrSyncStopped, err))}
 	case err != nil:
-		return notification.FailedItem(userId, sourceID, setID, fmt.Errorf("%w: marking missing: %w", notification.ErrLibraryAccess, err))
-	case newlyMissing:
-		return notification.ItemResult{Kind: notification.ItemMissing, Ref: sourceID, SetID: setID}
-	default:
-		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: sourceID}
+		return []notification.ItemResult{notification.FailedItem(userId, sourceID, bson.NilObjectID, fmt.Errorf("%w: marking missing: %w", notification.ErrLibraryAccess, err))}
 	}
+	return reportPixivSourceWrites(userId, sourceID, results, notification.ItemMissing, "marking missing")
+}
+
+// reportPixivSourceWrites turns a by-source writer's per-set results into report
+// items: a failed set is Failed and a changed one is changedKind, each with its
+// set ID; action names the write in a failure. If no set gave an item, the work
+// is one Unchanged item.
+func reportPixivSourceWrites(userId, sourceID string, results []imageset.SourceWriteResult, changedKind notification.ItemKind, action string) []notification.ItemResult {
+
+	var items []notification.ItemResult
+	for _, result := range results {
+
+		switch {
+		case result.Err != nil:
+			err := fmt.Errorf("%w: %s: %w", notification.ErrLibraryAccess, action, result.Err)
+			items = append(items, notification.FailedItem(userId, sourceID, result.SetID, err))
+		case result.Changed:
+			items = append(items, notification.ItemResult{Kind: changedKind, Ref: sourceID, SetID: result.SetID})
+		}
+	}
+
+	if len(items) == 0 {
+		return []notification.ItemResult{{Kind: notification.ItemUnchanged, Ref: sourceID}}
+	}
+	return items
 }
 
 // tagsChanged reports whether want has a tag missing from have, compared by
@@ -405,6 +452,11 @@ func savePixivIllust(ctx context.Context, userId string, illust *pixivmodel.Illu
 	for _, url := range urls {
 
 		path, err := downloadPixivImage(ctx, url, tmpDir)
+		if err != nil && ctx.Err() != nil {
+			err = fmt.Errorf("%w: download %s: %w", notification.ErrSyncStopped, url, err)
+			return []notification.ItemResult{notification.FailedItem(userId, ref, bson.NilObjectID, err)}
+		}
+
 		if err != nil {
 			err = fmt.Errorf("%w: download %s: %w", notification.ErrDownloadFailed, url, err)
 			return []notification.ItemResult{notification.FailedItem(userId, ref, bson.NilObjectID, err)}
@@ -543,26 +595,30 @@ func readPixivAuthor(illust *pixivmodel.Illust) (name, id string) {
 	return illust.User.Name, strconv.FormatUint(illust.User.ID, 10)
 }
 
-// applyPixivSourceUpdate applies illust's metadata to its stored set. A re-apply
-// of identical values reports unchanged, and a set that no longer holds the
-// source since the page was read is skipped.
-func applyPixivSourceUpdate(ctx context.Context, userId string, illust *pixivmodel.Illust, isPrivate bool) notification.ItemResult {
+// applyPixivSourceUpdate applies illust's metadata to every set holding its
+// source. A re-apply of identical values reports unchanged, and a source no set
+// holds any more since the page was read is skipped.
+func applyPixivSourceUpdate(ctx context.Context, userId string, illust *pixivmodel.Illust, isPrivate bool) []notification.ItemResult {
 	sourceID := strconv.FormatUint(illust.ID, 10)
 
 	// Image changes aren't checked yet: a changed CreateDate only updates the metadata.
-	setID, changed, err := imageset.ApplySourceMetadataUpdate(ctx, userId, pixivSourceInfo(illust, isPrivate), time.Now())
+	results, err := imageset.ApplySourceMetadataUpdate(ctx, userId, pixivSourceInfo(illust, isPrivate), time.Now())
 	switch {
 	case errors.Is(err, imageset.ErrSourceNotStored):
-		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "the set changed during the sync"}
+		return []notification.ItemResult{{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "the set changed during the sync"}}
 	case errors.Is(err, imageset.ErrLibraryBusy):
-		return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, Reason: imageset.ErrLibraryBusy.Error()}
+		return []notification.ItemResult{{Kind: notification.ItemSkipped, Ref: sourceID, Reason: imageset.ErrLibraryBusy.Error()}}
+	case errors.Is(err, context.Canceled):
+		return []notification.ItemResult{notification.FailedItem(userId, sourceID, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrSyncStopped, err))}
 	case err != nil:
-		return notification.FailedItem(userId, sourceID, setID, fmt.Errorf("%w: applying metadata update: %w", notification.ErrLibraryAccess, err))
-	case !changed:
-		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: sourceID}
+		return []notification.ItemResult{notification.FailedItem(userId, sourceID, bson.NilObjectID, fmt.Errorf("%w: applying metadata update: %w", notification.ErrLibraryAccess, err))}
 	}
-	log.Printf("pixiv: updated illust %d (%q)", illust.ID, illust.Title)
-	return notification.ItemResult{Kind: notification.ItemUpdated, Ref: sourceID, SetID: setID}
+
+	items := reportPixivSourceWrites(userId, sourceID, results, notification.ItemUpdated, "applying metadata update")
+	if slices.ContainsFunc(items, func(item notification.ItemResult) bool { return item.Kind == notification.ItemUpdated }) {
+		log.Printf("pixiv: updated illust %d (%q)", illust.ID, illust.Title)
+	}
+	return items
 }
 
 // errDownloadStalled is the cause a download's watchdog cancels it with.

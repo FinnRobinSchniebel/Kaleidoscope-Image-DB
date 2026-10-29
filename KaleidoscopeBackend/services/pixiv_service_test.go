@@ -15,6 +15,7 @@ import (
 
 	pixiv "github.com/ryohidaka/go-pixiv"
 	pixivmodel "github.com/ryohidaka/go-pixiv/models/appmodel"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestSavePixivIllustNoURLs(t *testing.T) {
@@ -108,18 +109,96 @@ func TestBuildPixivImageSetDerivesFromSource(t *testing.T) {
 	}
 }
 
-func TestPixivWritesSkipWhenLibraryBusy(t *testing.T) {
+func TestPixivWritesStopBeforeTheDB(t *testing.T) {
 
-	//the lock is held and the task gives up, so neither write reaches the DB
+	//the lock is held and the task gives up, or it was stopped, so neither write reaches the DB
 	defer imageset.LockUserSets("pixiv-busy-user")()
-	ctx := imageset.WithPause(context.Background(), func(context.Context) error { return errors.New("gave up") })
+	giveUp := func(context.Context) error { return errors.New("gave up") }
+	busy := imageset.WithPause(context.Background(), giveUp)
+	stopped, cancel := context.WithCancel(imageset.WithPause(context.Background(), giveUp))
+	cancel()
 
-	missing := markPixivSourceMissing(ctx, "pixiv-busy-user", 5)
-	updated := applyPixivSourceUpdate(ctx, "pixiv-busy-user", &pixivmodel.Illust{ID: 5}, false)
-	for name, item := range map[string]notification.ItemResult{"missing mark": missing, "metadata update": updated} {
-		if item.Kind != notification.ItemSkipped || item.Reason != imageset.ErrLibraryBusy.Error() {
-			t.Errorf("%s: %+v, want skipped with the busy reason", name, item)
+	tests := []struct {
+		name   string
+		ctx    context.Context
+		kind   notification.ItemKind
+		reason string
+	}{
+		{"library busy", busy, notification.ItemSkipped, imageset.ErrLibraryBusy.Error()},
+		{"sync stopped", stopped, notification.ItemFailed, notification.ErrSyncStopped.Error()},
+	}
+	for _, tt := range tests {
+
+		writes := map[string][]notification.ItemResult{
+			"missing mark":    markPixivSourceMissing(tt.ctx, "pixiv-busy-user", 5),
+			"metadata update": applyPixivSourceUpdate(tt.ctx, "pixiv-busy-user", &pixivmodel.Illust{ID: 5}, false),
 		}
+		for write, items := range writes {
+			if len(items) != 1 || items[0].Kind != tt.kind || items[0].Reason != tt.reason {
+				t.Errorf("%s, %s: %+v, want one %s item with %q", tt.name, write, items, tt.kind, tt.reason)
+			}
+		}
+	}
+}
+
+func TestSavePixivIllustStoppedSync(t *testing.T) {
+
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+
+	stopped, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	illust := &pixivmodel.Illust{ID: 1, MetaSinglePage: &pixivmodel.MetaSinglePage{OriginalImageURL: server.URL + "/page.png"}}
+	results := savePixivIllust(stopped, "user1", illust, false)
+	if len(results) != 1 || results[0].Kind != notification.ItemFailed || results[0].Reason != notification.ErrSyncStopped.Error() {
+		t.Errorf("results = %+v, want one failed item with the stopped reason", results)
+	}
+}
+
+func TestReportPixivSourceWrites(t *testing.T) {
+
+	failedSet, changedSet, quietSet := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
+	results := []imageset.SourceWriteResult{
+		{SetID: failedSet, Err: errors.New("write failed")},
+		{SetID: changedSet, Changed: true},
+		{SetID: quietSet},
+	}
+
+	items := reportPixivSourceWrites("user1", "7", results, notification.ItemMissing, "marking missing")
+	if len(items) != 2 {
+		t.Fatalf("items = %+v, want the failed and the changed set only", items)
+	}
+
+	if failed := items[0]; failed.Kind != notification.ItemFailed || failed.SetID != failedSet || failed.Reason != notification.ErrLibraryAccess.Error() {
+		t.Errorf("failed set: %+v, want failed with its set ID and the library reason", failed)
+	}
+
+	if changed := items[1]; changed.Kind != notification.ItemMissing || changed.SetID != changedSet || changed.Ref != "7" {
+		t.Errorf("changed set: %+v, want missing with its set ID", changed)
+	}
+
+	unchanged := reportPixivSourceWrites("user1", "7", []imageset.SourceWriteResult{{SetID: changedSet}, {SetID: quietSet}}, notification.ItemUpdated, "applying metadata update")
+	if len(unchanged) != 1 || unchanged[0].Kind != notification.ItemUnchanged || !unchanged[0].SetID.IsZero() {
+		t.Errorf("nothing changed: %+v, want one unchanged item for the work", unchanged)
+	}
+}
+
+func TestIsPixivSourceStaleInAnySet(t *testing.T) {
+
+	created := time.Date(2026, 8, 27, 9, 12, 12, 0, time.UTC)
+	il := pixivmodel.Illust{ID: 7, CreateDate: created}
+	withCopyDated := func(date time.Time) *imageset.ImageSetMongo {
+		return &imageset.ImageSetMongo{Sources: []imageset.SourceInfo{{Name: pixivServiceName, SourceID: "7", Date: date, LastChecked: time.Now()}}}
+	}
+
+	current, old := withCopyDated(created), withCopyDated(created.Add(-time.Hour))
+	if !isPixivSourceStaleInAnySet(il, []*imageset.ImageSetMongo{current, old}, false) {
+		t.Error("only the second set's copy stale: want stale")
+	}
+
+	if isPixivSourceStaleInAnySet(il, []*imageset.ImageSetMongo{current, current}, false) {
+		t.Error("no copy stale: want not stale")
 	}
 }
 

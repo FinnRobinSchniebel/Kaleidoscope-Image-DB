@@ -19,12 +19,14 @@ import (
 var Collection *mongo.Collection
 
 // EnsureIndexes creates the indexes used to find image sets by owner plus
-// source tag or AutoTag (tagging.applyAutoTagToSets' candidate query), and
-// the indexes search's own pipeline relies on: the default newest-first
-// sort (with an _id tie-breaker for determinism), and tags/authors
-// membership lookups. Idempotent, safe to call on every startup.
+// a source (sync's page lookup, the merge's same-source lookup), source tag or
+// AutoTag (tagging.applyAutoTagToSets' candidate query), and the indexes
+// search's own pipeline relies on: the default newest-first sort (with an _id
+// tie-breaker for determinism), and tags/authors membership lookups.
+// Idempotent, safe to call on every startup.
 func EnsureIndexes(ctx context.Context) error {
 	_, err := Collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "sources.name", Value: 1}, {Key: "sources.source_id", Value: 1}}},
 		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "sources.tags.default", Value: 1}}},
 		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "autotags", Value: 1}}},
 		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "date_added", Value: -1}, {Key: "_id", Value: -1}}},
@@ -55,6 +57,33 @@ func updateSourceFields(set *ImageSetMongo, index int, fields bson.M) error {
 	}
 	if _, tagsChanged := fields["tags"]; tagsChanged {
 		refreshUntagged(set.KscopeUserId)
+	}
+	return nil
+}
+
+// bumpSourcesLastChecked sets last_checked to checkedAt on userID's sources named
+// name with one of sourceIDs, in every set holding them. A zero last_checked is
+// left alone, since it marks a source the next sync must catch up once. The
+// caller holds the user's set lock.
+func bumpSourcesLastChecked(userID, name string, sourceIDs []string, checkedAt time.Time) error {
+
+	match := bson.M{
+		"name":         name,
+		"source_id":    bson.M{"$in": sourceIDs},
+		"last_checked": bson.M{"$gt": time.Time{}},
+	}
+	filter := bson.M{"kscope_userid": userID, "sources": bson.M{"$elemMatch": match}}
+
+	arrayFilter := bson.M{
+		"s.name":         name,
+		"s.source_id":    bson.M{"$in": sourceIDs},
+		"s.last_checked": bson.M{"$gt": time.Time{}},
+	}
+	update := bson.M{"$set": bson.M{"sources.$[s].last_checked": checkedAt}}
+
+	opts := options.UpdateMany().SetArrayFilters([]any{arrayFilter})
+	if _, err := Collection.UpdateMany(context.Background(), filter, update, opts); err != nil {
+		return fmt.Errorf("bumping sources' last checked time: %w", err)
 	}
 	return nil
 }
@@ -610,12 +639,10 @@ func SearchDBForImages(params SearchParams) (bson.M, error) {
 	return results, nil
 }
 
-// GetImageSetsBySourceIDs returns the full imageSet document for every saved set
-// that has a source named sourceName whose SourceID is one of sourceIDs, keyed by
-// that SourceID. Full documents (not just the matching SourceInfo) are returned
-// because callers may need to update the set in place. Only contains items owned
-// by the given user.
-func GetImageSetsBySourceIDs(userId string, sourceName string, sourceIDs []string) (map[string]*ImageSetMongo, error) {
+// GetImageSetsBySourceIDs returns, for each of sourceIDs, the full documents of
+// every one of userId's sets holding a source named sourceName with that ID,
+// oldest set first. IDs no set holds are left out.
+func GetImageSetsBySourceIDs(userId string, sourceName string, sourceIDs []string) (map[string][]*ImageSetMongo, error) {
 	ctx := context.Background()
 
 	filter := bson.M{
@@ -626,7 +653,7 @@ func GetImageSetsBySourceIDs(userId string, sourceName string, sourceIDs []strin
 		}},
 	}
 
-	cursor, err := Collection.Find(ctx, filter)
+	cursor, err := Collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -636,16 +663,32 @@ func GetImageSetsBySourceIDs(userId string, sourceName string, sourceIDs []strin
 	if err := cursor.All(ctx, &docs); err != nil {
 		return nil, err
 	}
+	return groupSetsBySourceID(docs, sourceName, sourceIDs), nil
+}
 
-	result := make(map[string]*ImageSetMongo, len(docs))
+// groupSetsBySourceID lists each of docs, in order, under every one of
+// sourceIDs it holds a source named name for, at most once per ID.
+func groupSetsBySourceID(docs []ImageSetMongo, name string, sourceIDs []string) map[string][]*ImageSetMongo {
+
+	requested := make(map[string]bool, len(sourceIDs))
+	for _, id := range sourceIDs {
+		requested[id] = true
+	}
+
+	grouped := make(map[string][]*ImageSetMongo, len(sourceIDs))
 	for i := range docs {
+
+		listed := make(map[string]bool)
 		for _, src := range docs[i].Sources {
-			if src.Name == sourceName {
-				result[src.SourceID] = &docs[i]
+
+			if src.Name != name || !requested[src.SourceID] || listed[src.SourceID] {
+				continue
 			}
+			listed[src.SourceID] = true
+			grouped[src.SourceID] = append(grouped[src.SourceID], &docs[i])
 		}
 	}
-	return result, nil
+	return grouped
 }
 
 // loadOwnedSets returns userID's sets among ids, in the order of ids. Sets that
@@ -797,17 +840,6 @@ func findSetIDsWithSource(userID, name, sourceID string) ([]bson.ObjectID, error
 		ids[i] = doc.ID
 	}
 	return ids, nil
-}
-
-// GetImageSetBySourceID is a single-ID convenience wrapper around
-// GetImageSetsBySourceIDs. ok is false if no owned set has a matching source.
-func GetImageSetBySourceID(userId string, sourceName string, sourceID string) (set *ImageSetMongo, ok bool, err error) {
-	sets, err := GetImageSetsBySourceIDs(userId, sourceName, []string{sourceID})
-	if err != nil {
-		return nil, false, err
-	}
-	set, ok = sets[sourceID]
-	return set, ok, nil
 }
 
 /*Provides display info for the image you associated with the image ID*/

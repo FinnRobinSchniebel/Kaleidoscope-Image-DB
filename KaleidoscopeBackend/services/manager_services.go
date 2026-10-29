@@ -4,7 +4,6 @@ import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/imageset"
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"runtime/debug"
@@ -40,12 +39,6 @@ func logRecoveredPanic(what string) {
 		log.Printf("------ Warning: %s panicked: %v ------\n%s", what, r, debug.Stack())
 	}
 }
-
-// maxTaskPauses is how often a task pauses for a busy set lock before it gives
-// up, skipping its remaining items. The lock is never forced.
-const maxTaskPauses = 50
-
-var errTaskGaveUp = errors.New("gave up waiting for the library")
 
 // taskRun is one task between its start and its final event, which may pause
 // several times on the way.

@@ -10,14 +10,18 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// fakeTagger records nothing and changes no tags, so a merge can run without a database.
+// fakeTagger changes no tags, so a merge can run without a database.
 type fakeTagger struct {
-	processed  *bool  //set when ProcessSourceTags runs, if non-nil
-	onProcess  func() //called when ProcessSourceTags runs, if non-nil
-	processErr error  //returned by ProcessSourceTags
+	processed  *bool             //set when ProcessSourceTags runs, if non-nil
+	onProcess  func()            //called when ProcessSourceTags runs, if non-nil
+	processErr error             //returned by ProcessSourceTags
+	failSetID  bson.ObjectID     //if set, processErr is returned for this set only
+	undone     *[]TagCountChange //each UndoTagCounts call, if non-nil
 }
 
-func (f fakeTagger) ProcessSourceTags(string, *ImageSetMongo, int, []SourceTag) (TagCountChange, error) {
+// ProcessSourceTags returns a change whose SourceName is the set's ID, so an
+// undo can be traced to its set.
+func (f fakeTagger) ProcessSourceTags(_ string, set *ImageSetMongo, _ int, _ []SourceTag) (TagCountChange, error) {
 	if f.processed != nil {
 		*f.processed = true
 	}
@@ -25,7 +29,12 @@ func (f fakeTagger) ProcessSourceTags(string, *ImageSetMongo, int, []SourceTag) 
 	if f.onProcess != nil {
 		f.onProcess()
 	}
-	return TagCountChange{}, f.processErr
+
+	change := TagCountChange{SourceName: set.ID.Hex()}
+	if !f.failSetID.IsZero() && set.ID != f.failSetID {
+		return change, nil
+	}
+	return change, f.processErr
 }
 func (fakeTagger) CombineTagOverrides(string, *ImageSetMongo, []string) (TagCountChange, error) {
 	return TagCountChange{}, nil
@@ -34,8 +43,13 @@ func (fakeTagger) RecordDeletion(string, []SourceInfo, []string) error { return 
 func (fakeTagger) RecomputeSystemTags(string, *ImageSetMongo) (TagCountChange, error) {
 	return TagCountChange{}, nil
 }
-func (fakeTagger) UndoTagCounts(string, TagCountChange) error { return nil }
-func (fakeTagger) RefreshUntaggedCount(string) error          { return nil }
+func (f fakeTagger) UndoTagCounts(_ string, change TagCountChange) error {
+	if f.undone != nil {
+		*f.undone = append(*f.undone, change)
+	}
+	return nil
+}
+func (fakeTagger) RefreshUntaggedCount(string) error { return nil }
 func (fakeTagger) ResolveTagTerm(string, string) ([]string, bool, error) {
 	return nil, false, nil
 }
