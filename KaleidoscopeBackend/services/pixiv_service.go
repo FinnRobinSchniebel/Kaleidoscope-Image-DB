@@ -244,7 +244,8 @@ func processBookmarkPage(ctx context.Context, userId string, pixivUID uint64, re
 // every write re-reads its sets first. Items are handled oldest bookmark first,
 // so new ones are queued in bookmark order. Returns the page's items, except new
 // items that were queued: their save task reports them. Works with nothing to
-// write get their LastChecked bumped once, after the loop.
+// write, and stored works hidden by the account's filter, get their LastChecked
+// bumped once, after the loop.
 func processBookmarkItems(ctx context.Context, userId string, illusts []pixivmodel.Illust, isPrivate bool) []notification.ItemResult {
 	sourceIDs := make([]string, len(illusts))
 	for i, il := range illusts {
@@ -275,6 +276,9 @@ func processBookmarkItems(ctx context.Context, userId string, illusts []pixivmod
 			switch {
 			case !illustRemoved(il):
 				results = append(results, notification.ItemResult{Kind: notification.ItemSkipped, Ref: idStr, Reason: "hidden by the account's filter"})
+				if exists {
+					checked = append(checked, idStr) //still bookmarked
+				}
 			case exists:
 				results = append(results, markPixivSourceMissing(ctx, userId, il.ID)...)
 			default:
@@ -389,9 +393,9 @@ func markPixivSourceMissing(ctx context.Context, userId string, illustID uint64)
 }
 
 // reportPixivSourceWrites turns a by-source writer's per-set results into report
-// items: a failed set is Failed and a changed one is changedKind, each with its
-// set ID; action names the write in a failure. If no set gave an item, the work
-// is one Unchanged item.
+// items: a failed set is Failed, a held one Skipped and a changed one
+// changedKind, each with its set ID; action names the write in a failure. If no
+// set gave an item, the work is one Unchanged item.
 func reportPixivSourceWrites(userId, sourceID string, results []imageset.SourceWriteResult, changedKind notification.ItemKind, action string) []notification.ItemResult {
 
 	var items []notification.ItemResult
@@ -401,6 +405,10 @@ func reportPixivSourceWrites(userId, sourceID string, results []imageset.SourceW
 		case result.Err != nil:
 			err := fmt.Errorf("%w: %s: %w", notification.ErrLibraryAccess, action, result.Err)
 			items = append(items, notification.FailedItem(userId, sourceID, result.SetID, err))
+		case result.Held == imageset.ImageChangePending:
+			items = append(items, notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, SetID: result.SetID, Reason: "an image update is waiting for review"})
+		case result.Held == imageset.ImageChangeDeclined:
+			items = append(items, notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, SetID: result.SetID, Reason: "image updates were declined"})
 		case result.Changed:
 			items = append(items, notification.ItemResult{Kind: changedKind, Ref: sourceID, SetID: result.SetID})
 		}

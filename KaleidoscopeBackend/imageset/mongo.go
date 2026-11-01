@@ -22,11 +22,16 @@ var Collection *mongo.Collection
 // a source (sync's page lookup, the merge's same-source lookup), source tag or
 // AutoTag (tagging.applyAutoTagToSets' candidate query), and the indexes
 // search's own pipeline relies on: the default newest-first sort (with an _id
-// tie-breaker for determinism), and tags/authors membership lookups.
-// Idempotent, safe to call on every startup.
+// tie-breaker for determinism), and tags/authors membership lookups. The
+// partial index holds only sets with a pending source, for
+// PublishMissingPendingUpdates. Idempotent, safe to call on every startup.
 func EnsureIndexes(ctx context.Context) error {
 	_, err := Collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "sources.name", Value: 1}, {Key: "sources.source_id", Value: 1}}},
+		{
+			Keys:    bson.D{{Key: "sources.image_change_state", Value: 1}},
+			Options: options.Index().SetPartialFilterExpression(bson.M{"sources.image_change_state": ImageChangePending}),
+		},
 		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "sources.tags.default", Value: 1}}},
 		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "autotags", Value: 1}}},
 		{Keys: bson.D{{Key: "kscope_userid", Value: 1}, {Key: "date_added", Value: -1}, {Key: "_id", Value: -1}}},
@@ -37,16 +42,25 @@ func EnsureIndexes(ctx context.Context) error {
 }
 
 // updateSourceFields only writes if Sources[index] still holds the same
-// source (by name and source_id), so a shifted array can't redirect the write.
-// Keys in fields are full paths, e.g. "sources.2.last_checked". A write that
-// includes "tags" refreshes the owner's Untagged count afterwards.
-func updateSourceFields(set *ImageSetMongo, index int, fields bson.M) error {
+// source (by name and source_id) with its image-change state still stateRead,
+// so a shifted array can't redirect the write and a decision made since isn't
+// overwritten. Keys in fields are full paths, e.g. "sources.2.last_checked". A
+// write that includes "tags" refreshes the owner's Untagged count afterwards.
+func updateSourceFields(set *ImageSetMongo, index int, stateRead ImageChangeState, fields bson.M) error {
 	src := set.Sources[index]
 	prefix := fmt.Sprintf("sources.%d.", index)
+
+	var stateMatch any = stateRead
+	if stateRead == ImageChangeNone {
+		// none is stored absent or as "". Not a null match: on a path like sources.1.x that matches every document.
+		stateMatch = bson.M{"$nin": bson.A{ImageChangePending, ImageChangeDeclined}}
+	}
+
 	filter := bson.M{
-		"_id":                set.ID,
-		prefix + "name":      src.Name,
-		prefix + "source_id": src.SourceID,
+		"_id":                         set.ID,
+		prefix + "name":               src.Name,
+		prefix + "source_id":          src.SourceID,
+		prefix + "image_change_state": stateMatch,
 	}
 	result, err := Collection.UpdateOne(context.Background(), filter, bson.M{"$set": fields})
 	if err != nil {

@@ -133,3 +133,76 @@ func TestProcessBookmarkItemsAcrossSets(t *testing.T) {
 		{notification.ItemUpdated, "4", d},
 	})
 }
+
+func TestProcessBookmarkItemsHoldsAndStamps(t *testing.T) {
+
+	db := testdb.CreateDatabase(t)
+	oldCollection, oldTagger := imageset.Collection, imageset.Tagger
+	imageset.Collection, imageset.Tagger = db.Collection("imagesets"), fakeTagger{}
+	t.Cleanup(func() { imageset.Collection, imageset.Tagger = oldCollection, oldTagger })
+
+	const user = "pixiv-hold-user"
+	created := time.Date(2026, 8, 27, 9, 12, 12, 0, time.UTC)
+	lastChecked := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	withCopy := func(setID bson.ObjectID, illustID string, state imageset.ImageChangeState, checked time.Time) imageset.ImageSetMongo {
+		src := imageset.SourceInfo{Name: pixivServiceName, SourceID: illustID, Title: "Art", Date: created.Add(-time.Hour), LastChecked: checked, ImageChangeState: state}
+		return imageset.ImageSetMongo{ID: setID, KscopeUserId: user, Title: "Art", Sources: []imageset.SourceInfo{src}}
+	}
+
+	free, held, hiddenOld, hiddenZero := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
+	for _, set := range []imageset.ImageSetMongo{
+		withCopy(free, "1", imageset.ImageChangeNone, lastChecked),
+		withCopy(held, "1", imageset.ImageChangePending, lastChecked),
+		withCopy(hiddenOld, "2", imageset.ImageChangeNone, lastChecked),
+		withCopy(hiddenZero, "2", imageset.ImageChangeNone, time.Time{}),
+	} {
+		if _, err := imageset.Collection.InsertOne(context.Background(), set); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	storedCopy := func(setID bson.ObjectID) imageset.SourceInfo {
+		var set imageset.ImageSetMongo
+		if err := imageset.Collection.FindOne(context.Background(), bson.M{"_id": setID}).Decode(&set); err != nil {
+			t.Fatal(err)
+		}
+		return set.Sources[0]
+	}
+
+	//newest bookmark first: work 2, hidden by the account's filter, then work 1, stale
+	page := []pixivmodel.Illust{
+		{ID: 2},
+		{ID: 1, Visible: true, Title: "New", CreateDate: created},
+	}
+	before := time.Now().Truncate(time.Millisecond)
+	items := processBookmarkItems(context.Background(), user, page, false)
+	after := time.Now()
+
+	want := []notification.ItemResult{
+		{Kind: notification.ItemUpdated, Ref: "1", SetID: free},
+		{Kind: notification.ItemSkipped, Ref: "1", SetID: held, Reason: "an image update is waiting for review"},
+		{Kind: notification.ItemSkipped, Ref: "2", Reason: "hidden by the account's filter"},
+	}
+	if len(items) != len(want) {
+		t.Fatalf("items %+v, want %+v", items, want)
+	}
+
+	for i := range want {
+		if items[i] != want[i] {
+			t.Errorf("item %d is %+v, want %+v", i, items[i], want[i])
+		}
+	}
+
+	stamped := func(checked time.Time) bool { return !checked.Before(before) && !checked.After(after) }
+	if src := storedCopy(held); src.Title != "Art" || !stamped(src.LastChecked) {
+		t.Errorf("held copy %+v: want its title kept and LastChecked stamped", src)
+	}
+
+	if src := storedCopy(hiddenOld); !stamped(src.LastChecked) {
+		t.Errorf("hidden work's copy: LastChecked %v, want it stamped", src.LastChecked)
+	}
+
+	if src := storedCopy(hiddenZero); !src.LastChecked.IsZero() {
+		t.Errorf("hidden work's unchecked copy: LastChecked %v, want it left zero", src.LastChecked)
+	}
+}

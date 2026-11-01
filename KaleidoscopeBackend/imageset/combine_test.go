@@ -212,13 +212,22 @@ func TestMergeSourcesInto(t *testing.T) {
 		t.Errorf("titles %q/%q, want the absorbed copy's, followed by the set", collapsed.Title, survivor.Title)
 	}
 
-	if !collapsed.Date.Equal(survivorDate) {
-		t.Errorf("Date = %v, want the survivor's, whose copy was checked later", collapsed.Date)
+	if !collapsed.Date.Equal(absorbedDate) {
+		t.Errorf("Date = %v, want the absorbed copy's later one", collapsed.Date)
 	}
 
 	appended := survivor.Sources[1]
 	if len(appended.Tags) != 0 || !slices.Equal(appended.AttributedTo, []bson.ObjectID{imgC}) || survivor.Description != "kept" {
 		t.Errorf("appended source %+v, set description %q; want tags cleared, [C], description untouched", appended, survivor.Description)
+	}
+
+	checked := &ImageSetMongo{
+		Title:   "Old",
+		Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "Old", AttributedTo: []bson.ObjectID{imgA}, LastChecked: later, Date: survivorDate}},
+	}
+	mergeSourcesInto(checked, []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "New", AttributedTo: []bson.ObjectID{imgC}, Date: absorbedDate}}, idMap)
+	if src := checked.Sources[0]; src.Title != "Old" || checked.Title != "Old" || !src.Date.Equal(survivorDate) {
+		t.Errorf("unchecked absorbed copy: source %+v, set title %q; want the survivor's title and Date kept", src, checked.Title)
 	}
 
 	uploads := &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imgA}}}}
@@ -227,34 +236,78 @@ func TestMergeSourcesInto(t *testing.T) {
 	}
 }
 
+func TestAbsorbedCopyWins(t *testing.T) {
+
+	t1, t2 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	older, newer := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+
+	//in the Date cases the later Date always goes with the earlier LastChecked
+	tests := []struct {
+		name               string
+		survivor, absorbed SourceInfo
+		want               bool
+	}{
+		{"survivor unchecked", SourceInfo{Date: newer}, SourceInfo{LastChecked: t1, Date: older}, true},
+		{"absorbed unchecked", SourceInfo{LastChecked: t1, Date: older}, SourceInfo{Date: newer}, false},
+		{"absorbed Date later", SourceInfo{LastChecked: t2, Date: older}, SourceInfo{LastChecked: t1, Date: newer}, true},
+		{"survivor Date later", SourceInfo{LastChecked: t1, Date: newer}, SourceInfo{LastChecked: t2, Date: older}, false},
+		{"Date tie, survivor applied later", SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t2}, SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, false},
+		{"Date tie, absorbed applied later", SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t2}, true},
+		{"full tie", SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, true},
+		{"both unchecked and equal", SourceInfo{Date: older}, SourceInfo{Date: older}, true},
+	}
+
+	for _, tc := range tests {
+		if got := absorbedCopyWins(tc.survivor, tc.absorbed); got != tc.want {
+			t.Errorf("%s: absorbedCopyWins = %t, want %t", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestCollapseMergedSourceBookkeeping(t *testing.T) {
 
 	t1, t2 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
 	exact := time.Date(2026, 9, 5, 14, 30, 0, 0, time.UTC)
-	dayOnly := DayOnlyDate(exact)
-	survivorBefore := SourceInfo{LastChecked: t1, Date: exact, LastImageUpdate: t1, LastAppliedUpdate: t2}
-	other := SourceInfo{LastChecked: t2, SourceMissing: true, ImageChangeState: ImageChangePending, Date: dayOnly, LastImageUpdate: t2, LastAppliedUpdate: t1}
+	winner := SourceInfo{LastChecked: t2, Date: DayOnlyDate(exact), ImageChangeState: ImageChangePending, LastImageUpdate: t1, LastAppliedUpdate: t2}
+	loser := SourceInfo{LastChecked: t1, Date: exact, ImageChangeState: ImageChangeDeclined, LastImageUpdate: t2, LastAppliedUpdate: t1}
 
-	kept := survivorBefore
-	collapseMergedSourceBookkeeping(&kept, survivorBefore, other)
-	if !kept.LastChecked.Equal(t2) || !kept.SourceMissing || kept.ImageChangeState != ImageChangePending {
-		t.Errorf("kept %+v: want the later-checked copy's LastChecked, missing flag and state", kept)
+	var kept SourceInfo
+	collapseMergedSourceBookkeeping(&kept, winner, loser)
+	if !kept.LastChecked.Equal(t2) || kept.ImageChangeState != ImageChangeNone {
+		t.Errorf("kept %+v: want the winner's LastChecked and the state reset to none", kept)
 	}
 
 	if !kept.Date.Equal(exact) {
-		t.Errorf("Date = %v, want the exact date kept over a day-only one on the same day", kept.Date)
+		t.Errorf("Date = %v, want the exact date kept over the winner's day-only one on the same day", kept.Date)
 	}
 
 	if !kept.LastImageUpdate.Equal(t2) || !kept.LastAppliedUpdate.Equal(t2) {
 		t.Errorf("LastImageUpdate %v, LastAppliedUpdate %v; want the later of each", kept.LastImageUpdate, kept.LastAppliedUpdate)
 	}
 
-	tie := other
-	tie.LastChecked = t1
-	kept = survivorBefore
-	collapseMergedSourceBookkeeping(&kept, survivorBefore, tie)
-	if kept.SourceMissing || kept.ImageChangeState != ImageChangeNone {
-		t.Errorf("tie: kept %+v, want the survivor's copy to win", kept)
+	unchecked := time.Time{}
+	missing := []struct {
+		name                        string
+		winnerMissing, loserMissing bool
+		winnerChecked, loserChecked time.Time
+		want                        bool
+	}{
+		{"both checked, only the winner missing", true, false, t2, t1, false},
+		{"both checked and missing", true, true, t2, t1, true},
+		{"checked winner missing, unchecked loser not", true, false, t2, unchecked, true},
+		{"checked winner not missing, unchecked loser missing", false, true, t2, unchecked, false},
+		{"neither checked, only the winner missing", true, false, unchecked, unchecked, true},
+	}
+
+	for _, tc := range missing {
+
+		var kept SourceInfo
+		collapseMergedSourceBookkeeping(&kept,
+			SourceInfo{SourceMissing: tc.winnerMissing, LastChecked: tc.winnerChecked},
+			SourceInfo{SourceMissing: tc.loserMissing, LastChecked: tc.loserChecked})
+		if kept.SourceMissing != tc.want {
+			t.Errorf("%s: SourceMissing = %t, want %t", tc.name, kept.SourceMissing, tc.want)
+		}
 	}
 }
 

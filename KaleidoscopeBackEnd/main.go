@@ -139,6 +139,11 @@ func ConnectDB() {
 		log.Fatal(err)
 	}
 
+	// Before StartServices and StartAPI: the repair takes no lock.
+	if err := imageset.PublishMissingPendingUpdates(context.Background()); err != nil {
+		log.Printf("------ Warning: publishing missing pending update notifications: %s ------", err)
+	}
+
 	log.Print("Connected, no issues ---------------------")
 
 }

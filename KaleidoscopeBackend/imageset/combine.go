@@ -375,10 +375,10 @@ func collapseMergedSetImages(survivor, absorbed *ImageSetMongo) (images []ImageI
 
 // mergeSourcesInto merges absorbed sources into survivor in memory, with their
 // attribution remapped through idMap and deduped. The same source collapses
-// into survivor's copy (attribution unioned, metadata from the absorbed copy,
-// bookkeeping by collapseMergedSourceBookkeeping); any other is appended with no
-// tags. Returns each absorbed source's index in survivor.Sources, where the
-// caller applies its tags with ProcessSourceTags.
+// into survivor's copy (attribution unioned, metadata from the absorbed copy
+// only when absorbedCopyWins, bookkeeping by collapseMergedSourceBookkeeping);
+// any other is appended with no tags. Returns each absorbed source's index in
+// survivor.Sources, where the caller applies its tags with ProcessSourceTags.
 func mergeSourcesInto(survivor *ImageSetMongo, absorbed []SourceInfo, idMap map[bson.ObjectID]bson.ObjectID) []int {
 
 	indexes := make([]int, len(absorbed))
@@ -417,8 +417,14 @@ func mergeSourcesInto(survivor *ImageSetMongo, absorbed []SourceInfo, idMap map[
 
 		survivorBefore := survivor.Sources[index]
 		survivor.Sources[index].AttributedTo = mergeAttribution(survivorBefore.AttributedTo, source.AttributedTo)
-		applySourceMetadata(survivor, index, source)
-		collapseMergedSourceBookkeeping(&survivor.Sources[index], survivorBefore, source)
+
+		winner, loser := survivorBefore, source
+		if absorbedCopyWins(survivorBefore, source) {
+			winner, loser = source, survivorBefore
+			applySourceMetadata(survivor, index, source)
+		}
+
+		collapseMergedSourceBookkeeping(&survivor.Sources[index], winner, loser)
 		indexes[a] = index
 	}
 
@@ -426,29 +432,45 @@ func mergeSourcesInto(survivor *ImageSetMongo, absorbed []SourceInfo, idMap map[
 	return indexes
 }
 
+// absorbedCopyWins reports whether the absorbed set's copy of a source both sets
+// hold wins over the survivor's. Dates compare as stored, so a day-only date
+// beats an exact time earlier than 00:17 on its day.
+func absorbedCopyWins(survivorCopy, absorbedCopy SourceInfo) bool {
+
+	if survivorUnchecked, absorbedUnchecked := survivorCopy.LastChecked.IsZero(), absorbedCopy.LastChecked.IsZero(); survivorUnchecked != absorbedUnchecked {
+		return survivorUnchecked
+	}
+
+	if !absorbedCopy.Date.Equal(survivorCopy.Date) {
+		return absorbedCopy.Date.After(survivorCopy.Date)
+	}
+
+	if !absorbedCopy.LastAppliedUpdate.Equal(survivorCopy.LastAppliedUpdate) {
+		return absorbedCopy.LastAppliedUpdate.After(survivorCopy.LastAppliedUpdate)
+	}
+	return true
+}
+
 // collapseMergedSourceBookkeeping sets kept's bookkeeping from two copies of one
-// source: the copy checked last wins (survivorBefore on a tie), except that each
-// update timestamp takes the later of the two. Call after applySourceMetadata,
-// which also sets Date.
-func collapseMergedSourceBookkeeping(kept *SourceInfo, survivorBefore, other SourceInfo) {
+// source. winner must be the copy absorbedCopyWins picked. Call after
+// applySourceMetadata, which also sets Date.
+func collapseMergedSourceBookkeeping(kept *SourceInfo, winner, loser SourceInfo) {
 
-	winner, loser := survivorBefore, other
-	if other.LastChecked.After(survivorBefore.LastChecked) {
-		winner, loser = other, survivorBefore
-	}
-
-	kept.LastChecked = winner.LastChecked
-	kept.SourceMissing = winner.SourceMissing
-	kept.ImageChangeState = winner.ImageChangeState
 	kept.Date = mergeSourceDate(loser.Date, winner.Date)
+	kept.LastChecked = winner.LastChecked
+	kept.ImageChangeState = ImageChangeNone
 
-	kept.LastImageUpdate, kept.LastAppliedUpdate = survivorBefore.LastImageUpdate, survivorBefore.LastAppliedUpdate
-	if other.LastImageUpdate.After(kept.LastImageUpdate) {
-		kept.LastImageUpdate = other.LastImageUpdate
+	// not missing wins, but an unchecked loser doesn't count (it never beats a checked winner)
+	kept.SourceMissing = winner.SourceMissing && (loser.SourceMissing || loser.LastChecked.IsZero())
+
+	kept.LastImageUpdate = winner.LastImageUpdate
+	if loser.LastImageUpdate.After(kept.LastImageUpdate) {
+		kept.LastImageUpdate = loser.LastImageUpdate
 	}
 
-	if other.LastAppliedUpdate.After(kept.LastAppliedUpdate) {
-		kept.LastAppliedUpdate = other.LastAppliedUpdate
+	kept.LastAppliedUpdate = winner.LastAppliedUpdate
+	if loser.LastAppliedUpdate.After(kept.LastAppliedUpdate) {
+		kept.LastAppliedUpdate = loser.LastAppliedUpdate
 	}
 }
 

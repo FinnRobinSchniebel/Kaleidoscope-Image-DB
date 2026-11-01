@@ -12,11 +12,12 @@ import (
 
 // fakeTagger changes no tags, so a merge can run without a database.
 type fakeTagger struct {
-	processed  *bool             //set when ProcessSourceTags runs, if non-nil
-	onProcess  func()            //called when ProcessSourceTags runs, if non-nil
-	processErr error             //returned by ProcessSourceTags
-	failSetID  bson.ObjectID     //if set, processErr is returned for this set only
-	undone     *[]TagCountChange //each UndoTagCounts call, if non-nil
+	processed   *bool             //set when ProcessSourceTags runs, if non-nil
+	onProcess   func()            //called when ProcessSourceTags runs, if non-nil
+	onRecompute func()            //called when RecomputeSystemTags runs, if non-nil
+	processErr  error             //returned by ProcessSourceTags
+	failSetID   bson.ObjectID     //if set, processErr is returned for this set only
+	undone      *[]TagCountChange //each UndoTagCounts call, if non-nil
 }
 
 // ProcessSourceTags returns a change whose SourceName is the set's ID, so an
@@ -40,8 +41,13 @@ func (fakeTagger) CombineTagOverrides(string, *ImageSetMongo, []string) (TagCoun
 	return TagCountChange{}, nil
 }
 func (fakeTagger) RecordDeletion(string, []SourceInfo, []string) error { return nil }
-func (fakeTagger) RecomputeSystemTags(string, *ImageSetMongo) (TagCountChange, error) {
-	return TagCountChange{}, nil
+
+// RecomputeSystemTags returns a change naming the set, like ProcessSourceTags.
+func (f fakeTagger) RecomputeSystemTags(_ string, set *ImageSetMongo) (TagCountChange, error) {
+	if f.onRecompute != nil {
+		f.onRecompute()
+	}
+	return TagCountChange{SourceName: set.ID.Hex()}, nil
 }
 func (f fakeTagger) UndoTagCounts(_ string, change TagCountChange) error {
 	if f.undone != nil {

@@ -182,6 +182,28 @@ func TestReportPixivSourceWrites(t *testing.T) {
 	if len(unchanged) != 1 || unchanged[0].Kind != notification.ItemUnchanged || !unchanged[0].SetID.IsZero() {
 		t.Errorf("nothing changed: %+v, want one unchanged item for the work", unchanged)
 	}
+
+	pendingSet, declinedSet := bson.NewObjectID(), bson.NewObjectID()
+	held := reportPixivSourceWrites("user1", "7", []imageset.SourceWriteResult{
+		{SetID: pendingSet, Held: imageset.ImageChangePending},
+		{SetID: declinedSet, Held: imageset.ImageChangeDeclined},
+		{SetID: failedSet, Held: imageset.ImageChangePending, Err: errors.New("stamp failed")},
+	}, notification.ItemUpdated, "applying metadata update")
+	if len(held) != 3 {
+		t.Fatalf("held sets: %+v, want an item for each and no unchanged item", held)
+	}
+
+	if item := held[0]; item.Kind != notification.ItemSkipped || item.SetID != pendingSet || item.Reason != "an image update is waiting for review" {
+		t.Errorf("pending set: %+v, want skipped as waiting for review, with its set ID", item)
+	}
+
+	if item := held[1]; item.Kind != notification.ItemSkipped || item.SetID != declinedSet || item.Reason != "image updates were declined" {
+		t.Errorf("declined set: %+v, want skipped as declined, with its set ID", item)
+	}
+
+	if item := held[2]; item.Kind != notification.ItemFailed || item.SetID != failedSet {
+		t.Errorf("held set whose stamp failed: %+v, want failed", item)
+	}
 }
 
 func TestIsPixivSourceStaleInAnySet(t *testing.T) {
