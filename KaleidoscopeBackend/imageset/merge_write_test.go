@@ -62,25 +62,53 @@ func (fakeTagger) ResolveTagTerm(string, string) ([]string, bool, error) {
 
 func TestAttachIncomingSource(t *testing.T) {
 
-	imageA, imageB := bson.NewObjectID(), bson.NewObjectID()
+	imageA, imageB, imageC := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
 	checked := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	older, newer := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 
-	//the same source: attribution extended in page order, metadata applied, LastChecked copied
-	target := &ImageSetMongo{Title: "Old", Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "Old", AttributedTo: []bson.ObjectID{imageA}, LastChecked: checked}}}
-	incoming := &ImageSetMongo{Itype: "illust", Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "New"}}}
-	index, isNew := attachIncomingSource(target, incoming, []bson.ObjectID{imageB, imageA})
+	//a zip subset onto a synced copy: the checked copy's order wins, the zip's metadata and LastChecked still apply
+	target := &ImageSetMongo{Title: "Old", Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "Old", AttributedTo: []bson.ObjectID{imageA, imageB, imageC}, LastChecked: checked, Date: older}}}
+	incoming := &ImageSetMongo{Itype: "illust", Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "New", Date: newer}}}
+	index, isNew := attachIncomingSource(target, incoming, []bson.ObjectID{imageA, imageC})
 	source := target.Sources[index]
 
-	if isNew || index != 0 || !slices.Equal(source.AttributedTo, []bson.ObjectID{imageB, imageA}) {
-		t.Errorf("same source: index %d, new %t, attributed %v; want 0, false, [B A]", index, isNew, source.AttributedTo)
+	if isNew || index != 0 || !slices.Equal(source.AttributedTo, []bson.ObjectID{imageA, imageB, imageC}) {
+		t.Errorf("zip subset: index %d, new %t, attributed %v; want 0, false, [A B C]", index, isNew, source.AttributedTo)
 	}
 
 	if source.Title != "New" || target.Title != "New" || !source.LastChecked.IsZero() {
-		t.Errorf("same source: titles %q/%q, LastChecked %v; want New, New and the incoming zero", source.Title, target.Title, source.LastChecked)
+		t.Errorf("zip subset: titles %q/%q, LastChecked %v; want New, New and the incoming zero", source.Title, target.Title, source.LastChecked)
 	}
 
 	if target.Itype != "illust" {
 		t.Errorf("Itype = %q, want the empty one filled from the import", target.Itype)
+	}
+
+	//both copies unchecked (a zip onto a zip-only set): the later Date goes first, and a tie to the stored copy
+	orders := []struct {
+		name   string
+		stored SourceInfo
+		want   []bson.ObjectID
+	}{
+		{"zip Date later", SourceInfo{Date: older, LastAppliedUpdate: checked}, []bson.ObjectID{imageB, imageA}},
+		{"equal Date", SourceInfo{Date: newer, LastAppliedUpdate: checked}, []bson.ObjectID{imageA, imageB}},
+	}
+
+	for _, tc := range orders {
+
+		tc.stored.Name, tc.stored.SourceID, tc.stored.AttributedTo = "zipsrc", "501", []bson.ObjectID{imageA}
+		target := &ImageSetMongo{Sources: []SourceInfo{tc.stored}}
+		attachIncomingSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Date: newer}}}, []bson.ObjectID{imageB, imageA})
+		if got := target.Sources[0].AttributedTo; !slices.Equal(got, tc.want) {
+			t.Errorf("%s: attributed %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	//a held copy keeps its Date, while the zip's metadata still applies
+	target = &ImageSetMongo{Title: "Old", Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "Old", AttributedTo: []bson.ObjectID{imageA}, LastChecked: checked, Date: older, ImageChangeState: ImageChangePending}}}
+	attachIncomingSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "New", Date: newer}}}, []bson.ObjectID{imageA})
+	if src := target.Sources[0]; !src.Date.Equal(older) || src.Title != "New" || src.ImageChangeState != ImageChangePending {
+		t.Errorf("held copy %+v: want its Date kept, the zip's title applied and the state kept", src)
 	}
 
 	//a new source: appended with its tags cleared and its description joined

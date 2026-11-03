@@ -83,6 +83,12 @@ func main() {
 
 	ConnectDB()
 	defer client.Disconnect(context.Background())
+
+	// Before StartServices and StartAPI: the repair takes no lock.
+	if err := imageset.PublishMissingPendingUpdates(context.Background()); err != nil {
+		log.Printf("------ Warning: publishing missing pending update notifications: %s ------", err)
+	}
+
 	StartServices()
 	StartAPI()
 }
@@ -137,11 +143,6 @@ func ConnectDB() {
 	}
 	if err := notification.EnsureIndexes(context.Background()); err != nil {
 		log.Fatal(err)
-	}
-
-	// Before StartServices and StartAPI: the repair takes no lock.
-	if err := imageset.PublishMissingPendingUpdates(context.Background()); err != nil {
-		log.Printf("------ Warning: publishing missing pending update notifications: %s ------", err)
 	}
 
 	log.Print("Connected, no issues ---------------------")

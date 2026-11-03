@@ -380,6 +380,35 @@ func TestMetadataUpdateHoldsHeldCopies(t *testing.T) {
 	}
 }
 
+func TestMetadataUpdateReportsReturnedCopies(t *testing.T) {
+
+	useTestDatabase(t, fakeTagger{})
+	returned, present := bson.NewObjectID(), bson.NewObjectID()
+	applied := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	withCopy := func(id bson.ObjectID, missing bool) ImageSetMongo {
+		src := SourceInfo{Name: "pixiv", SourceID: "1", Title: "Same", LastAppliedUpdate: applied, SourceMissing: missing}
+		return ImageSetMongo{ID: id, KscopeUserId: "user1", Title: "Same", Sources: []SourceInfo{src}}
+	}
+	insertSets(t, withCopy(returned, true), withCopy(present, false))
+
+	results, err := ApplySourceMetadataUpdate(context.Background(), "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "Same"}, time.Now())
+	if err != nil || len(results) != 2 {
+		t.Fatalf("%+v, %v; want a result for each set", results, err)
+	}
+
+	if r := results[0]; r.SetID != returned || r.Err != nil || !r.Changed {
+		t.Errorf("returned copy: %+v, want changed", r)
+	}
+
+	if r := results[1]; r.SetID != present || r.Err != nil || r.Changed {
+		t.Errorf("present copy: %+v, want unchanged", r)
+	}
+
+	if src := loadSet(t, returned).Sources[0]; src.SourceMissing || !src.LastAppliedUpdate.Equal(applied) {
+		t.Errorf("returned copy %+v: want SourceMissing cleared and LastAppliedUpdate kept", src)
+	}
+}
+
 func TestMarkSourcePendingImageChange(t *testing.T) {
 
 	ctx := context.Background()

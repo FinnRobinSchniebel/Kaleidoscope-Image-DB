@@ -230,36 +230,50 @@ func TestMergeSourcesInto(t *testing.T) {
 		t.Errorf("unchecked absorbed copy: source %+v, set title %q; want the survivor's title and Date kept", src, checked.Title)
 	}
 
+	if got, want := checked.Sources[0].AttributedTo, []bson.ObjectID{imgA, imgC}; !slices.Equal(got, want) {
+		t.Errorf("unchecked absorbed copy: attribution %v, want the survivor's order first %v", got, want)
+	}
+
+	//the survivor's copy has the edited version: p3 removed at the source, p4 new
+	p1, p2, p3, p4 := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
+	copyOfP1, copyOfP2 := bson.NewObjectID(), bson.NewObjectID()
+	pageMap := map[bson.ObjectID]bson.ObjectID{copyOfP1: p1, copyOfP2: p2, p3: p3}
+	edited := &ImageSetMongo{Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{p1, p2, p4}, LastChecked: later, Date: absorbedDate}}}
+	mergeSourcesInto(edited, []SourceInfo{{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{copyOfP1, copyOfP2, p3}, LastChecked: later, Date: survivorDate}}, pageMap)
+	if got, want := edited.Sources[0].AttributedTo, []bson.ObjectID{p1, p2, p4, p3}; !slices.Equal(got, want) {
+		t.Errorf("survivor's newer copy: attribution %v, want its order first and the removed page last %v", got, want)
+	}
+
 	uploads := &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imgA}}}}
 	if got := mergeSourcesInto(uploads, []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imgC}}}, idMap); !slices.Equal(got, []int{0}) {
 		t.Errorf("ID-less upload: indexes %v, want it collapsed into the existing upload source", got)
 	}
 }
 
-func TestAbsorbedCopyWins(t *testing.T) {
+func TestDoesIncomingSourceInfoWin(t *testing.T) {
 
 	t1, t2 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
 	older, newer := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 
 	//in the Date cases the later Date always goes with the earlier LastChecked
 	tests := []struct {
-		name               string
-		survivor, absorbed SourceInfo
-		want               bool
+		name             string
+		stored, incoming SourceInfo
+		want             bool
 	}{
-		{"survivor unchecked", SourceInfo{Date: newer}, SourceInfo{LastChecked: t1, Date: older}, true},
-		{"absorbed unchecked", SourceInfo{LastChecked: t1, Date: older}, SourceInfo{Date: newer}, false},
-		{"absorbed Date later", SourceInfo{LastChecked: t2, Date: older}, SourceInfo{LastChecked: t1, Date: newer}, true},
-		{"survivor Date later", SourceInfo{LastChecked: t1, Date: newer}, SourceInfo{LastChecked: t2, Date: older}, false},
-		{"Date tie, survivor applied later", SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t2}, SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, false},
-		{"Date tie, absorbed applied later", SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t2}, true},
+		{"stored unchecked", SourceInfo{Date: newer}, SourceInfo{LastChecked: t1, Date: older}, true},
+		{"incoming unchecked", SourceInfo{LastChecked: t1, Date: older}, SourceInfo{Date: newer}, false},
+		{"incoming Date later", SourceInfo{LastChecked: t2, Date: older}, SourceInfo{LastChecked: t1, Date: newer}, true},
+		{"stored Date later", SourceInfo{LastChecked: t1, Date: newer}, SourceInfo{LastChecked: t2, Date: older}, false},
+		{"Date tie, stored applied later", SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t2}, SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, false},
+		{"Date tie, incoming applied later", SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t2}, true},
 		{"full tie", SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, true},
 		{"both unchecked and equal", SourceInfo{Date: older}, SourceInfo{Date: older}, true},
 	}
 
 	for _, tc := range tests {
-		if got := absorbedCopyWins(tc.survivor, tc.absorbed); got != tc.want {
-			t.Errorf("%s: absorbedCopyWins = %t, want %t", tc.name, got, tc.want)
+		if got := doesIncomingSourceInfoWin(tc.stored, tc.incoming); got != tc.want {
+			t.Errorf("%s: doesIncomingSourceInfoWin = %t, want %t", tc.name, got, tc.want)
 		}
 	}
 }

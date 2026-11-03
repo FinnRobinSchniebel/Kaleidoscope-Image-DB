@@ -12,9 +12,11 @@ import (
 
 // attachIncomingSource attaches incoming.Sources[0] to target, attributed to
 // attributed (its page order), and returns its index in target.Sources. The
-// same source keeps its other attributed images and takes incoming's metadata
-// and LastChecked; a new one is appended with its tags cleared, for
-// ProcessSourceTags to record. An empty Itype or Other is filled from incoming.
+// same source keeps its other attributed images, with the winning copy's order
+// first (doesIncomingSourceInfoWin), and takes incoming's metadata and
+// LastChecked; a held copy keeps its Date. A new one is appended with its tags
+// cleared, for ProcessSourceTags to record. An empty Itype or Other is filled
+// from incoming.
 func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.ObjectID) (index int, isNew bool) {
 
 	source := incoming.Sources[0]
@@ -33,8 +35,19 @@ func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.Obj
 			continue
 		}
 
-		target.Sources[i].AttributedTo = mergeAttribution(target.Sources[i].AttributedTo, attributed)
+		stored := target.Sources[i] //read before the writes below, whose zero LastChecked would make a zip win
+		leading, rest := attributed, stored.AttributedTo
+		if !doesIncomingSourceInfoWin(stored, source) {
+			leading, rest = rest, leading
+		}
+
+		target.Sources[i].AttributedTo = mergeAttribution(rest, leading)
 		applySourceMetadata(target, i, source)
+
+		if stored.ImageChangeState != ImageChangeNone {
+			target.Sources[i].Date = stored.Date
+		}
+
 		target.Sources[i].LastChecked = source.LastChecked
 		return i, false
 	}

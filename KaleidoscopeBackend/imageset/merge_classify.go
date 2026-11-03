@@ -221,12 +221,12 @@ func findMergedAttributionImageIDs(match mergeCandidate, keeperOf []int, added m
 	return ids
 }
 
-// mergeAttribution returns incomingOrder followed by the old IDs it doesn't
-// list: attribution keeps images the source no longer has.
-func mergeAttribution(old, incomingOrder []bson.ObjectID) []bson.ObjectID {
+// mergeAttribution returns order followed by the IDs in rest it doesn't list:
+// attribution keeps images the source no longer has.
+func mergeAttribution(rest, order []bson.ObjectID) []bson.ObjectID {
 
-	merged := slices.Clone(incomingOrder)
-	for _, id := range old {
+	merged := slices.Clone(order)
+	for _, id := range rest {
 		if !slices.Contains(merged, id) {
 			merged = append(merged, id)
 		}

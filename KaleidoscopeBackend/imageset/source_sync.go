@@ -82,8 +82,9 @@ func stampHeldSourceInSet(set *ImageSetMongo, index int, checkedAt time.Time) So
 // its ID and attribution. Callers must confirm the source's images are
 // unchanged first; images are never touched here. A result's Changed reports
 // whether data from the source changed in that set, which also stamps its
-// LastAppliedUpdate. A copy held by its image-change state is only stamped
-// (stampHeldSourceInSet), with Held set.
+// LastAppliedUpdate, or whether its copy was marked missing, which doesn't. A
+// copy held by its image-change state is only stamped (stampHeldSourceInSet),
+// with Held set.
 func ApplySourceMetadataUpdate(ctx context.Context, userID string, newSrc SourceInfo, checkedAt time.Time) ([]SourceWriteResult, error) {
 	return writeEachSetHoldingSource(ctx, userID, newSrc.Name, newSrc.SourceID, func(set *ImageSetMongo, index int) SourceWriteResult {
 		return applySourceMetadataUpdateInSet(set, index, newSrc, checkedAt)
@@ -124,7 +125,7 @@ func applySourceMetadataUpdateInSet(set *ImageSetMongo, index int, newSrc Source
 	if err := updateSourceFields(set, index, ImageChangeNone, fields); err != nil {
 		return SourceWriteResult{SetID: set.ID, Err: errors.Join(err, Tagger.UndoTagCounts(userID, counted))}
 	}
-	return SourceWriteResult{SetID: set.ID, Changed: changed}
+	return SourceWriteResult{SetID: set.ID, Changed: changed || before.SourceMissing}
 }
 
 // applySourceMetadata copies newSrc's non-empty title, description, known author
