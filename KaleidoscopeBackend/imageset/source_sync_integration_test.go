@@ -108,7 +108,10 @@ func TestGetImageSetsBySourceIDsListsEverySet(t *testing.T) {
 
 func TestSourceWritersUpdateEverySet(t *testing.T) {
 
-	useTestDatabase(t, fakeTagger{})
+	recomputed := 0
+	tagger := fakeTagger{}
+	tagger.onRecompute = func() { recomputed++ }
+	useTestDatabase(t, tagger)
 	first, second := bson.NewObjectID(), bson.NewObjectID()
 	insertSets(t,
 		ImageSetMongo{ID: first, KscopeUserId: "user1", Title: "Old", Sources: []SourceInfo{{Name: "pixiv", SourceID: "1", Title: "Old"}}},
@@ -131,20 +134,29 @@ func TestSourceWritersUpdateEverySet(t *testing.T) {
 		}
 	}
 
+	//each write recomputes the system tags only when it flips SourceMissing
+	expectRecomputed := func(write string, want int) {
+
+		t.Helper()
+		if recomputed != want {
+			t.Errorf("%s: system tags recomputed %d times, want %d", write, recomputed, want)
+		}
+		recomputed = 0
+	}
+
 	results, err := ApplySourceMetadataUpdate(ctx, "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: sourceDate}, now)
 	expectChanged("metadata update", results, err, true)
+	expectRecomputed("metadata update", 0)
 	if a, b := loadSet(t, first), loadSet(t, second); a.Sources[0].Title != "New" || b.Sources[1].Title != "New" {
 		t.Errorf("stored titles %q and %q, want New in both sets", a.Sources[0].Title, b.Sources[1].Title)
 	}
 
 	results, err = MarkSourceMissing(ctx, "user1", "pixiv", "1", now)
 	expectChanged("missing mark", results, err, true)
+	expectRecomputed("missing mark", 2)
 	results, err = MarkSourceMissing(ctx, "user1", "pixiv", "1", now)
 	expectChanged("repeated missing mark", results, err, false)
-
-	//the missing mark stored the state as "", which the recovered mark's guard must still match
-	results, err = MarkSourceRecovered(ctx, "user1", "pixiv", "1", now)
-	expectChanged("recovered mark", results, err, true)
+	expectRecomputed("repeated missing mark", 0)
 
 	expectNotified := func(when string) {
 
@@ -156,15 +168,18 @@ func TestSourceWritersUpdateEverySet(t *testing.T) {
 
 		for i, setID := range []bson.ObjectID{first, second} {
 
-			want := storedPendingUpdate{UserID: "user1", Status: notification.StatusPending, Payload: notification.PendingImageUpdate{SetID: setID, Service: "pixiv", SourceID: "1"}}
+			key := notification.PendingUpdateKey{SetID: setID, Service: "pixiv", SourceID: "1"}
+			want := storedPendingUpdate{UserID: "user1", Status: notification.StatusPending, Payload: notification.PendingImageUpdate{PendingUpdateKey: key}}
 			if got[i] != want {
 				t.Errorf("%s: notification %d is %+v, want %+v", when, i, got[i], want)
 			}
 		}
 	}
 
+	//the missing mark stored the state as "", which the pending mark's guard must still match
 	results, err = MarkSourcePendingImageChange(ctx, "user1", "pixiv", "1", now)
 	expectChanged("pending mark", results, err, true)
+	expectRecomputed("pending mark on missing copies", 2)
 	expectNotified("pending mark")
 	if a, b := loadSet(t, first), loadSet(t, second); !a.Sources[0].Date.Equal(sourceDate) || !b.Sources[1].Date.Equal(sourceDate) {
 		t.Errorf("Dates %v and %v after the pending mark, want both left at %v", a.Sources[0].Date, b.Sources[1].Date, sourceDate)
@@ -172,6 +187,7 @@ func TestSourceWritersUpdateEverySet(t *testing.T) {
 
 	results, err = MarkSourcePendingImageChange(ctx, "user1", "pixiv", "1", now)
 	expectChanged("repeated pending mark", results, err, false)
+	expectRecomputed("repeated pending mark", 0)
 	expectNotified("repeated pending mark")
 	for _, result := range results {
 		if result.Held != ImageChangePending {
@@ -182,6 +198,7 @@ func TestSourceWritersUpdateEverySet(t *testing.T) {
 	//a missing mark still applies to a held copy, through the guard on the state it read
 	results, err = MarkSourceMissing(ctx, "user1", "pixiv", "1", now)
 	expectChanged("missing mark on held copies", results, err, true)
+	expectRecomputed("missing mark on held copies", 2)
 	expectNotified("missing mark on held copies")
 	if a, b := loadSet(t, first), loadSet(t, second); a.Sources[0].ImageChangeState != ImageChangeNone || b.Sources[1].ImageChangeState != ImageChangeNone {
 		t.Errorf("states %q and %q after the missing mark, want none in both", a.Sources[0].ImageChangeState, b.Sources[1].ImageChangeState)

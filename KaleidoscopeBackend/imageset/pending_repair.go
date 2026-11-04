@@ -11,10 +11,11 @@ import (
 )
 
 // PublishMissingPendingUpdates publishes a pending-update notification for every
-// pending source that has none still pending, e.g. after the pending writer's
-// publish failed. It takes no lock, so it must run at startup before anything
-// else can write sets or notifications. A failed publish is logged and left for
-// the next startup.
+// pending source that has none still pending (matched by
+// notification.PublishUnmatchedPendingImageUpdates), e.g. after the pending
+// writer's publish failed. It takes no lock, so it must run at startup before
+// anything else can write sets or notifications. A failed publish is logged and
+// left for the next startup.
 func PublishMissingPendingUpdates(ctx context.Context) error {
 
 	filter := bson.M{"sources.image_change_state": ImageChangePending}
@@ -29,38 +30,20 @@ func PublishMissingPendingUpdates(ctx context.Context) error {
 		return fmt.Errorf("reading sets with a pending source: %w", err)
 	}
 
-	setIDs := make([]bson.ObjectID, len(sets))
-	for i, set := range sets {
-		setIDs[i] = set.ID
+	var wanted []notification.UserPendingImageUpdate
+	for s := range sets {
+		for i := range sets[s].Sources {
+			if sets[s].Sources[i].ImageChangeState == ImageChangePending {
+				wanted = append(wanted, notification.UserPendingImageUpdate{UserID: sets[s].KscopeUserId, Update: newPendingImageUpdate(&sets[s], i)})
+			}
+		}
 	}
 
-	published, err := notification.FindPendingImageUpdates(ctx, setIDs)
+	published, err := notification.PublishUnmatchedPendingImageUpdates(ctx, wanted)
 	if err != nil {
 		return err
 	}
 
-	notified := make(map[notification.PendingImageUpdate]bool, len(published))
-	for _, update := range published {
-		notified[update] = true
-	}
-
-	count := 0
-	for _, set := range sets {
-		for _, src := range set.Sources {
-
-			update := notification.PendingImageUpdate{SetID: set.ID, Service: src.Name, SourceID: src.SourceID}
-			if src.ImageChangeState != ImageChangePending || notified[update] {
-				continue
-			}
-
-			if err := notification.Publish(set.KscopeUserId, update); err != nil {
-				log.Printf("------ Warning: publishing the missing pending update for %s/%s in set %s: %s ------", src.Name, src.SourceID, set.ID.Hex(), err)
-				continue
-			}
-			count++
-		}
-	}
-
-	log.Printf("pending updates: published %d missing notifications", count)
+	log.Printf("pending updates: published %d missing notifications", published)
 	return nil
 }

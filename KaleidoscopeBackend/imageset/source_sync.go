@@ -208,25 +208,22 @@ func markSourcePendingImageChangeInSet(set *ImageSetMongo, index int, checkedAt 
 		p + "last_checked":       checkedAt,
 	}
 
-	var counted TagCountChange
-	if wasMissing {
-		var err error
-		if counted, err = Tagger.RecomputeSystemTags(userID, set); err != nil {
-			return SourceWriteResult{SetID: set.ID, Err: fmt.Errorf("computing system tags: %w", err)}
-		}
-		maps.Copy(fields, tagFields(set))
+	if err := updateSourceFieldsWithTags(set, index, ImageChangeNone, fields, wasMissing); err != nil {
+		return SourceWriteResult{SetID: set.ID, Err: err}
 	}
 
-	if err := updateSourceFields(set, index, ImageChangeNone, fields); err != nil {
-		return SourceWriteResult{SetID: set.ID, Err: errors.Join(err, Tagger.UndoTagCounts(userID, counted))}
-	}
-
-	src := set.Sources[index]
-	pending := notification.PendingImageUpdate{SetID: set.ID, Service: src.Name, SourceID: src.SourceID}
+	pending := newPendingImageUpdate(set, index)
 	if err := notification.Publish(userID, pending); err != nil {
-		log.Printf("------ Warning: %s/%s in set %s is pending, but its notification wasn't published (sent at the next startup): %s ------", src.Name, src.SourceID, set.ID.Hex(), err)
+		log.Printf("------ Warning: %s/%s in set %s is pending, but its notification wasn't published (sent at the next startup): %s ------", pending.Service, pending.SourceID, set.ID.Hex(), err)
 	}
 	return SourceWriteResult{SetID: set.ID, Changed: true}
+}
+
+// newPendingImageUpdate is the pending-update notification for the copy at
+// set.Sources[index].
+func newPendingImageUpdate(set *ImageSetMongo, index int) notification.PendingImageUpdate {
+	src := set.Sources[index]
+	return notification.PendingImageUpdate{PendingUpdateKey: notification.PendingUpdateKey{SetID: set.ID, Service: src.Name, SourceID: src.SourceID}}
 }
 
 // MarkSourceMissing records, in every set holding the source (through
@@ -245,7 +242,6 @@ func MarkSourceMissing(ctx context.Context, userID, name, sourceID string, check
 // set.Sources[index]. The caller holds the user's set lock.
 func markSourceMissingInSet(set *ImageSetMongo, index int, checkedAt time.Time) SourceWriteResult {
 
-	userID := set.KscopeUserId
 	wasMissing := set.Sources[index].SourceMissing
 	stateRead := set.Sources[index].ImageChangeState
 	set.Sources[index].SourceMissing = true
@@ -259,60 +255,31 @@ func markSourceMissingInSet(set *ImageSetMongo, index int, checkedAt time.Time) 
 		p + "last_checked":       checkedAt,
 	}
 
+	if err := updateSourceFieldsWithTags(set, index, stateRead, fields, !wasMissing); err != nil {
+		return SourceWriteResult{SetID: set.ID, Err: err}
+	}
+	return SourceWriteResult{SetID: set.ID, Changed: !wasMissing}
+}
+
+// updateSourceFieldsWithTags writes fields to the copy at set.Sources[index]
+// through updateSourceFields, guarded on stateRead. With recomputeTags, the set's
+// system tags are recomputed first and written in the same update, and a failed
+// write undoes their counts. The caller holds the user's set lock.
+func updateSourceFieldsWithTags(set *ImageSetMongo, index int, stateRead ImageChangeState, fields bson.M, recomputeTags bool) error {
+
 	var counted TagCountChange
-	if !wasMissing {
+	if recomputeTags {
 		var err error
-		if counted, err = Tagger.RecomputeSystemTags(userID, set); err != nil {
-			return SourceWriteResult{SetID: set.ID, Err: fmt.Errorf("computing system tags: %w", err)}
+		if counted, err = Tagger.RecomputeSystemTags(set.KscopeUserId, set); err != nil {
+			return fmt.Errorf("computing system tags: %w", err)
 		}
 		maps.Copy(fields, tagFields(set))
 	}
 
 	if err := updateSourceFields(set, index, stateRead, fields); err != nil {
-		return SourceWriteResult{SetID: set.ID, Err: errors.Join(err, Tagger.UndoTagCounts(userID, counted))}
+		return errors.Join(err, Tagger.UndoTagCounts(set.KscopeUserId, counted))
 	}
-	return SourceWriteResult{SetID: set.ID, Changed: !wasMissing}
-}
-
-// MarkSourceRecovered records, in every set holding the source (through
-// writeEachSetHoldingSource), that the source is reachable again with nothing
-// else to report. Metadata or image changes go through ApplySourceMetadataUpdate /
-// MarkSourcePendingImageChange instead, which clear SourceMissing themselves. A
-// result's Changed reports whether that set's copy was missing.
-func MarkSourceRecovered(ctx context.Context, userID, name, sourceID string, checkedAt time.Time) ([]SourceWriteResult, error) {
-	return writeEachSetHoldingSource(ctx, userID, name, sourceID, func(set *ImageSetMongo, index int) SourceWriteResult {
-		return markSourceRecoveredInSet(set, index, checkedAt)
-	})
-}
-
-// markSourceRecoveredInSet is MarkSourceRecovered for the copy at
-// set.Sources[index]. The caller holds the user's set lock.
-func markSourceRecoveredInSet(set *ImageSetMongo, index int, checkedAt time.Time) SourceWriteResult {
-
-	userID := set.KscopeUserId
-	wasMissing := set.Sources[index].SourceMissing
-	set.Sources[index].SourceMissing = false
-	set.Sources[index].LastChecked = checkedAt
-
-	p := fmt.Sprintf("sources.%d.", index)
-	fields := bson.M{
-		p + "source_missing": false,
-		p + "last_checked":   checkedAt,
-	}
-
-	var counted TagCountChange
-	if wasMissing {
-		var err error
-		if counted, err = Tagger.RecomputeSystemTags(userID, set); err != nil {
-			return SourceWriteResult{SetID: set.ID, Err: fmt.Errorf("computing system tags: %w", err)}
-		}
-		maps.Copy(fields, tagFields(set))
-	}
-
-	if err := updateSourceFields(set, index, set.Sources[index].ImageChangeState, fields); err != nil {
-		return SourceWriteResult{SetID: set.ID, Err: errors.Join(err, Tagger.UndoTagCounts(userID, counted))}
-	}
-	return SourceWriteResult{SetID: set.ID, Changed: wasMissing}
+	return nil
 }
 
 // MarkSourcesChecked sets LastChecked to checkedAt on every stored copy of the

@@ -244,8 +244,9 @@ func processBookmarkPage(ctx context.Context, userId string, pixivUID uint64, re
 // every write re-reads its sets first. Items are handled oldest bookmark first,
 // so new ones are queued in bookmark order. Returns the page's items, except new
 // items that were queued: their save task reports them. Works with nothing to
-// write, and stored works hidden by the account's filter, get their LastChecked
-// bumped once, after the loop.
+// write, works held in every set (Skipped per set without reaching the writer)
+// and stored works hidden by the account's filter get their LastChecked bumped
+// once, after the loop.
 func processBookmarkItems(ctx context.Context, userId string, illusts []pixivmodel.Illust, isPrivate bool) []notification.ItemResult {
 	sourceIDs := make([]string, len(illusts))
 	for i, il := range illusts {
@@ -295,6 +296,15 @@ func processBookmarkItems(ctx context.Context, userId string, illusts []pixivmod
 			continue
 		}
 
+		if isPixivSourceHeldInEverySet(sets, idStr) {
+			for _, set := range sets {
+				src, _ := sourceByID(set, idStr)
+				results = append(results, reportHeldPixivCopy(idStr, set.ID, src.ImageChangeState))
+			}
+			checked = append(checked, idStr)
+			continue
+		}
+
 		if !isPixivSourceStaleInAnySet(il, sets, isPrivate) {
 			results = append(results, notification.ItemResult{Kind: notification.ItemUnchanged, Ref: idStr})
 			checked = append(checked, idStr)
@@ -304,7 +314,7 @@ func processBookmarkItems(ctx context.Context, userId string, illusts []pixivmod
 	}
 
 	if err := imageset.MarkSourcesChecked(ctx, userId, pixivServiceName, checked, checkedAt); err != nil {
-		log.Printf("------ Warning: pixiv sync [%s]: marking unchanged items checked: %s ------", userId, err)
+		log.Printf("------ Warning: pixiv sync [%s]: stamping the page's checked works: %s ------", userId, err)
 	}
 	return results
 }
@@ -343,6 +353,22 @@ func isPixivSourceStaleInAnySet(il pixivmodel.Illust, sets []*imageset.ImageSetM
 		}
 	}
 	return false
+}
+
+// isPixivSourceHeldInEverySet reports whether every set's copy of sourceID is
+// held by its image-change state; false for no sets.
+func isPixivSourceHeldInEverySet(sets []*imageset.ImageSetMongo, sourceID string) bool {
+
+	if len(sets) == 0 {
+		return false
+	}
+
+	for _, set := range sets {
+		if src, idx := sourceByID(set, sourceID); idx < 0 || src.ImageChangeState == imageset.ImageChangeNone {
+			return false
+		}
+	}
+	return true
 }
 
 // illustRemoved reports whether il is Pixiv's placeholder for a deleted or
@@ -405,10 +431,8 @@ func reportPixivSourceWrites(userId, sourceID string, results []imageset.SourceW
 		case result.Err != nil:
 			err := fmt.Errorf("%w: %s: %w", notification.ErrLibraryAccess, action, result.Err)
 			items = append(items, notification.FailedItem(userId, sourceID, result.SetID, err))
-		case result.Held == imageset.ImageChangePending:
-			items = append(items, notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, SetID: result.SetID, Reason: "an image update is waiting for review"})
-		case result.Held == imageset.ImageChangeDeclined:
-			items = append(items, notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, SetID: result.SetID, Reason: "image updates were declined"})
+		case result.Held != imageset.ImageChangeNone:
+			items = append(items, reportHeldPixivCopy(sourceID, result.SetID, result.Held))
 		case result.Changed:
 			items = append(items, notification.ItemResult{Kind: changedKind, Ref: sourceID, SetID: result.SetID})
 		}
@@ -418,6 +442,17 @@ func reportPixivSourceWrites(userId, sourceID string, results []imageset.SourceW
 		return []notification.ItemResult{{Kind: notification.ItemUnchanged, Ref: sourceID}}
 	}
 	return items
+}
+
+// reportHeldPixivCopy is the Skipped item for setID, whose copy of sourceID is
+// held by its image-change state.
+func reportHeldPixivCopy(sourceID string, setID bson.ObjectID, state imageset.ImageChangeState) notification.ItemResult {
+
+	reason := "an image update is waiting for review"
+	if state == imageset.ImageChangeDeclined {
+		reason = "image updates were declined"
+	}
+	return notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, SetID: setID, Reason: reason}
 }
 
 // tagsChanged reports whether want has a tag missing from have, compared by

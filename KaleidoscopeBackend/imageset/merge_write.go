@@ -177,8 +177,8 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 // item, or nothing when there is nobody to suggest. It names each candidate
 // with its image pairs (their image IDs must be setID's own), then every set
 // holding one of sources that has an ID, without pairs. setID and the excluded
-// sets are never named, and no set twice. A failed publish or lookup is only
-// logged.
+// sets are never named, and no set twice. A failed publish is a Failed item for
+// setID; a failed lookup is only logged.
 func suggestMerge(userID, ref string, setID bson.ObjectID, candidates []mergeCandidate, sources []SourceInfo, excluded []bson.ObjectID) []notification.ItemResult {
 
 	skip := map[bson.ObjectID]bool{setID: true}
@@ -219,8 +219,7 @@ func suggestMerge(userID, ref string, setID bson.ObjectID, candidates []mergeCan
 	}
 
 	if err := notification.Publish(userID, suggestion); err != nil {
-		log.Printf("------ Warning: import [%s] %s: %s ------", userID, ref, err)
-		return nil
+		return []notification.ItemResult{notification.FailedItem(userID, ref, setID, fmt.Errorf("%w: %w", notification.ErrSuggestionSaveFailed, err))}
 	}
 
 	reason := fmt.Sprintf("suggested a merge with %d sets", len(suggestion.Candidates))

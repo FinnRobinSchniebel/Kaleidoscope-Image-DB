@@ -12,7 +12,7 @@ import (
 func TestReasonFor(t *testing.T) {
 	sentinels := []error{
 		ErrServiceSettings, ErrServiceSignIn, ErrServiceRequest, ErrDownloadFailed,
-		ErrImageTooLarge, ErrSaveFailed, ErrLibraryAccess, ErrSyncStopped,
+		ErrImageTooLarge, ErrSaveFailed, ErrSuggestionSaveFailed, ErrLibraryAccess, ErrSyncStopped,
 	}
 	for _, sentinel := range sentinels {
 		wrapped := fmt.Errorf("outer: %w", fmt.Errorf("%w: inner: %w", sentinel, errors.New("raw detail")))

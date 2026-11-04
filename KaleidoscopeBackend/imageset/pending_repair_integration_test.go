@@ -28,8 +28,8 @@ func TestPublishMissingPendingUpdates(t *testing.T) {
 
 	//A's pixiv copy already has one; B's pixiv copy only has one that turned invalid.
 	//The declined copies get none: C's isn't even found, B's is found beside a pending one.
-	for _, p := range []notification.PendingImageUpdate{{SetID: a, Service: "pixiv", SourceID: "1"}, {SetID: b, Service: "pixiv", SourceID: "2"}} {
-		if err := notification.Publish("user1", p); err != nil {
+	for _, key := range []notification.PendingUpdateKey{{SetID: a, Service: "pixiv", SourceID: "1"}, {SetID: b, Service: "pixiv", SourceID: "2"}} {
+		if err := notification.Publish("user1", notification.PendingImageUpdate{PendingUpdateKey: key}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -48,7 +48,8 @@ func TestPublishMissingPendingUpdates(t *testing.T) {
 	}
 
 	pending := func(user string, setID bson.ObjectID, service, sourceID string) storedPendingUpdate {
-		return storedPendingUpdate{UserID: user, Status: notification.StatusPending, Payload: notification.PendingImageUpdate{SetID: setID, Service: service, SourceID: sourceID}}
+		key := notification.PendingUpdateKey{SetID: setID, Service: service, SourceID: sourceID}
+		return storedPendingUpdate{UserID: user, Status: notification.StatusPending, Payload: notification.PendingImageUpdate{PendingUpdateKey: key}}
 	}
 	want := map[storedPendingUpdate]bool{
 		pending("user1", a, "zipsrc", "9"): true,

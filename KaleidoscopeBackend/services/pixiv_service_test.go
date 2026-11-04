@@ -224,6 +224,32 @@ func TestIsPixivSourceStaleInAnySet(t *testing.T) {
 	}
 }
 
+func TestIsPixivSourceHeldInEverySet(t *testing.T) {
+
+	withCopy := func(state imageset.ImageChangeState) *imageset.ImageSetMongo {
+		return &imageset.ImageSetMongo{Sources: []imageset.SourceInfo{{Name: pixivServiceName, SourceID: "7", ImageChangeState: state}}}
+	}
+	pending, declined, free := withCopy(imageset.ImageChangePending), withCopy(imageset.ImageChangeDeclined), withCopy(imageset.ImageChangeNone)
+	without := &imageset.ImageSetMongo{Sources: []imageset.SourceInfo{{Name: pixivServiceName, SourceID: "8", ImageChangeState: imageset.ImageChangePending}}}
+
+	tests := []struct {
+		name string
+		sets []*imageset.ImageSetMongo
+		want bool
+	}{
+		{"pending and declined", []*imageset.ImageSetMongo{pending, declined}, true},
+		{"one copy not held", []*imageset.ImageSetMongo{pending, free}, false},
+		{"a set without the copy", []*imageset.ImageSetMongo{pending, without}, false},
+		{"no sets", nil, false},
+	}
+
+	for _, tc := range tests {
+		if got := isPixivSourceHeldInEverySet(tc.sets, "7"); got != tc.want {
+			t.Errorf("%s: isPixivSourceHeldInEverySet = %t, want %t", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestReadPixivAuthor(t *testing.T) {
 
 	if name, id := readPixivAuthor(&pixivmodel.Illust{}); name != "" || id != "" {

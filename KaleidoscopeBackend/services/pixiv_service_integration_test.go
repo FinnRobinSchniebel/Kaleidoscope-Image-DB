@@ -149,12 +149,21 @@ func TestProcessBookmarkItemsHoldsAndStamps(t *testing.T) {
 		return imageset.ImageSetMongo{ID: setID, KscopeUserId: user, Title: "Art", Sources: []imageset.SourceInfo{src}}
 	}
 
+	notStale := func(set imageset.ImageSetMongo) imageset.ImageSetMongo {
+		set.Sources[0].Date = created
+		return set
+	}
+
 	free, held, hiddenOld, hiddenZero := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
+	heldPending, heldDeclined, removed := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
 	for _, set := range []imageset.ImageSetMongo{
 		withCopy(free, "1", imageset.ImageChangeNone, lastChecked),
 		withCopy(held, "1", imageset.ImageChangePending, lastChecked),
 		withCopy(hiddenOld, "2", imageset.ImageChangeNone, lastChecked),
 		withCopy(hiddenZero, "2", imageset.ImageChangeNone, time.Time{}),
+		notStale(withCopy(heldPending, "3", imageset.ImageChangePending, lastChecked)),
+		notStale(withCopy(heldDeclined, "3", imageset.ImageChangeDeclined, lastChecked)),
+		withCopy(removed, "4", imageset.ImageChangeDeclined, lastChecked),
 	} {
 		if _, err := imageset.Collection.InsertOne(context.Background(), set); err != nil {
 			t.Fatal(err)
@@ -169,8 +178,11 @@ func TestProcessBookmarkItemsHoldsAndStamps(t *testing.T) {
 		return set.Sources[0]
 	}
 
-	//newest bookmark first: work 2, hidden by the account's filter, then work 1, stale
+	//newest bookmark first: work 4, removed at the source; work 3, held in every set and not stale;
+	//work 2, hidden by the account's filter; work 1, stale and held in one of its sets
 	page := []pixivmodel.Illust{
+		{ID: 4, ImageURLs: &pixivmodel.Images{SquareMedium: "https://s.pximg.net/common/images/limit_unknown_360.png"}},
+		{ID: 3, Visible: true, Title: "Art", CreateDate: created},
 		{ID: 2},
 		{ID: 1, Visible: true, Title: "New", CreateDate: created},
 	}
@@ -182,6 +194,9 @@ func TestProcessBookmarkItemsHoldsAndStamps(t *testing.T) {
 		{Kind: notification.ItemUpdated, Ref: "1", SetID: free},
 		{Kind: notification.ItemSkipped, Ref: "1", SetID: held, Reason: "an image update is waiting for review"},
 		{Kind: notification.ItemSkipped, Ref: "2", Reason: "hidden by the account's filter"},
+		{Kind: notification.ItemSkipped, Ref: "3", SetID: heldPending, Reason: "an image update is waiting for review"},
+		{Kind: notification.ItemSkipped, Ref: "3", SetID: heldDeclined, Reason: "image updates were declined"},
+		{Kind: notification.ItemMissing, Ref: "4", SetID: removed},
 	}
 	if len(items) != len(want) {
 		t.Fatalf("items %+v, want %+v", items, want)
@@ -204,5 +219,15 @@ func TestProcessBookmarkItemsHoldsAndStamps(t *testing.T) {
 
 	if src := storedCopy(hiddenZero); !src.LastChecked.IsZero() {
 		t.Errorf("hidden work's unchecked copy: LastChecked %v, want it left zero", src.LastChecked)
+	}
+
+	for _, setID := range []bson.ObjectID{heldPending, heldDeclined} {
+		if src := storedCopy(setID); !stamped(src.LastChecked) {
+			t.Errorf("work held in every set, set %s: LastChecked %v, want it stamped", setID.Hex(), src.LastChecked)
+		}
+	}
+
+	if src := storedCopy(removed); !src.SourceMissing || src.ImageChangeState != imageset.ImageChangeNone {
+		t.Errorf("removed work's declined copy %+v: want it marked missing and its state reset", src)
 	}
 }

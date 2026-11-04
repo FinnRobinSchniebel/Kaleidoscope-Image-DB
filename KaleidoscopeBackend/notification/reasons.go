@@ -10,14 +10,15 @@ import (
 // User-facing failure reasons. A producer wraps its raw error with the one that
 // says what failed; only the reason's text is stored, the raw error is logged.
 var (
-	ErrServiceSettings = errors.New("the service account settings are missing or invalid")
-	ErrServiceSignIn   = errors.New("couldn't sign in to the service")
-	ErrServiceRequest  = errors.New("couldn't load your bookmarks from the service")
-	ErrDownloadFailed  = errors.New("couldn't download the images")
-	ErrImageTooLarge   = errors.New("an image is too large")
-	ErrSaveFailed      = errors.New("couldn't save the image set")
-	ErrLibraryAccess   = errors.New("couldn't read or update your library")
-	ErrSyncStopped     = errors.New("the sync was stopped")
+	ErrServiceSettings      = errors.New("the service account settings are missing or invalid")
+	ErrServiceSignIn        = errors.New("couldn't sign in to the service")
+	ErrServiceRequest       = errors.New("couldn't load your bookmarks from the service")
+	ErrDownloadFailed       = errors.New("couldn't download the images")
+	ErrImageTooLarge        = errors.New("an image is too large")
+	ErrSaveFailed           = errors.New("couldn't save the image set")
+	ErrSuggestionSaveFailed = errors.New("couldn't save the merge suggestion")
+	ErrLibraryAccess        = errors.New("couldn't read or update your library")
+	ErrSyncStopped          = errors.New("the sync was stopped")
 )
 
 const serverErrorReason = "server error"
@@ -32,6 +33,7 @@ var userReasons = []error{
 	ErrDownloadFailed,
 	ErrImageTooLarge,
 	ErrSaveFailed,
+	ErrSuggestionSaveFailed,
 	ErrLibraryAccess,
 	ErrSyncStopped,
 }

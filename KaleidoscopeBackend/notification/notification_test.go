@@ -80,3 +80,27 @@ func TestNewNotification(t *testing.T) {
 		t.Error("an unread notification stored read_at")
 	}
 }
+
+func TestPendingImageUpdateStoredFlat(t *testing.T) {
+
+	setID := bson.NewObjectID()
+	update := PendingImageUpdate{PendingUpdateKey{SetID: setID, Service: "pixiv", SourceID: "7"}}
+	encoded, err := bson.Marshal(newNotification("user1", update, time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	//the partial index and every lookup read payload.set_id, so the key must not nest
+	raw := bson.Raw(encoded)
+	if got, err := raw.LookupErr("payload", "set_id"); err != nil || got.ObjectID() != setID {
+		t.Errorf("payload.set_id = %v (%v), want %s", got, err, setID.Hex())
+	}
+
+	if got, err := raw.LookupErr("payload", "service"); err != nil || got.StringValue() != "pixiv" {
+		t.Errorf("payload.service = %v (%v), want pixiv", got, err)
+	}
+
+	if got, err := raw.LookupErr("payload", "source_id"); err != nil || got.StringValue() != "7" {
+		t.Errorf("payload.source_id = %v (%v), want 7", got, err)
+	}
+}
