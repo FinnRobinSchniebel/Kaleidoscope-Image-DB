@@ -158,51 +158,51 @@ func TestSavePixivIllustStoppedSync(t *testing.T) {
 
 func TestReportPixivSourceWrites(t *testing.T) {
 
-	failedSet, changedSet, quietSet := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
+	ids := make([]bson.ObjectID, 10)
+	for i := range ids {
+		ids[i] = bson.NewObjectID()
+	}
+
 	results := []imageset.SourceWriteResult{
-		{SetID: failedSet, Err: errors.New("write failed")},
-		{SetID: changedSet, Changed: true},
-		{SetID: quietSet},
+		{SetID: ids[0], Kind: imageset.SourceMetadataUpdate, Err: errors.New("write failed")},
+		{SetID: ids[1], Kind: imageset.SourceImageCheck, Err: imageset.ErrSetChangedDuringSync},
+		{SetID: ids[2], Kind: imageset.SourceHeldStamp, Held: imageset.ImageChangePending},
+		{SetID: ids[3], Kind: imageset.SourceHeldStamp, Held: imageset.ImageChangeDeclined},
+		{SetID: ids[4], Kind: imageset.SourceMetadataUpdate, Changed: true},
+		{SetID: ids[5], Kind: imageset.SourceReorder, Changed: true},
+		{SetID: ids[6], Kind: imageset.SourceRemoval, Changed: true},
+		{SetID: ids[7], Kind: imageset.SourceAttribution, Changed: true},
+		{SetID: ids[8], Kind: imageset.SourcePendingFlip, Changed: true},
+		{SetID: ids[9], Kind: imageset.SourceMissingMark, Changed: true},
+		{SetID: bson.NewObjectID(), Kind: imageset.SourceMetadataUpdate},
+	}
+	want := []notification.ItemResult{
+		{Kind: notification.ItemFailed, Ref: "7", SetID: ids[0], Reason: notification.ErrLibraryAccess.Error()},
+		{Kind: notification.ItemSkipped, Ref: "7", SetID: ids[1], Reason: "the set changed during the sync"},
+		{Kind: notification.ItemSkipped, Ref: "7", SetID: ids[2], Reason: "an image update is waiting for review"},
+		{Kind: notification.ItemSkipped, Ref: "7", SetID: ids[3], Reason: "image updates were declined"},
+		{Kind: notification.ItemUpdated, Ref: "7", SetID: ids[4]},
+		{Kind: notification.ItemUpdated, Ref: "7", SetID: ids[5], Reason: "the pages were reordered at the source"},
+		{Kind: notification.ItemUpdated, Ref: "7", SetID: ids[6], Reason: "pages were removed at the source"},
+		{Kind: notification.ItemUpdated, Ref: "7", SetID: ids[7], Reason: "matched pages already in the set"},
+		{Kind: notification.ItemPending, Ref: "7", SetID: ids[8], Reason: "the images changed at the source"},
+		{Kind: notification.ItemMissing, Ref: "7", SetID: ids[9]},
 	}
 
-	items := reportPixivSourceWrites("user1", "7", results, notification.ItemMissing, "marking missing")
-	if len(items) != 2 {
-		t.Fatalf("items = %+v, want the failed and the changed set only", items)
+	items := reportPixivSourceWrites("user1", "7", results)
+	if len(items) != len(want) {
+		t.Fatalf("items = %+v, want %+v", items, want)
 	}
 
-	if failed := items[0]; failed.Kind != notification.ItemFailed || failed.SetID != failedSet || failed.Reason != notification.ErrLibraryAccess.Error() {
-		t.Errorf("failed set: %+v, want failed with its set ID and the library reason", failed)
+	for i := range want {
+		if items[i] != want[i] {
+			t.Errorf("item %d is %+v, want %+v", i, items[i], want[i])
+		}
 	}
 
-	if changed := items[1]; changed.Kind != notification.ItemMissing || changed.SetID != changedSet || changed.Ref != "7" {
-		t.Errorf("changed set: %+v, want missing with its set ID", changed)
-	}
-
-	unchanged := reportPixivSourceWrites("user1", "7", []imageset.SourceWriteResult{{SetID: changedSet}, {SetID: quietSet}}, notification.ItemUpdated, "applying metadata update")
+	unchanged := reportPixivSourceWrites("user1", "7", []imageset.SourceWriteResult{{SetID: ids[4], Kind: imageset.SourceMetadataUpdate}, {SetID: ids[5], Kind: imageset.SourceMissingMark}})
 	if len(unchanged) != 1 || unchanged[0].Kind != notification.ItemUnchanged || !unchanged[0].SetID.IsZero() {
 		t.Errorf("nothing changed: %+v, want one unchanged item for the work", unchanged)
-	}
-
-	pendingSet, declinedSet := bson.NewObjectID(), bson.NewObjectID()
-	held := reportPixivSourceWrites("user1", "7", []imageset.SourceWriteResult{
-		{SetID: pendingSet, Held: imageset.ImageChangePending},
-		{SetID: declinedSet, Held: imageset.ImageChangeDeclined},
-		{SetID: failedSet, Held: imageset.ImageChangePending, Err: errors.New("stamp failed")},
-	}, notification.ItemUpdated, "applying metadata update")
-	if len(held) != 3 {
-		t.Fatalf("held sets: %+v, want an item for each and no unchanged item", held)
-	}
-
-	if item := held[0]; item.Kind != notification.ItemSkipped || item.SetID != pendingSet || item.Reason != "an image update is waiting for review" {
-		t.Errorf("pending set: %+v, want skipped as waiting for review, with its set ID", item)
-	}
-
-	if item := held[1]; item.Kind != notification.ItemSkipped || item.SetID != declinedSet || item.Reason != "image updates were declined" {
-		t.Errorf("declined set: %+v, want skipped as declined, with its set ID", item)
-	}
-
-	if item := held[2]; item.Kind != notification.ItemFailed || item.SetID != failedSet {
-		t.Errorf("held set whose stamp failed: %+v, want failed", item)
 	}
 }
 

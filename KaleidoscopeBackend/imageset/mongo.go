@@ -653,9 +653,10 @@ func SearchDBForImages(params SearchParams) (bson.M, error) {
 	return results, nil
 }
 
-// GetImageSetsBySourceIDs returns, for each of sourceIDs, the full documents of
-// every one of userId's sets holding a source named sourceName with that ID,
-// oldest set first. IDs no set holds are left out.
+// GetImageSetsBySourceIDs returns, for each of sourceIDs, every one of userId's
+// sets holding a source named sourceName with that ID, oldest set first. IDs no
+// set holds are left out. Only each set's ID, sources and its images' IDs,
+// hashes and sizes are read, so the sets must never be written back.
 func GetImageSetsBySourceIDs(userId string, sourceName string, sourceIDs []string) (map[string][]*ImageSetMongo, error) {
 	ctx := context.Background()
 
@@ -667,7 +668,8 @@ func GetImageSetsBySourceIDs(userId string, sourceName string, sourceIDs []strin
 		}},
 	}
 
-	cursor, err := Collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
+	projection := bson.M{"sources": 1, "images.id": 1, "images.pixel_hash": 1, "images.pdq_hash": 1, "images.width": 1, "images.height": 1}
+	cursor, err := Collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetProjection(projection))
 	if err != nil {
 		return nil, err
 	}
@@ -830,14 +832,15 @@ func deleteCombinedSet(set *ImageSetMongo, imageIDs []bson.ObjectID) error {
 }
 
 // findSetIDsWithSource returns the IDs of userID's sets holding the source
-// named name with sourceID.
+// named name with sourceID, oldest set first.
 func findSetIDsWithSource(userID, name, sourceID string) ([]bson.ObjectID, error) {
 
 	filter := bson.M{
 		"kscope_userid": userID,
 		"sources":       bson.M{"$elemMatch": bson.M{"name": name, "source_id": sourceID}},
 	}
-	cursor, err := Collection.Find(context.Background(), filter, options.Find().SetProjection(bson.M{"_id": 1}))
+	opts := options.Find().SetProjection(bson.M{"_id": 1}).SetSort(bson.D{{Key: "_id", Value: 1}})
+	cursor, err := Collection.Find(context.Background(), filter, opts)
 	if err != nil {
 		return nil, fmt.Errorf("finding sets with source %s/%s: %w", name, sourceID, err)
 	}

@@ -17,18 +17,42 @@ import (
 // user's sets holds the source.
 var ErrSourceNotStored = errors.New("source not stored")
 
+// ErrSetChangedDuringSync is a set's result error when its copy needs a page the
+// caller didn't fetch, as for a set that changed after the pre-lock check read
+// it. Nothing is written, so the next sync checks it again.
+var ErrSetChangedDuringSync = errors.New("the set changed during the sync")
+
+// SourceWriteKind is the per-set step a SourceWriteResult comes from; for a
+// failed result, the write it attempted.
+type SourceWriteKind string
+
+const (
+	SourceHeldStamp      SourceWriteKind = "held stamp"
+	SourceMetadataUpdate SourceWriteKind = "metadata update"
+	SourceReorder        SourceWriteKind = "reorder"
+	SourceRemoval        SourceWriteKind = "removal"
+	SourceAttribution    SourceWriteKind = "attribution"
+	SourcePendingFlip    SourceWriteKind = "pending flip"
+	SourceMissingMark    SourceWriteKind = "missing mark"
+	SourceImageCheck     SourceWriteKind = "image check" //a check that failed or couldn't decide, so nothing was written
+	SourceReread         SourceWriteKind = "re-read"     //a failed re-read of the set before its write
+)
+
 // SourceWriteResult is one set's outcome from a by-source writer, whose own
 // error covers the whole call; each writer says what Changed means for it.
 type SourceWriteResult struct {
 	SetID   bson.ObjectID
+	Kind    SourceWriteKind
 	Changed bool
 	Held    ImageChangeState //the copy's state when a hold kept the write from applying; none otherwise
 	Err     error
 }
 
-// writeEachSetHoldingSource holds the user's set lock (lockUserSetsOrPause),
-// re-reads every set holding the source and calls write on each in turn with
-// the source's index, carrying on after a set whose write failed.
+// writeEachSetHoldingSource holds the user's set lock (lockUserSetsOrPause) and
+// calls write on every set holding the source, oldest first, with the source's
+// index, carrying on after a set whose write failed. Each set is re-read just
+// before its turn: one that's gone or no longer holds the source is skipped, and
+// a failed re-read is that set's SourceReread result.
 func writeEachSetHoldingSource(ctx context.Context, userID, name, sourceID string, write func(set *ImageSetMongo, index int) SourceWriteResult) ([]SourceWriteResult, error) {
 
 	unlock, err := lockUserSetsOrPause(ctx, userID)
@@ -37,22 +61,34 @@ func writeEachSetHoldingSource(ctx context.Context, userID, name, sourceID strin
 	}
 	defer unlock()
 
-	found, err := GetImageSetsBySourceIDs(userID, name, []string{sourceID})
+	ids, err := findSetIDsWithSource(userID, name, sourceID)
 	if err != nil {
 		return nil, err
 	}
 
-	sets := found[sourceID]
-	if len(sets) == 0 {
+	if len(ids) == 0 {
 		return nil, fmt.Errorf("%w: %s/%s", ErrSourceNotStored, name, sourceID)
 	}
 
 	key := SourceInfo{Name: name, SourceID: sourceID}
-	results := make([]SourceWriteResult, 0, len(sets))
-	for _, set := range sets {
+	results := make([]SourceWriteResult, 0, len(ids))
+	for _, id := range ids {
 
-		index := slices.IndexFunc(set.Sources, func(src SourceInfo) bool { return SameSource(src, key) })
-		results = append(results, write(set, index))
+		sets, err := loadOwnedSets(userID, []bson.ObjectID{id})
+		if err != nil {
+			results = append(results, SourceWriteResult{SetID: id, Kind: SourceReread, Err: err})
+			continue
+		}
+
+		if len(sets) == 0 {
+			continue
+		}
+
+		index := slices.IndexFunc(sets[0].Sources, func(src SourceInfo) bool { return SameSource(src, key) })
+		if index < 0 {
+			continue
+		}
+		results = append(results, write(&sets[0], index))
 	}
 	return results, nil
 }
@@ -64,7 +100,7 @@ func writeEachSetHoldingSource(ctx context.Context, userID, name, sourceID strin
 func stampHeldSourceInSet(set *ImageSetMongo, index int, checkedAt time.Time) SourceWriteResult {
 
 	src := &set.Sources[index]
-	result := SourceWriteResult{SetID: set.ID, Held: src.ImageChangeState}
+	result := SourceWriteResult{SetID: set.ID, Kind: SourceHeldStamp, Held: src.ImageChangeState}
 	if src.LastChecked.IsZero() {
 		return result
 	}
@@ -75,24 +111,61 @@ func stampHeldSourceInSet(set *ImageSetMongo, index int, checkedAt time.Time) So
 	return result
 }
 
-// ApplySourceMetadataUpdate updates every stored copy of the source matching
-// newSrc's Name and SourceID with its metadata and tags (see
-// applySourceMetadata for which fields and when), through
-// writeEachSetHoldingSource. Only metadata is read from newSrc; each copy keeps
-// its ID and attribution. Callers must confirm the source's images are
-// unchanged first; images are never touched here. A result's Changed reports
-// whether data from the source changed in that set, which also stamps its
-// LastAppliedUpdate, or whether its copy was marked missing, which doesn't. A
-// copy held by its image-change state is only stamped (stampHeldSourceInSet),
-// with Held set.
-func ApplySourceMetadataUpdate(ctx context.Context, userID string, newSrc SourceInfo, checkedAt time.Time) ([]SourceWriteResult, error) {
+// ApplySourceUpdate writes the service's version of a source, newSrc, to every
+// set holding it (writeEachSetHoldingSource), each set getting the outcome its
+// own copy calls for (applySourceUpdateInSet). Only metadata is read from
+// newSrc. pages are the previews and originals the sync fetched; with nil, a
+// copy that needs the image check is skipped with ErrSetChangedDuringSync.
+func ApplySourceUpdate(ctx context.Context, userID string, newSrc SourceInfo, pages *FetchedPages, checkedAt time.Time) ([]SourceWriteResult, error) {
 	return writeEachSetHoldingSource(ctx, userID, newSrc.Name, newSrc.SourceID, func(set *ImageSetMongo, index int) SourceWriteResult {
-		return applySourceMetadataUpdateInSet(set, index, newSrc, checkedAt)
+		return applySourceUpdateInSet(set, index, newSrc, pages, checkedAt)
 	})
 }
 
-// applySourceMetadataUpdateInSet is ApplySourceMetadataUpdate for the copy at
-// set.Sources[index]. The caller holds the user's set lock.
+// applySourceUpdateInSet gives the copy at set.Sources[index] its outcome. A
+// copy that needs no image check (NeedsImageCheck) gets the metadata update,
+// which only stamps a held one; any other is checked (checkSourceImages) and
+// then flipped to pending, or has its attribution rewritten along with the
+// metadata. A rewrite the set's attribution check rejects writes nothing. The
+// caller holds the user's set lock.
+func applySourceUpdateInSet(set *ImageSetMongo, index int, newSrc SourceInfo, pages *FetchedPages, checkedAt time.Time) SourceWriteResult {
+
+	if !NeedsImageCheck(set.Sources[index], newSrc.Date) {
+		return applySourceMetadataUpdateInSet(set, index, newSrc, checkedAt)
+	}
+
+	if pages == nil {
+		return SourceWriteResult{SetID: set.ID, Kind: SourceImageCheck, Err: ErrSetChangedDuringSync}
+	}
+
+	check, err := checkSourceImages(set, index, *pages)
+	switch {
+	case err != nil:
+		return SourceWriteResult{SetID: set.ID, Kind: SourceImageCheck, Err: err}
+	case len(check.needsOriginals) > 0:
+		return SourceWriteResult{SetID: set.ID, Kind: SourceImageCheck, Err: ErrSetChangedDuringSync}
+	case check.kind == SourcePendingFlip:
+		return markSourcePendingImageChangeInSet(set, index, checkedAt)
+	}
+
+	set.Sources[index].AttributedTo = check.attribution
+	if err := set.checkAttribution(); err != nil {
+		return SourceWriteResult{SetID: set.ID, Kind: check.kind, Err: err}
+	}
+
+	result := applySourceMetadataUpdateInSet(set, index, newSrc, checkedAt)
+	result.Kind, result.Changed = check.kind, result.Err == nil
+	return result
+}
+
+// applySourceMetadataUpdateInSet updates the copy at set.Sources[index] with
+// newSrc's metadata and tags (see applySourceMetadata for which fields and
+// when), writing the copy as the caller left it, AttributedTo included. Images
+// are never touched, so the caller must have found them unchanged. A copy held
+// by its image-change state is only stamped (stampHeldSourceInSet). Changed
+// reports whether data from the source changed, which also stamps
+// LastAppliedUpdate, or whether the copy was marked missing, which doesn't. The
+// caller holds the user's set lock.
 func applySourceMetadataUpdateInSet(set *ImageSetMongo, index int, newSrc SourceInfo, checkedAt time.Time) SourceWriteResult {
 
 	if set.Sources[index].ImageChangeState != ImageChangeNone {
@@ -111,7 +184,7 @@ func applySourceMetadataUpdateInSet(set *ImageSetMongo, index int, newSrc Source
 
 	counted, err := Tagger.ProcessSourceTags(userID, set, index, newSrc.Tags)
 	if err != nil {
-		return SourceWriteResult{SetID: set.ID, Err: fmt.Errorf("processing source tags: %w", err)}
+		return SourceWriteResult{SetID: set.ID, Kind: SourceMetadataUpdate, Err: fmt.Errorf("processing source tags: %w", err)}
 	}
 
 	changed := sourceDataChanged(before, set.Sources[index])
@@ -123,9 +196,9 @@ func applySourceMetadataUpdateInSet(set *ImageSetMongo, index int, newSrc Source
 	maps.Copy(fields, tagFields(set))
 
 	if err := updateSourceFields(set, index, ImageChangeNone, fields); err != nil {
-		return SourceWriteResult{SetID: set.ID, Err: errors.Join(err, Tagger.UndoTagCounts(userID, counted))}
+		return SourceWriteResult{SetID: set.ID, Kind: SourceMetadataUpdate, Err: errors.Join(err, Tagger.UndoTagCounts(userID, counted))}
 	}
-	return SourceWriteResult{SetID: set.ID, Changed: changed || before.SourceMissing}
+	return SourceWriteResult{SetID: set.ID, Kind: SourceMetadataUpdate, Changed: changed || before.SourceMissing}
 }
 
 // applySourceMetadata copies newSrc's non-empty title, description, known author
@@ -172,23 +245,13 @@ func sourceDataChanged(before, after SourceInfo) bool {
 		!slices.Equal(before.Tags, after.Tags)
 }
 
-// MarkSourcePendingImageChange records, in every set holding the source (through
-// writeEachSetHoldingSource), that the source's images no longer match what's
-// stored, writing no image or metadata change. Date is left alone, so a later
-// sync still sees the source's move. A copy already pending or declined is only
-// stamped (stampHeldSourceInSet), with Held set. A result's Changed reports
-// whether that set's copy flipped to pending.
-func MarkSourcePendingImageChange(ctx context.Context, userID, name, sourceID string, checkedAt time.Time) ([]SourceWriteResult, error) {
-	return writeEachSetHoldingSource(ctx, userID, name, sourceID, func(set *ImageSetMongo, index int) SourceWriteResult {
-		return markSourcePendingImageChangeInSet(set, index, checkedAt)
-	})
-}
-
-// markSourcePendingImageChangeInSet is MarkSourcePendingImageChange for the copy
-// at set.Sources[index]. The pending-update notification is published only once
-// the flip's write has landed; a failed publish is only logged, since
-// PublishMissingPendingUpdates sends it at the next startup. The caller holds
-// the user's set lock.
+// markSourcePendingImageChangeInSet records that the source's images no longer
+// match the copy at set.Sources[index], writing no image or metadata change:
+// Date is left alone, so a later sync still sees the source's move. A copy
+// already pending or declined is only stamped (stampHeldSourceInSet). The
+// pending-update notification is published only once the flip's write has
+// landed; a failed publish is only logged, since PublishMissingPendingUpdates
+// sends it at the next startup. The caller holds the user's set lock.
 func markSourcePendingImageChangeInSet(set *ImageSetMongo, index int, checkedAt time.Time) SourceWriteResult {
 
 	if set.Sources[index].ImageChangeState != ImageChangeNone {
@@ -209,14 +272,14 @@ func markSourcePendingImageChangeInSet(set *ImageSetMongo, index int, checkedAt 
 	}
 
 	if err := updateSourceFieldsWithTags(set, index, ImageChangeNone, fields, wasMissing); err != nil {
-		return SourceWriteResult{SetID: set.ID, Err: err}
+		return SourceWriteResult{SetID: set.ID, Kind: SourcePendingFlip, Err: err}
 	}
 
 	pending := newPendingImageUpdate(set, index)
 	if err := notification.Publish(userID, pending); err != nil {
 		log.Printf("------ Warning: %s/%s in set %s is pending, but its notification wasn't published (sent at the next startup): %s ------", pending.Service, pending.SourceID, set.ID.Hex(), err)
 	}
-	return SourceWriteResult{SetID: set.ID, Changed: true}
+	return SourceWriteResult{SetID: set.ID, Kind: SourcePendingFlip, Changed: true}
 }
 
 // newPendingImageUpdate is the pending-update notification for the copy at
@@ -256,9 +319,9 @@ func markSourceMissingInSet(set *ImageSetMongo, index int, checkedAt time.Time) 
 	}
 
 	if err := updateSourceFieldsWithTags(set, index, stateRead, fields, !wasMissing); err != nil {
-		return SourceWriteResult{SetID: set.ID, Err: err}
+		return SourceWriteResult{SetID: set.ID, Kind: SourceMissingMark, Err: err}
 	}
-	return SourceWriteResult{SetID: set.ID, Changed: !wasMissing}
+	return SourceWriteResult{SetID: set.ID, Kind: SourceMissingMark, Changed: !wasMissing}
 }
 
 // updateSourceFieldsWithTags writes fields to the copy at set.Sources[index]

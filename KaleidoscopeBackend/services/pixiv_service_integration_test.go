@@ -50,18 +50,19 @@ func TestProcessBookmarkItemsAcrossSets(t *testing.T) {
 	const user = "pixiv-page-user"
 	created := time.Date(2026, 8, 27, 9, 12, 12, 0, time.UTC)
 	lastChecked := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	withSource := func(setID bson.ObjectID, illustID uint64, date time.Time) imageset.ImageSetMongo {
-		src := imageset.SourceInfo{Name: pixivServiceName, SourceID: strconv.FormatUint(illustID, 10), Title: "Art", Date: date, LastChecked: lastChecked}
-		return imageset.ImageSetMongo{ID: setID, KscopeUserId: user, Title: "Art", Sources: []imageset.SourceInfo{src}}
+	//dated like the listing, so a stale work stays a metadata update
+	withSource := func(setID bson.ObjectID, illustID uint64, title string) imageset.ImageSetMongo {
+		src := imageset.SourceInfo{Name: pixivServiceName, SourceID: strconv.FormatUint(illustID, 10), Title: title, Date: created, LastChecked: lastChecked}
+		return imageset.ImageSetMongo{ID: setID, KscopeUserId: user, Title: title, Sources: []imageset.SourceInfo{src}}
 	}
 
 	aCurrent, aStale, b, c, d := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
 	for _, set := range []imageset.ImageSetMongo{
-		withSource(aCurrent, 1, created),
-		withSource(aStale, 1, created.Add(-time.Hour)),
-		withSource(b, 2, created),
-		withSource(c, 3, created),
-		withSource(d, 4, created.Add(-time.Hour)),
+		withSource(aCurrent, 1, "Art"),
+		withSource(aStale, 1, "Old"),
+		withSource(b, 2, "Art"),
+		withSource(c, 3, "Art"),
+		withSource(d, 4, "Old"),
 	} {
 		if _, err := imageset.Collection.InsertOne(context.Background(), set); err != nil {
 			t.Fatal(err)
@@ -95,11 +96,12 @@ func TestProcessBookmarkItemsAcrossSets(t *testing.T) {
 		}
 	}
 
-	//newest bookmark first, as Pixiv lists them: D, C, B, A
-	illust := func(id uint64) pixivmodel.Illust {
-		return pixivmodel.Illust{ID: id, Visible: true, Title: "Art", CreateDate: created}
+	//newest bookmark first, as Pixiv lists them: D, C, B, A; a tag the copies lack makes works 1 and 4 stale
+	illust := func(id uint64, tags ...pixivmodel.Tag) pixivmodel.Illust {
+		return pixivmodel.Illust{ID: id, Visible: true, Title: "Art", CreateDate: created, Tags: tags}
 	}
-	page := []pixivmodel.Illust{illust(4), illust(3), illust(2), illust(1)}
+	newTag := pixivmodel.Tag{Name: "new"}
+	page := []pixivmodel.Illust{illust(4, newTag), illust(3), illust(2), illust(1, newTag)}
 
 	imageset.Tagger = fakeTagger{failSetID: d}
 	before := time.Now().Truncate(time.Millisecond)
@@ -157,7 +159,7 @@ func TestProcessBookmarkItemsHoldsAndStamps(t *testing.T) {
 	free, held, hiddenOld, hiddenZero := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
 	heldPending, heldDeclined, removed := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
 	for _, set := range []imageset.ImageSetMongo{
-		withCopy(free, "1", imageset.ImageChangeNone, lastChecked),
+		notStale(withCopy(free, "1", imageset.ImageChangeNone, lastChecked)),
 		withCopy(held, "1", imageset.ImageChangePending, lastChecked),
 		withCopy(hiddenOld, "2", imageset.ImageChangeNone, lastChecked),
 		withCopy(hiddenZero, "2", imageset.ImageChangeNone, time.Time{}),
@@ -179,12 +181,12 @@ func TestProcessBookmarkItemsHoldsAndStamps(t *testing.T) {
 	}
 
 	//newest bookmark first: work 4, removed at the source; work 3, held in every set and not stale;
-	//work 2, hidden by the account's filter; work 1, stale and held in one of its sets
+	//work 2, hidden by the account's filter; work 1, stale by a new tag and held in one of its sets
 	page := []pixivmodel.Illust{
 		{ID: 4, ImageURLs: &pixivmodel.Images{SquareMedium: "https://s.pximg.net/common/images/limit_unknown_360.png"}},
 		{ID: 3, Visible: true, Title: "Art", CreateDate: created},
 		{ID: 2},
-		{ID: 1, Visible: true, Title: "New", CreateDate: created},
+		{ID: 1, Visible: true, Title: "New", CreateDate: created, Tags: []pixivmodel.Tag{{Name: "new"}}},
 	}
 	before := time.Now().Truncate(time.Millisecond)
 	items := processBookmarkItems(context.Background(), user, page, false)

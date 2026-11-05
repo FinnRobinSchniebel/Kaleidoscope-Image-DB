@@ -84,11 +84,12 @@ func TestGetImageSetsBySourceIDsListsEverySet(t *testing.T) {
 
 	useTestDatabase(t, fakeTagger{})
 	older, newer := bson.NewObjectID(), bson.NewObjectID()
+	image := ImageInfo{ID: bson.NewObjectID(), Name: "page.png", ImageHashes: ImageHashes{Pixel: pagePixels("p1"), PDQ: pagePDQ("p1")}, Width: 100, Height: 200}
 
 	//the newer set goes in first, so only the sort puts the older one first
 	insertSets(t,
 		ImageSetMongo{ID: newer, KscopeUserId: "user1", Sources: []SourceInfo{{Name: "pixiv", SourceID: "1"}}},
-		ImageSetMongo{ID: older, KscopeUserId: "user1", Sources: []SourceInfo{{Name: "pixiv", SourceID: "2"}, {Name: "pixiv", SourceID: "1"}}},
+		ImageSetMongo{ID: older, KscopeUserId: "user1", Title: "Art", Path: "user1/art", Image: []ImageInfo{image}, Sources: []SourceInfo{{Name: "pixiv", SourceID: "2"}, {Name: "pixiv", SourceID: "1"}}},
 		ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: "user2", Sources: []SourceInfo{{Name: "pixiv", SourceID: "1"}}},
 	)
 
@@ -104,6 +105,17 @@ func TestGetImageSetsBySourceIDsListsEverySet(t *testing.T) {
 	if got := setIDs(found["2"]); !slices.Equal(got, []bson.ObjectID{older}) {
 		t.Errorf("under 2: %v, want the older set", got)
 	}
+
+	//projected: sources and each image's ID, hashes and size only
+	read := found["2"][0]
+	if read.Title != "" || read.Path != "" || len(read.Sources) != 2 || len(read.Image) != 1 {
+		t.Fatalf("older set read as %+v, want only its sources and its one image", read)
+	}
+
+	got := read.Image[0]
+	if got.ID != image.ID || got.Name != "" || got.Width != 100 || got.Height != 200 || !slices.Equal(got.PDQ, image.PDQ) || !slices.Equal(got.Pixel, image.Pixel) {
+		t.Errorf("older set's image read as %+v, want its ID, hashes and size without its file name", got)
+	}
 }
 
 func TestSourceWritersUpdateEverySet(t *testing.T) {
@@ -113,14 +125,16 @@ func TestSourceWritersUpdateEverySet(t *testing.T) {
 	tagger.onRecompute = func() { recomputed++ }
 	useTestDatabase(t, tagger)
 	first, second := bson.NewObjectID(), bson.NewObjectID()
-	insertSets(t,
-		ImageSetMongo{ID: first, KscopeUserId: "user1", Title: "Old", Sources: []SourceInfo{{Name: "pixiv", SourceID: "1", Title: "Old"}}},
-		ImageSetMongo{ID: second, KscopeUserId: "user1", Title: "Old", Sources: []SourceInfo{{Name: "zipsrc", SourceID: "9"}, {Name: "pixiv", SourceID: "1", Title: "Old"}}},
-	)
-	ctx, now := context.Background(), time.Now()
 	sourceDate := time.Date(2026, 8, 27, 9, 12, 12, 0, time.UTC)
 
-	expectChanged := func(write string, results []SourceWriteResult, err error, want bool) {
+	//dated like the update, so it stays a metadata update
+	insertSets(t,
+		ImageSetMongo{ID: first, KscopeUserId: "user1", Title: "Old", Sources: []SourceInfo{{Name: "pixiv", SourceID: "1", Title: "Old", Date: sourceDate}}},
+		ImageSetMongo{ID: second, KscopeUserId: "user1", Title: "Old", Sources: []SourceInfo{{Name: "zipsrc", SourceID: "9"}, {Name: "pixiv", SourceID: "1", Title: "Old", Date: sourceDate}}},
+	)
+	ctx, now := context.Background(), time.Now()
+
+	expectChanged := func(write string, results []SourceWriteResult, err error, want bool, kind SourceWriteKind) {
 
 		t.Helper()
 		if err != nil || len(results) != 2 {
@@ -128,10 +142,16 @@ func TestSourceWritersUpdateEverySet(t *testing.T) {
 		}
 
 		for _, result := range results {
-			if result.Err != nil || result.Changed != want {
-				t.Errorf("%s: set %s: %+v, want Changed %t", write, result.SetID.Hex(), result, want)
+			if result.Err != nil || result.Changed != want || result.Kind != kind {
+				t.Errorf("%s: set %s: %+v, want Changed %t and Kind %q", write, result.SetID.Hex(), result, want, kind)
 			}
 		}
+	}
+
+	markPending := func() ([]SourceWriteResult, error) {
+		return writeEachSetHoldingSource(ctx, "user1", "pixiv", "1", func(set *ImageSetMongo, index int) SourceWriteResult {
+			return markSourcePendingImageChangeInSet(set, index, now)
+		})
 	}
 
 	//each write recomputes the system tags only when it flips SourceMissing
@@ -144,18 +164,18 @@ func TestSourceWritersUpdateEverySet(t *testing.T) {
 		recomputed = 0
 	}
 
-	results, err := ApplySourceMetadataUpdate(ctx, "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: sourceDate}, now)
-	expectChanged("metadata update", results, err, true)
+	results, err := ApplySourceUpdate(ctx, "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: sourceDate}, nil, now)
+	expectChanged("metadata update", results, err, true, SourceMetadataUpdate)
 	expectRecomputed("metadata update", 0)
 	if a, b := loadSet(t, first), loadSet(t, second); a.Sources[0].Title != "New" || b.Sources[1].Title != "New" {
 		t.Errorf("stored titles %q and %q, want New in both sets", a.Sources[0].Title, b.Sources[1].Title)
 	}
 
 	results, err = MarkSourceMissing(ctx, "user1", "pixiv", "1", now)
-	expectChanged("missing mark", results, err, true)
+	expectChanged("missing mark", results, err, true, SourceMissingMark)
 	expectRecomputed("missing mark", 2)
 	results, err = MarkSourceMissing(ctx, "user1", "pixiv", "1", now)
-	expectChanged("repeated missing mark", results, err, false)
+	expectChanged("repeated missing mark", results, err, false, SourceMissingMark)
 	expectRecomputed("repeated missing mark", 0)
 
 	expectNotified := func(when string) {
@@ -177,16 +197,16 @@ func TestSourceWritersUpdateEverySet(t *testing.T) {
 	}
 
 	//the missing mark stored the state as "", which the pending mark's guard must still match
-	results, err = MarkSourcePendingImageChange(ctx, "user1", "pixiv", "1", now)
-	expectChanged("pending mark", results, err, true)
+	results, err = markPending()
+	expectChanged("pending mark", results, err, true, SourcePendingFlip)
 	expectRecomputed("pending mark on missing copies", 2)
 	expectNotified("pending mark")
 	if a, b := loadSet(t, first), loadSet(t, second); !a.Sources[0].Date.Equal(sourceDate) || !b.Sources[1].Date.Equal(sourceDate) {
 		t.Errorf("Dates %v and %v after the pending mark, want both left at %v", a.Sources[0].Date, b.Sources[1].Date, sourceDate)
 	}
 
-	results, err = MarkSourcePendingImageChange(ctx, "user1", "pixiv", "1", now)
-	expectChanged("repeated pending mark", results, err, false)
+	results, err = markPending()
+	expectChanged("repeated pending mark", results, err, false, SourceHeldStamp)
 	expectRecomputed("repeated pending mark", 0)
 	expectNotified("repeated pending mark")
 	for _, result := range results {
@@ -197,7 +217,7 @@ func TestSourceWritersUpdateEverySet(t *testing.T) {
 
 	//a missing mark still applies to a held copy, through the guard on the state it read
 	results, err = MarkSourceMissing(ctx, "user1", "pixiv", "1", now)
-	expectChanged("missing mark on held copies", results, err, true)
+	expectChanged("missing mark on held copies", results, err, true, SourceMissingMark)
 	expectRecomputed("missing mark on held copies", 2)
 	expectNotified("missing mark on held copies")
 	if a, b := loadSet(t, first), loadSet(t, second); a.Sources[0].ImageChangeState != ImageChangeNone || b.Sources[1].ImageChangeState != ImageChangeNone {
@@ -215,7 +235,7 @@ func TestSourceWriterFailureIsRetried(t *testing.T) {
 	)
 	update := SourceInfo{Name: "pixiv", SourceID: "1", Title: "New"}
 
-	results, err := ApplySourceMetadataUpdate(context.Background(), "user1", update, time.Now())
+	results, err := ApplySourceUpdate(context.Background(), "user1", update, nil, time.Now())
 	if err != nil || len(results) != 2 {
 		t.Fatalf("first call: %+v, %v; want a result for each set", results, err)
 	}
@@ -230,7 +250,7 @@ func TestSourceWriterFailureIsRetried(t *testing.T) {
 
 	//the next sync, once the failure is gone
 	Tagger = fakeTagger{}
-	results, err = ApplySourceMetadataUpdate(context.Background(), "user1", update, time.Now())
+	results, err = ApplySourceUpdate(context.Background(), "user1", update, nil, time.Now())
 	if err != nil || len(results) != 2 {
 		t.Fatalf("retry: %+v, %v; want a result for each set", results, err)
 	}
@@ -268,13 +288,13 @@ func TestSourceWriterUndoesCountsWhenItsWriteFails(t *testing.T) {
 		ImageSetMongo{ID: second, KscopeUserId: "user1", Sources: []SourceInfo{{Name: "pixiv", SourceID: "1", Title: "Old"}}},
 	)
 
-	results, err := ApplySourceMetadataUpdate(context.Background(), "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "New"}, time.Now())
+	results, err := ApplySourceUpdate(context.Background(), "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "New"}, nil, time.Now())
 	if err != nil || len(results) != 2 {
 		t.Fatalf("%+v, %v; want a result for each set", results, err)
 	}
 
-	if results[0].Err != nil || results[1].SetID != second || results[1].Err == nil {
-		t.Errorf("%+v, want the first set written and the second failed", results)
+	if results[0].Err != nil || results[1].SetID != second || results[1].Err == nil || results[1].Kind != SourceMetadataUpdate {
+		t.Errorf("%+v, want the first set written and the second's metadata update failed", results)
 	}
 
 	if len(undone) != 1 || undone[0].SourceName != second.Hex() {
@@ -360,17 +380,21 @@ func TestMetadataUpdateHoldsHeldCopies(t *testing.T) {
 		src := SourceInfo{Name: "pixiv", SourceID: "1", Title: "Old", Date: oldDate, Tags: []SourceTag{{Default: "cat"}}, LastChecked: checked, ImageChangeState: state}
 		return ImageSetMongo{ID: id, KscopeUserId: "user1", Title: "Old", Sources: []SourceInfo{src}}
 	}
-	insertSets(t, withCopy(free, ImageChangeNone, old), withCopy(pending, ImageChangePending, old), withCopy(declined, ImageChangeDeclined, time.Time{}))
+
+	//the free copy is dated like the update, so it stays a metadata update; the held ones are behind
+	update := SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: oldDate.Add(time.Hour), Tags: []SourceTag{{Default: "cat"}, {Default: "dog"}}}
+	freeSet := withCopy(free, ImageChangeNone, old)
+	freeSet.Sources[0].Date = update.Date
+	insertSets(t, freeSet, withCopy(pending, ImageChangePending, old), withCopy(declined, ImageChangeDeclined, time.Time{}))
 
 	checkedAt := time.Now().UTC().Truncate(time.Millisecond)
-	update := SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: oldDate.Add(time.Hour), Tags: []SourceTag{{Default: "cat"}, {Default: "dog"}}}
-	results, err := ApplySourceMetadataUpdate(context.Background(), "user1", update, checkedAt)
+	results, err := ApplySourceUpdate(context.Background(), "user1", update, nil, checkedAt)
 	if err != nil || len(results) != 3 {
 		t.Fatalf("%+v, %v; want a result for each set", results, err)
 	}
 
-	if r := results[0]; r.SetID != free || r.Err != nil || !r.Changed || r.Held != ImageChangeNone {
-		t.Errorf("free set: %+v, want changed and not held", r)
+	if r := results[0]; r.SetID != free || r.Err != nil || !r.Changed || r.Held != ImageChangeNone || r.Kind != SourceMetadataUpdate {
+		t.Errorf("free set: %+v, want a metadata update that changed it, not held", r)
 	}
 
 	if src := loadSet(t, free).Sources[0]; src.Title != "New" {
@@ -380,8 +404,8 @@ func TestMetadataUpdateHoldsHeldCopies(t *testing.T) {
 	expectHeld := func(i int, setID bson.ObjectID, state ImageChangeState, lastChecked time.Time) {
 
 		t.Helper()
-		if r := results[i]; r.SetID != setID || r.Err != nil || r.Changed || r.Held != state {
-			t.Errorf("%s set: %+v, want held by %s and not changed", state, r, state)
+		if r := results[i]; r.SetID != setID || r.Err != nil || r.Changed || r.Held != state || r.Kind != SourceHeldStamp {
+			t.Errorf("%s set: %+v, want a held stamp by %s that changed nothing", state, r, state)
 		}
 
 		src := loadSet(t, setID).Sources[0]
@@ -408,7 +432,7 @@ func TestMetadataUpdateReportsReturnedCopies(t *testing.T) {
 	}
 	insertSets(t, withCopy(returned, true), withCopy(present, false))
 
-	results, err := ApplySourceMetadataUpdate(context.Background(), "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "Same"}, time.Now())
+	results, err := ApplySourceUpdate(context.Background(), "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "Same"}, nil, time.Now())
 	if err != nil || len(results) != 2 {
 		t.Fatalf("%+v, %v; want a result for each set", results, err)
 	}
@@ -462,7 +486,9 @@ func TestMarkSourcePendingImageChange(t *testing.T) {
 	markOne := func(sourceID string) SourceWriteResult {
 
 		t.Helper()
-		results, err := MarkSourcePendingImageChange(ctx, "user1", "pixiv", sourceID, checkedAt)
+		results, err := writeEachSetHoldingSource(ctx, "user1", "pixiv", sourceID, func(set *ImageSetMongo, index int) SourceWriteResult {
+			return markSourcePendingImageChangeInSet(set, index, checkedAt)
+		})
 		if err != nil || len(results) != 1 {
 			t.Fatalf("pixiv/%s: %+v, %v; want one result", sourceID, results, err)
 		}
@@ -563,7 +589,7 @@ func TestSourceWriteGuardedOnState(t *testing.T) {
 	update := func(sourceID string) SourceWriteResult {
 
 		t.Helper()
-		results, err := ApplySourceMetadataUpdate(ctx, "user1", SourceInfo{Name: "pixiv", SourceID: sourceID, Title: "New"}, time.Now())
+		results, err := ApplySourceUpdate(ctx, "user1", SourceInfo{Name: "pixiv", SourceID: sourceID, Title: "New"}, nil, time.Now())
 		if err != nil || len(results) != 1 {
 			t.Fatalf("pixiv/%s: %+v, %v; want one result", sourceID, results, err)
 		}
@@ -588,5 +614,221 @@ func TestSourceWriteGuardedOnState(t *testing.T) {
 
 	if src := loadSet(t, blank).Sources[1]; src.Title != "New" {
 		t.Errorf("copy with \"\" stored: title %q, want New", src.Title)
+	}
+}
+
+func TestApplySourceUpdateDecidesEachSet(t *testing.T) {
+
+	useTestDatabase(t, fakeTagger{})
+	ctx := context.Background()
+
+	reordered, reorderedIDs := newCheckSet(checkDate, []string{"p2", "p1", "p3"}, nil)
+	reordered.Sources[0].SourceMissing = true
+	removed, removedIDs := newCheckSet(checkDate, []string{"p1", "q", "p2", "p3"}, nil)
+	attributed, attributedIDs := newCheckSet(checkDate, []string{"p1", "p3"}, []string{"p2"})
+	pended, _ := newCheckSet(checkDate, []string{"p1", "p2", "p3"}, nil)
+	held, _ := newCheckSet(checkDate, []string{"p1", "p2", "p3"}, nil)
+	held.Sources[0].ImageChangeState = ImageChangePending
+	current, _ := newCheckSet(serviceDate, []string{"p1", "p2", "p3"}, nil)
+	unfetched, unfetchedIDs := newCheckSet(checkDate, []string{"p1", "p2"}, []string{"x3"})
+	findImage(unfetched, unfetchedIDs["x3"]).PDQ = flipBits(pagePDQ("p3"), 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	zipped, _ := newCheckSet(zipDate, []string{"p1", "p2", "p3"}, nil)
+
+	sets := []*ImageSetMongo{reordered, removed, attributed, pended, held, current, unfetched, zipped}
+	for _, set := range sets {
+		insertSets(t, *set)
+	}
+
+	type outcome struct {
+		kind    SourceWriteKind
+		changed bool
+		held    ImageChangeState
+		err     error
+	}
+	expectResults := func(call string, results []SourceWriteResult, err error, want []outcome) {
+
+		t.Helper()
+		if err != nil || len(results) != len(want) {
+			t.Fatalf("%s: %+v, %v; want a result for each set", call, results, err)
+		}
+
+		for i, w := range want {
+			if r := results[i]; r.SetID != sets[i].ID || r.Kind != w.kind || r.Changed != w.changed || r.Held != w.held || !errors.Is(r.Err, w.err) {
+				t.Errorf("%s: set %d is %+v, want %+v", call, i, r, w)
+			}
+		}
+	}
+
+	expectCopy := func(when string, set *ImageSetMongo, attribution []bson.ObjectID, date time.Time, title string, state ImageChangeState, lastChecked time.Time) {
+
+		t.Helper()
+		src := loadSet(t, set.ID).Sources[0]
+		if !slices.Equal(src.AttributedTo, attribution) || !src.Date.Equal(date) || src.Title != title || src.ImageChangeState != state || !src.LastChecked.Equal(lastChecked) || src.SourceMissing {
+			t.Errorf("%s: set %s's copy %+v, want attribution %v, Date %v, title %s, state %q, LastChecked %v, not missing", when, set.ID.Hex(), src, attribution, date, title, state, lastChecked)
+		}
+	}
+
+	pages := &FetchedPages{Previews: previewsOf("p1", "p2", "p3"), Originals: map[int]PreparedImage{1: original("p2")}, FirstPageWidth: 100, FirstPageHeight: 200}
+	update := SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: serviceDate}
+	checkedAt := time.Now().UTC().Truncate(time.Millisecond)
+	results, err := ApplySourceUpdate(ctx, "user1", update, pages, checkedAt)
+	expectResults("with pages", results, err, []outcome{
+		{kind: SourceReorder, changed: true},
+		{kind: SourceRemoval, changed: true},
+		{kind: SourceAttribution, changed: true},
+		{kind: SourcePendingFlip, changed: true},
+		{kind: SourceHeldStamp, held: ImageChangePending},
+		{kind: SourceMetadataUpdate, changed: true},
+		{kind: SourceImageCheck, err: ErrSetChangedDuringSync},
+		{kind: SourceMetadataUpdate, changed: true},
+	})
+
+	expectCopy("reorder", reordered, idsOf(reorderedIDs, []string{"p1", "p2", "p3"}), serviceDate, "New", ImageChangeNone, checkedAt)
+	expectCopy("removal", removed, idsOf(removedIDs, []string{"p1", "p2", "p3", "q"}), serviceDate, "New", ImageChangeNone, checkedAt)
+	expectCopy("attribution", attributed, idsOf(attributedIDs, []string{"p1", "p2", "p3"}), serviceDate, "New", ImageChangeNone, checkedAt)
+	expectCopy("pending flip", pended, pended.Sources[0].AttributedTo, checkDate, "Old", ImageChangePending, checkedAt)
+	expectCopy("held", held, held.Sources[0].AttributedTo, checkDate, "Old", ImageChangePending, checkedAt)
+	expectCopy("current", current, current.Sources[0].AttributedTo, serviceDate, "New", ImageChangeNone, checkedAt)
+	expectCopy("unfetched original", unfetched, unfetched.Sources[0].AttributedTo, checkDate, "Old", ImageChangeNone, unfetched.Sources[0].LastChecked)
+	expectCopy("zip-dated baseline", zipped, zipped.Sources[0].AttributedTo, serviceDate, "New", ImageChangeNone, checkedAt)
+
+	for _, set := range []*ImageSetMongo{reordered, removed, attributed, current, zipped} {
+		if src := loadSet(t, set.ID).Sources[0]; !src.LastAppliedUpdate.Equal(checkedAt) {
+			t.Errorf("set %s: LastAppliedUpdate %v, want %v", set.ID.Hex(), src.LastAppliedUpdate, checkedAt)
+		}
+	}
+
+	if got := loadPendingUpdates(t); len(got) != 1 || got[0].Payload.SetID != pended.ID {
+		t.Errorf("notifications %+v, want one for the pending set", got)
+	}
+
+	//no pages: only the copy whose Date still moved needs them
+	results, err = ApplySourceUpdate(ctx, "user1", update, nil, time.Now())
+	expectResults("without pages", results, err, []outcome{
+		{kind: SourceMetadataUpdate},
+		{kind: SourceMetadataUpdate},
+		{kind: SourceMetadataUpdate},
+		{kind: SourceHeldStamp, held: ImageChangePending},
+		{kind: SourceHeldStamp, held: ImageChangePending},
+		{kind: SourceMetadataUpdate},
+		{kind: SourceImageCheck, err: ErrSetChangedDuringSync},
+		{kind: SourceMetadataUpdate},
+	})
+	expectCopy("unfetched original, no pages", unfetched, unfetched.Sources[0].AttributedTo, checkDate, "Old", ImageChangeNone, unfetched.Sources[0].LastChecked)
+}
+
+func TestApplySourceUpdateFailuresLeaveSetsUntouched(t *testing.T) {
+
+	ctx := context.Background()
+	processed := 0
+	var undone []TagCountChange
+	var moving *ImageSetMongo
+	tagger := fakeTagger{undone: &undone}
+	tagger.onProcess = func() {
+
+		processed++
+		//the source moves between the re-read and the write, so the guarded write matches nothing
+		if _, err := Collection.UpdateOne(ctx, bson.M{"_id": moving.ID}, bson.M{"$set": bson.M{"sources.0.source_id": "moved"}}); err != nil {
+			t.Errorf("moving the source: %v", err)
+		}
+	}
+	useTestDatabase(t, tagger)
+
+	//a stored attribution naming an image the set doesn't have
+	dangling, _ := newCheckSet(checkDate, []string{"p2", "p1", "p3"}, nil)
+	dangling.Sources[0].AttributedTo = append(dangling.Sources[0].AttributedTo, bson.NewObjectID())
+	moving, _ = newCheckSet(checkDate, []string{"p2", "p1", "p3"}, nil)
+	insertSets(t, *dangling, *moving)
+
+	pages := &FetchedPages{Previews: previewsOf("p1", "p2", "p3"), FirstPageWidth: 100, FirstPageHeight: 200}
+	update := SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: serviceDate}
+	results, err := ApplySourceUpdate(ctx, "user1", update, pages, time.Now())
+	if err != nil || len(results) != 2 {
+		t.Fatalf("%+v, %v; want a result for each set", results, err)
+	}
+
+	if r := results[0]; r.SetID != dangling.ID || r.Kind != SourceReorder || !errors.Is(r.Err, errBrokenAttribution) || r.Changed {
+		t.Errorf("set with a dangling attribution: %+v, want its reorder refused by the attribution check", r)
+	}
+
+	if r := results[1]; r.SetID != moving.ID || r.Kind != SourceReorder || r.Err == nil || r.Changed {
+		t.Errorf("set whose source moved: %+v, want its reorder failed", r)
+	}
+
+	if processed != 1 || len(undone) != 1 || undone[0].SourceName != moving.ID.Hex() {
+		t.Errorf("tags processed %d times, undone %+v; want only the moved set's counted and undone", processed, undone)
+	}
+
+	for _, set := range []*ImageSetMongo{dangling, moving} {
+		if src := loadSet(t, set.ID).Sources[0]; !slices.Equal(src.AttributedTo, set.Sources[0].AttributedTo) || src.Title != "Old" || !src.Date.Equal(checkDate) {
+			t.Errorf("set %s's copy %+v, want it as stored", set.ID.Hex(), src)
+		}
+	}
+}
+
+func TestWriteEachSetHoldingSourceRereads(t *testing.T) {
+
+	useTestDatabase(t, fakeTagger{})
+	ctx := context.Background()
+	first, second, third := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
+	holding := func(id bson.ObjectID, sourceID string) ImageSetMongo {
+		return ImageSetMongo{ID: id, KscopeUserId: "user1", Sources: []SourceInfo{{Name: "pixiv", SourceID: sourceID}}}
+	}
+
+	//newest first, so only the sort puts them in _id order
+	insertSets(t, holding(third, "1"), holding(second, "1"), holding(first, "1"))
+
+	var called []bson.ObjectID
+	record := func(set *ImageSetMongo, _ int) SourceWriteResult {
+		called = append(called, set.ID)
+		return SourceWriteResult{SetID: set.ID}
+	}
+
+	expectCalled := func(when string, results []SourceWriteResult, err error, want []bson.ObjectID) {
+
+		t.Helper()
+		if err != nil || !slices.Equal(called, want) || len(results) != len(want) {
+			t.Errorf("%s: called for %v with results %+v, %v; want %v", when, called, results, err, want)
+		}
+		called = nil
+	}
+
+	results, err := writeEachSetHoldingSource(ctx, "user1", "pixiv", "1", record)
+	expectCalled("every set", results, err, []bson.ObjectID{first, second, third})
+
+	//handling the first set deletes the third and takes the source off the second
+	results, err = writeEachSetHoldingSource(ctx, "user1", "pixiv", "1", func(set *ImageSetMongo, index int) SourceWriteResult {
+
+		if set.ID == first {
+			if _, err := Collection.DeleteOne(ctx, bson.M{"_id": third}); err != nil {
+				t.Errorf("deleting the third set: %v", err)
+			}
+
+			if _, err := Collection.UpdateOne(ctx, bson.M{"_id": second}, bson.M{"$set": bson.M{"sources": bson.A{bson.M{"name": "zipsrc", "source_id": "9"}}}}); err != nil {
+				t.Errorf("taking the source off the second set: %v", err)
+			}
+		}
+		return record(set, index)
+	})
+	expectCalled("sets changed before their turn", results, err, []bson.ObjectID{first})
+
+	//a set whose images can't be decoded fails its re-read, and the loop carries on
+	broken, readable := bson.NewObjectID(), bson.NewObjectID()
+	if _, err := Collection.InsertOne(ctx, bson.M{"_id": broken, "kscope_userid": "user1", "sources": bson.A{bson.M{"name": "pixiv", "source_id": "2"}}, "images": "broken"}); err != nil {
+		t.Fatal(err)
+	}
+	insertSets(t, holding(readable, "2"))
+
+	results, err = writeEachSetHoldingSource(ctx, "user1", "pixiv", "2", record)
+	if err != nil || len(results) != 2 || !slices.Equal(called, []bson.ObjectID{readable}) {
+		t.Fatalf("unreadable set: called for %v with results %+v, %v; want the readable set called and a result each", called, results, err)
+	}
+
+	if r := results[0]; r.SetID != broken || r.Kind != SourceReread || r.Err == nil {
+		t.Errorf("unreadable set: %+v, want a failed re-read", r)
+	}
+
+	if _, err := writeEachSetHoldingSource(ctx, "user1", "pixiv", "3", record); !errors.Is(err, ErrSourceNotStored) {
+		t.Errorf("a source no set holds: %v, want ErrSourceNotStored", err)
 	}
 }

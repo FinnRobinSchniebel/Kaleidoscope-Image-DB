@@ -415,26 +415,29 @@ func markPixivSourceMissing(ctx context.Context, userId string, illustID uint64)
 	case err != nil:
 		return []notification.ItemResult{notification.FailedItem(userId, sourceID, bson.NilObjectID, fmt.Errorf("%w: marking missing: %w", notification.ErrLibraryAccess, err))}
 	}
-	return reportPixivSourceWrites(userId, sourceID, results, notification.ItemMissing, "marking missing")
+	return reportPixivSourceWrites(userId, sourceID, results)
 }
 
 // reportPixivSourceWrites turns a by-source writer's per-set results into report
-// items: a failed set is Failed, a held one Skipped and a changed one
-// changedKind, each with its set ID; action names the write in a failure. If no
-// set gave an item, the work is one Unchanged item.
-func reportPixivSourceWrites(userId, sourceID string, results []imageset.SourceWriteResult, changedKind notification.ItemKind, action string) []notification.ItemResult {
+// items, each with its set ID: a set that changed since the sync read it is
+// Skipped, a failed one Failed, a held one Skipped and a changed one reported by
+// its kind (reportChangedPixivCopy). If no set gave an item, the work is one
+// Unchanged item.
+func reportPixivSourceWrites(userId, sourceID string, results []imageset.SourceWriteResult) []notification.ItemResult {
 
 	var items []notification.ItemResult
 	for _, result := range results {
 
 		switch {
+		case errors.Is(result.Err, imageset.ErrSetChangedDuringSync):
+			items = append(items, notification.ItemResult{Kind: notification.ItemSkipped, Ref: sourceID, SetID: result.SetID, Reason: imageset.ErrSetChangedDuringSync.Error()})
 		case result.Err != nil:
-			err := fmt.Errorf("%w: %s: %w", notification.ErrLibraryAccess, action, result.Err)
+			err := fmt.Errorf("%w: %s: %w", notification.ErrLibraryAccess, result.Kind, result.Err)
 			items = append(items, notification.FailedItem(userId, sourceID, result.SetID, err))
 		case result.Held != imageset.ImageChangeNone:
 			items = append(items, reportHeldPixivCopy(sourceID, result.SetID, result.Held))
 		case result.Changed:
-			items = append(items, notification.ItemResult{Kind: changedKind, Ref: sourceID, SetID: result.SetID})
+			items = append(items, reportChangedPixivCopy(sourceID, result))
 		}
 	}
 
@@ -442,6 +445,26 @@ func reportPixivSourceWrites(userId, sourceID string, results []imageset.SourceW
 		return []notification.ItemResult{{Kind: notification.ItemUnchanged, Ref: sourceID}}
 	}
 	return items
+}
+
+// reportChangedPixivCopy is the item for a set whose copy of sourceID the
+// writer changed, by the kind of write.
+func reportChangedPixivCopy(sourceID string, result imageset.SourceWriteResult) notification.ItemResult {
+
+	item := notification.ItemResult{Kind: notification.ItemUpdated, Ref: sourceID, SetID: result.SetID}
+	switch result.Kind {
+	case imageset.SourceMissingMark:
+		item.Kind = notification.ItemMissing
+	case imageset.SourcePendingFlip:
+		item.Kind, item.Reason = notification.ItemPending, "the images changed at the source"
+	case imageset.SourceReorder:
+		item.Reason = "the pages were reordered at the source"
+	case imageset.SourceRemoval:
+		item.Reason = "pages were removed at the source"
+	case imageset.SourceAttribution:
+		item.Reason = "matched pages already in the set"
+	}
+	return item
 }
 
 // reportHeldPixivCopy is the Skipped item for setID, whose copy of sourceID is
@@ -644,11 +667,11 @@ func readPixivAuthor(illust *pixivmodel.Illust) (name, id string) {
 func applyPixivSourceUpdate(ctx context.Context, userId string, illust *pixivmodel.Illust, isPrivate bool) []notification.ItemResult {
 	sourceID := strconv.FormatUint(illust.ID, 10)
 
-	// Image changes aren't checked yet: a changed CreateDate only updates the metadata.
-	results, err := imageset.ApplySourceMetadataUpdate(ctx, userId, pixivSourceInfo(illust, isPrivate), time.Now())
+	// Image changes aren't checked here yet: with no pages, a copy whose CreateDate moved is skipped.
+	results, err := imageset.ApplySourceUpdate(ctx, userId, pixivSourceInfo(illust, isPrivate), nil, time.Now())
 	switch {
 	case errors.Is(err, imageset.ErrSourceNotStored):
-		return []notification.ItemResult{{Kind: notification.ItemSkipped, Ref: sourceID, Reason: "the set changed during the sync"}}
+		return []notification.ItemResult{{Kind: notification.ItemSkipped, Ref: sourceID, Reason: imageset.ErrSetChangedDuringSync.Error()}}
 	case errors.Is(err, imageset.ErrLibraryBusy):
 		return []notification.ItemResult{{Kind: notification.ItemSkipped, Ref: sourceID, Reason: imageset.ErrLibraryBusy.Error()}}
 	case errors.Is(err, context.Canceled):
@@ -657,7 +680,7 @@ func applyPixivSourceUpdate(ctx context.Context, userId string, illust *pixivmod
 		return []notification.ItemResult{notification.FailedItem(userId, sourceID, bson.NilObjectID, fmt.Errorf("%w: applying metadata update: %w", notification.ErrLibraryAccess, err))}
 	}
 
-	items := reportPixivSourceWrites(userId, sourceID, results, notification.ItemUpdated, "applying metadata update")
+	items := reportPixivSourceWrites(userId, sourceID, results)
 	if slices.ContainsFunc(items, func(item notification.ItemResult) bool { return item.Kind == notification.ItemUpdated }) {
 		log.Printf("pixiv: updated illust %d (%q)", illust.ID, illust.Title)
 	}
