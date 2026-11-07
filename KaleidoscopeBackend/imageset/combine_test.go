@@ -84,9 +84,13 @@ func TestMakeAutoMergePlan(t *testing.T) {
 	survivor := &ImageSetMongo{ID: bson.NewObjectID(), Description: "one", Image: []ImageInfo{imgA, imgB}}
 	absorbed := &ImageSetMongo{ID: bson.NewObjectID(), Description: "two", Image: []ImageInfo{copyOfA, imgC, repeatOfC, imgD}}
 
-	plan, err := makeAutoMergePlan(survivor, absorbed)
+	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor, scenario: scenarioAddition}, absorbed)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	if plan.scenario != scenarioAddition {
+		t.Errorf("scenario = %q, want the target's addition", plan.scenario)
 	}
 
 	freshC, freshD := plan.idMap[imgC.ID], plan.idMap[imgD.ID]
@@ -111,7 +115,7 @@ func TestMakeAutoMergePlan(t *testing.T) {
 		t.Errorf("a set changed: survivor %+v, absorbed %+v", survivor, absorbed)
 	}
 
-	same, err := makeAutoMergePlan(&ImageSetMongo{Description: "same"}, &ImageSetMongo{Description: "same"})
+	same, err := makeAutoMergePlan(mergeCandidate{set: &ImageSetMongo{Description: "same"}}, &ImageSetMongo{Description: "same"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +202,7 @@ func TestMergeSourcesInto(t *testing.T) {
 		{Name: "other", SourceID: "601", Description: "other text", Tags: []SourceTag{{Default: "cat"}}, AttributedTo: []bson.ObjectID{imgC}},
 	}
 
-	indexes := mergeSourcesInto(survivor, absorbed, idMap)
+	indexes := mergeSourcesInto(mergePlan{survivor: survivor, absorbed: &ImageSetMongo{Sources: absorbed}, idMap: idMap})
 	if !slices.Equal(indexes, []int{0, 1}) {
 		t.Fatalf("indexes = %v, want [0 1]", indexes)
 	}
@@ -225,7 +229,7 @@ func TestMergeSourcesInto(t *testing.T) {
 		Title:   "Old",
 		Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "Old", AttributedTo: []bson.ObjectID{imgA}, LastChecked: later, Date: survivorDate}},
 	}
-	mergeSourcesInto(checked, []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "New", AttributedTo: []bson.ObjectID{imgC}, Date: absorbedDate}}, idMap)
+	mergeSourcesInto(mergePlan{survivor: checked, absorbed: &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "New", AttributedTo: []bson.ObjectID{imgC}, Date: absorbedDate}}}, idMap: idMap})
 	if src := checked.Sources[0]; src.Title != "Old" || checked.Title != "Old" || !src.Date.Equal(survivorDate) {
 		t.Errorf("unchecked absorbed copy: source %+v, set title %q; want the survivor's title and Date kept", src, checked.Title)
 	}
@@ -239,14 +243,43 @@ func TestMergeSourcesInto(t *testing.T) {
 	copyOfP1, copyOfP2 := bson.NewObjectID(), bson.NewObjectID()
 	pageMap := map[bson.ObjectID]bson.ObjectID{copyOfP1: p1, copyOfP2: p2, p3: p3}
 	edited := &ImageSetMongo{Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{p1, p2, p4}, LastChecked: later, Date: absorbedDate}}}
-	mergeSourcesInto(edited, []SourceInfo{{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{copyOfP1, copyOfP2, p3}, LastChecked: later, Date: survivorDate}}, pageMap)
+	mergeSourcesInto(mergePlan{survivor: edited, absorbed: &ImageSetMongo{Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{copyOfP1, copyOfP2, p3}, LastChecked: later, Date: survivorDate}}}, idMap: pageMap})
 	if got, want := edited.Sources[0].AttributedTo, []bson.ObjectID{p1, p2, p4, p3}; !slices.Equal(got, want) {
 		t.Errorf("survivor's newer copy: attribution %v, want its order first and the removed page last %v", got, want)
 	}
 
 	uploads := &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imgA}}}}
-	if got := mergeSourcesInto(uploads, []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imgC}}}, idMap); !slices.Equal(got, []int{0}) {
+	if got := mergeSourcesInto(mergePlan{survivor: uploads, absorbed: &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imgC}}}}, idMap: idMap}); !slices.Equal(got, []int{0}) {
 		t.Errorf("ID-less upload: indexes %v, want it collapsed into the existing upload source", got)
+	}
+
+	//every copy's state follows the scenario: a pending copy collapsing with a never-checked none one, a survivor-only declined copy, an absorbed-only pending one
+	shared, survivorOnly, absorbedOnly := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
+	states := []struct {
+		scenario                              mergeScenario
+		collapsed, survivorCopy, absorbedCopy ImageChangeState
+	}{
+		{scenarioLess, ImageChangePending, ImageChangeDeclined, ImageChangeNone},
+		{scenarioAddition, ImageChangeNone, ImageChangeNone, ImageChangePending},
+	}
+
+	for _, tc := range states {
+
+		held := &ImageSetMongo{Sources: []SourceInfo{
+			{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{shared}, LastChecked: later, ImageChangeState: ImageChangePending},
+			{Name: "fanbox", SourceID: "8", AttributedTo: []bson.ObjectID{survivorOnly}, LastChecked: later, ImageChangeState: ImageChangeDeclined},
+		}}
+		incoming := &ImageSetMongo{Sources: []SourceInfo{
+			{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{shared}},
+			{Name: "zipsrc", SourceID: "9", AttributedTo: []bson.ObjectID{absorbedOnly}, LastChecked: later, ImageChangeState: ImageChangePending},
+		}}
+		kept := map[bson.ObjectID]bson.ObjectID{shared: shared, absorbedOnly: absorbedOnly}
+
+		mergeSourcesInto(mergePlan{survivor: held, absorbed: incoming, idMap: kept, scenario: tc.scenario})
+		got := []ImageChangeState{held.Sources[0].ImageChangeState, held.Sources[1].ImageChangeState, held.Sources[2].ImageChangeState}
+		if want := []ImageChangeState{tc.collapsed, tc.survivorCopy, tc.absorbedCopy}; !slices.Equal(got, want) {
+			t.Errorf("%s: states (collapsed, survivor-only, absorbed-only) %q, want %q", tc.scenario, got, want)
+		}
 	}
 }
 
@@ -285,10 +318,10 @@ func TestCollapseMergedSourceBookkeeping(t *testing.T) {
 	winner := SourceInfo{LastChecked: t2, Date: DayOnlyDate(exact), ImageChangeState: ImageChangePending, LastImageUpdate: t1, LastAppliedUpdate: t2}
 	loser := SourceInfo{LastChecked: t1, Date: exact, ImageChangeState: ImageChangeDeclined, LastImageUpdate: t2, LastAppliedUpdate: t1}
 
-	var kept SourceInfo
+	kept := SourceInfo{ImageChangeState: ImageChangePending}
 	collapseMergedSourceBookkeeping(&kept, winner, loser)
-	if !kept.LastChecked.Equal(t2) || kept.ImageChangeState != ImageChangeNone {
-		t.Errorf("kept %+v: want the winner's LastChecked and the state reset to none", kept)
+	if !kept.LastChecked.Equal(t2) || kept.ImageChangeState != ImageChangePending {
+		t.Errorf("kept %+v: want the winner's LastChecked and the state left to mergeSourcesInto", kept)
 	}
 
 	if !kept.Date.Equal(exact) {
@@ -321,6 +354,44 @@ func TestCollapseMergedSourceBookkeeping(t *testing.T) {
 			SourceInfo{SourceMissing: tc.loserMissing, LastChecked: tc.loserChecked})
 		if kept.SourceMissing != tc.want {
 			t.Errorf("%s: SourceMissing = %t, want %t", tc.name, kept.SourceMissing, tc.want)
+		}
+	}
+}
+
+func TestDecideCombinedImageChangeState(t *testing.T) {
+
+	none, pending, declined := ImageChangeNone, ImageChangePending, ImageChangeDeclined
+	copyWith := func(state ImageChangeState) *SourceInfo {
+		return &SourceInfo{Name: "pixiv", SourceID: "7", ImageChangeState: state}
+	}
+
+	//want is the state after an addition, a less and a duplicate; a nil copy is a set without the source
+	tests := []struct {
+		name               string
+		survivor, absorbed *SourceInfo
+		want               [3]ImageChangeState
+	}{
+		{"survivor pending, absorbed none", copyWith(pending), copyWith(none), [3]ImageChangeState{none, pending, pending}},
+		{"survivor none, absorbed pending", copyWith(none), copyWith(pending), [3]ImageChangeState{pending, none, none}},
+		{"survivor declined, absorbed pending", copyWith(declined), copyWith(pending), [3]ImageChangeState{pending, declined, declined}},
+		{"survivor pending, absorbed declined", copyWith(pending), copyWith(declined), [3]ImageChangeState{declined, pending, pending}},
+		{"only absorbed, declined", nil, copyWith(declined), [3]ImageChangeState{declined, none, none}},
+		{"only survivor, declined", copyWith(declined), nil, [3]ImageChangeState{none, declined, declined}},
+	}
+
+	scenarios := [3]mergeScenario{scenarioAddition, scenarioLess, scenarioDuplicate}
+	for _, tc := range tests {
+		for i, scenario := range scenarios {
+			if got := decideCombinedImageChangeState(tc.survivor, tc.absorbed, scenario); got != tc.want[i] {
+				t.Errorf("%s, %s: state %q, want %q", tc.name, scenario, got, tc.want[i])
+			}
+		}
+	}
+
+	//a manual merge has no automatic scenario, and resets every held copy
+	for _, scenario := range []mergeScenario{scenarioPartial, ""} {
+		if got := decideCombinedImageChangeState(copyWith(pending), copyWith(pending), scenario); got != none {
+			t.Errorf("scenario %q: state %q, want none", scenario, got)
 		}
 	}
 }
@@ -395,7 +466,7 @@ func twoSetPlan(t *testing.T, attributed []bson.ObjectID) mergePlan {
 		t.Fatal(err)
 	}
 
-	plan, err := makeAutoMergePlan(survivor, absorbed)
+	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor}, absorbed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +482,7 @@ func TestApplyMergePlanRejectsBadPlans(t *testing.T) {
 	missingImage := twoSetPlan(t, nil)
 	missingImage.order = missingImage.order[:1]
 	self := twoSetPlan(t, nil)
-	self, err := makeAutoMergePlan(self.survivor, self.survivor)
+	self, err := makeAutoMergePlan(mergeCandidate{set: self.survivor}, self.survivor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +522,7 @@ func TestApplyMergePlanRejectsBadPlans(t *testing.T) {
 		}
 	}
 
-	plan, err := makeAutoMergePlan(survivor, absorbed)
+	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor}, absorbed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +580,7 @@ func TestApplyMergePlanAppliesPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := makeAutoMergePlan(survivor, absorbed)
+	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor}, absorbed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +622,7 @@ func TestApplyMergePlanAppliesPlan(t *testing.T) {
 		Sources: []SourceInfo{{Name: "a", SourceID: "1", AttributedTo: []bson.ObjectID{imgA.ID}}}}
 	absorbed = &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: "user1", Path: folder, Image: []ImageInfo{imgC},
 		Sources: []SourceInfo{{Name: "b", SourceID: "2", AttributedTo: []bson.ObjectID{imgC.ID}}}}
-	if plan, err = makeAutoMergePlan(survivor, absorbed); err != nil {
+	if plan, err = makeAutoMergePlan(mergeCandidate{set: survivor}, absorbed); err != nil {
 		t.Fatal(err)
 	}
 

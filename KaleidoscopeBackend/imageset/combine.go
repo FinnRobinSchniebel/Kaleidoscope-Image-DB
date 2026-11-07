@@ -22,6 +22,7 @@ type mergePlan struct {
 	idMap              map[bson.ObjectID]bson.ObjectID //absorbed image ID to the ID it's kept under
 	copiedFrom         map[bson.ObjectID]bson.ObjectID //a fresh-ID copy to the absorbed image it copies
 	description        string
+	scenario           mergeScenario //absorbed's images against survivor's; decides whose image-change states survive
 }
 
 // orderedImages returns the survivor's final image entries in plan.order, with
@@ -71,7 +72,7 @@ func mergeStoredSetIntoTargets(userID, ref string, set *ImageSetMongo, targets [
 	for _, target := range targets {
 
 		var imagesAdded, sourcesAdded bool
-		plan, err := makeAutoMergePlan(target.set, set)
+		plan, err := makeAutoMergePlan(target, set)
 		if err == nil {
 			imagesAdded, sourcesAdded, err = applyMergePlan(userID, plan)
 		}
@@ -96,12 +97,14 @@ func mergeStoredSetIntoTargets(userID, ref string, set *ImageSetMongo, targets [
 	return items, outcomes, true
 }
 
-// makeAutoMergePlan makes the automatic merge's decisions:
+// makeAutoMergePlan makes the automatic merge's decisions for absorbed going
+// into target, the survivor as classified against absorbed's images:
 // collapseMergedSetImages' order (kept absorbed images become fresh-ID copies),
-// an image inactive only when every copy of it was, and the descriptions joined
-// when they differ. Changes neither set.
-func makeAutoMergePlan(survivor, absorbed *ImageSetMongo) (mergePlan, error) {
+// an image inactive only when every copy of it was, the descriptions joined when
+// they differ, and the target's scenario. Changes neither set.
+func makeAutoMergePlan(target mergeCandidate, absorbed *ImageSetMongo) (mergePlan, error) {
 
+	survivor := target.set
 	images, idMap, err := collapseMergedSetImages(survivor, absorbed)
 	if err != nil {
 		return mergePlan{}, err
@@ -135,6 +138,7 @@ func makeAutoMergePlan(survivor, absorbed *ImageSetMongo) (mergePlan, error) {
 		idMap:       idMap,
 		copiedFrom:  copiedFrom,
 		description: survivor.Description,
+		scenario:    target.scenario,
 	}
 	for i, img := range images {
 
@@ -188,7 +192,7 @@ func applyMergePlan(userID string, plan mergePlan) (imagesAdded, sourcesAdded bo
 	}
 	survivor.Image = images
 	survivor.Description = plan.description
-	indexes := mergeSourcesInto(survivor, absorbed.Sources, plan.idMap)
+	indexes := mergeSourcesInto(plan)
 	mergeSetFields(survivor, absorbed)
 
 	if err := survivor.checkAttribution(); err != nil {
@@ -373,15 +377,20 @@ func collapseMergedSetImages(survivor, absorbed *ImageSetMongo) (images []ImageI
 	return placeMergedImages(survivor.Image, match, keeperOf, added), idMap, nil
 }
 
-// mergeSourcesInto merges absorbed sources into survivor in memory, with their
-// attribution remapped through idMap and deduped. The same source collapses
-// into survivor's copy (attribution unioned with the winning copy's order
-// first, metadata from the absorbed copy only when doesIncomingSourceInfoWin,
-// bookkeeping by collapseMergedSourceBookkeeping); any other is appended with
-// no tags. Returns each absorbed source's index in survivor.Sources, where the
-// caller applies its tags with ProcessSourceTags.
-func mergeSourcesInto(survivor *ImageSetMongo, absorbed []SourceInfo, idMap map[bson.ObjectID]bson.ObjectID) []int {
+// mergeSourcesInto merges plan.absorbed's sources into plan.survivor in memory,
+// with their attribution remapped through plan.idMap and deduped. The same
+// source collapses into the survivor's copy (attribution unioned with the
+// winning copy's order first, metadata from the absorbed copy only when
+// doesIncomingSourceInfoWin, bookkeeping by collapseMergedSourceBookkeeping); any
+// other is appended with no tags. Every copy's image-change state then follows
+// plan.scenario (decideCombinedImageChangeState). Returns each absorbed source's
+// index in survivor.Sources, where the caller applies its tags with
+// ProcessSourceTags.
+func mergeSourcesInto(plan mergePlan) []int {
 
+	survivor, absorbed := plan.survivor, plan.absorbed.Sources
+	survivorSources := len(survivor.Sources)
+	collapsed := make(map[int]bool, len(absorbed))
 	indexes := make([]int, len(absorbed))
 	for a, source := range absorbed {
 
@@ -389,7 +398,7 @@ func mergeSourcesInto(survivor *ImageSetMongo, absorbed []SourceInfo, idMap map[
 		seen := make(map[bson.ObjectID]bool, len(source.AttributedTo))
 		for _, id := range source.AttributedTo {
 
-			kept, mapped := idMap[id]
+			kept, mapped := plan.idMap[id]
 			if !mapped {
 				kept = id //not an absorbed image; checkAttribution rejects the result
 			}
@@ -411,6 +420,7 @@ func mergeSourcesInto(survivor *ImageSetMongo, absorbed []SourceInfo, idMap map[
 
 		if index == -1 {
 			source.Tags = nil
+			source.ImageChangeState = decideCombinedImageChangeState(nil, &source, plan.scenario)
 			survivor.Sources = append(survivor.Sources, source)
 			indexes[a] = len(survivor.Sources) - 1
 			continue
@@ -425,7 +435,15 @@ func mergeSourcesInto(survivor *ImageSetMongo, absorbed []SourceInfo, idMap map[
 
 		survivor.Sources[index].AttributedTo = mergeAttribution(loser.AttributedTo, winner.AttributedTo)
 		collapseMergedSourceBookkeeping(&survivor.Sources[index], winner, loser)
+		survivor.Sources[index].ImageChangeState = decideCombinedImageChangeState(&survivorBefore, &source, plan.scenario)
+		collapsed[index] = true
 		indexes[a] = index
+	}
+
+	for i := range survivorSources {
+		if !collapsed[i] {
+			survivor.Sources[i].ImageChangeState = decideCombinedImageChangeState(&survivor.Sources[i], nil, plan.scenario)
+		}
 	}
 
 	deriveAuthors(survivor)
@@ -461,7 +479,6 @@ func collapseMergedSourceBookkeeping(kept *SourceInfo, winner, loser SourceInfo)
 
 	kept.Date = mergeSourceDate(loser.Date, winner.Date)
 	kept.LastChecked = winner.LastChecked
-	kept.ImageChangeState = ImageChangeNone
 
 	// not missing wins, but an unchecked loser doesn't count (it never beats a checked winner)
 	kept.SourceMissing = winner.SourceMissing && (loser.SourceMissing || loser.LastChecked.IsZero())
@@ -475,6 +492,26 @@ func collapseMergedSourceBookkeeping(kept *SourceInfo, winner, loser SourceInfo)
 	if loser.LastAppliedUpdate.After(kept.LastAppliedUpdate) {
 		kept.LastAppliedUpdate = loser.LastAppliedUpdate
 	}
+}
+
+// decideCombinedImageChangeState returns one source's image-change state after a
+// combine: the kept copy's, the absorbed set's in an addition and the survivor's
+// in a less or duplicate. A nil copy (a set without the source) and any other
+// scenario, such as a manual merge's zero one, give none.
+func decideCombinedImageChangeState(survivor, absorbed *SourceInfo, scenario mergeScenario) ImageChangeState {
+
+	var kept *SourceInfo
+	switch scenario {
+	case scenarioAddition:
+		kept = absorbed
+	case scenarioLess, scenarioDuplicate:
+		kept = survivor
+	}
+
+	if kept == nil {
+		return ImageChangeNone
+	}
+	return kept.ImageChangeState
 }
 
 // mergeSetFields takes absorbed's set-level fields into survivor: an empty Itype

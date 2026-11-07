@@ -2,7 +2,9 @@ package imageset
 
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
+	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -188,5 +190,71 @@ func TestMergeIntoSetUnchanged(t *testing.T) {
 	item, imagesAdded, sourceAdded := mergeIntoSet("user1", "group", incoming, prepared, match)
 	if item.Kind != notification.ItemUnchanged || imagesAdded || sourceAdded {
 		t.Errorf("item = %+v, imagesAdded %t, sourceAdded %t; want unchanged with nothing added", item, imagesAdded, sourceAdded)
+	}
+}
+
+func TestMergeIntoSetResetsHeldCopiesOnAddition(t *testing.T) {
+
+	previous, volume := Tagger, BackendVolumeLocation
+	BackendVolumeLocation = t.TempDir()
+	defer func() { Tagger, BackendVolumeLocation = previous, volume }()
+	if err := os.MkdirAll(tempDir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	//ProcessSourceTags always runs, so failing it stops each merge before the database
+	Tagger = fakeTagger{processErr: errors.New("stop before the database")}
+	newPage := preparedWithPixels(3)
+	newPage.Media, newPage.Format = writeTestFile(t, "new.png", []byte("pixels")), "png"
+
+	checked := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	heldDate, zipDate := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name     string
+		scenario mergeScenario
+		new      bool
+		want     []ImageChangeState
+	}{
+		{"addition", scenarioAddition, true, []ImageChangeState{ImageChangeNone, ImageChangeNone}},
+		{"less", scenarioLess, false, []ImageChangeState{ImageChangePending, ImageChangeDeclined}},
+	}
+
+	for _, tc := range tests {
+
+		folder := filepath.Join(BackendVolumeLocation, tc.name) + "/"
+		if err := os.MkdirAll(folder, 0700); err != nil {
+			t.Fatal(err)
+		}
+
+		imageA, imageB := bson.NewObjectID(), bson.NewObjectID()
+		target := &ImageSetMongo{
+			ID:    bson.NewObjectID(),
+			Path:  folder,
+			Image: []ImageInfo{{ID: imageA}, {ID: imageB}},
+			Sources: []SourceInfo{
+				{Name: "zipsrc", SourceID: "501", AttributedTo: []bson.ObjectID{imageA, imageB}, LastChecked: checked, Date: heldDate, ImageChangeState: ImageChangePending},
+				{Name: "other", SourceID: "601", AttributedTo: []bson.ObjectID{imageA}, ImageChangeState: ImageChangeDeclined},
+			},
+		}
+		incoming := &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Date: zipDate}}}
+		prepared := []PreparedImage{preparedWithPixels(1)}
+		match := mergeCandidate{set: target, scenario: tc.scenario, exactOf: [][]bson.ObjectID{{imageA}}}
+		if tc.new {
+			prepared, match.exactOf = append(prepared, preparedWithPixels(2), newPage), [][]bson.ObjectID{{imageA}, {imageB}, nil}
+		}
+
+		if item, _, _ := mergeIntoSet("user1", "group", incoming, prepared, match); item.Kind != notification.ItemFailed {
+			t.Fatalf("%s: item %+v, want the failed tag step", tc.name, item)
+		}
+
+		//the target is never restored, so it shows what the write would have stored
+		got := []ImageChangeState{target.Sources[0].ImageChangeState, target.Sources[1].ImageChangeState}
+		if !slices.Equal(got, tc.want) || !target.Sources[0].Date.Equal(heldDate) {
+			t.Errorf("%s: states %q, held copy's Date %v; want %q and its Date kept", tc.name, got, target.Sources[0].Date, tc.want)
+		}
+
+		if entries, _ := os.ReadDir(folder); len(entries) != 0 {
+			t.Errorf("%s: the failed merge left %d files behind", tc.name, len(entries))
+		}
 	}
 }

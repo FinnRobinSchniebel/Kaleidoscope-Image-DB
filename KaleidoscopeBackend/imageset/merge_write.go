@@ -59,9 +59,20 @@ func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.Obj
 	return len(target.Sources) - 1, true
 }
 
+// resetHeldSourceCopies sets every pending or declined copy on set back to none,
+// for a set that gained images: a hold only covers the images its check saw.
+// Each copy's held Date is left alone, so the next sync checks it again.
+func resetHeldSourceCopies(set *ImageSetMongo) {
+
+	for i := range set.Sources {
+		set.Sources[i].ImageChangeState = ImageChangeNone
+	}
+}
+
 // mergeIntoSet writes incoming into match's set (a duplicate, addition or less
-// candidate): an addition inserts its new images, and incoming's source is
-// attached to the images it covers. Nothing is written before checkAttribution,
+// candidate): an addition inserts its new images and resets the set's held
+// copies (resetHeldSourceCopies), and incoming's source is attached to the
+// images it covers. Nothing is written before checkAttribution,
 // and a failure removes the new files and undoes the recorded tag counts.
 // imagesAdded (the set needs checking in turn) and sourceAdded (a source new to
 // the set) are only reported for a write that landed. The caller holds
@@ -82,6 +93,11 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 		target.Image = placeMergedImages(target.Image, match, keeperOf, added)
 	}
 	index, isNew := attachIncomingSource(target, incoming, findMergedAttributionImageIDs(match, keeperOf, added))
+
+	//after the attach, which keeps a held copy's Date
+	if len(added) > 0 {
+		resetHeldSourceCopies(target)
+	}
 
 	if err := target.checkAttribution(); err != nil {
 		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false, false
