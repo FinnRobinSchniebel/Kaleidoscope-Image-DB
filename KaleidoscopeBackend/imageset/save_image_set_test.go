@@ -56,7 +56,7 @@ func TestPrepareImages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prepared, err := prepareImages([]MediaSource{DiskSource{Path: pngPath}, DiskSource{Path: gifPath}, DiskSource{Path: jpegPath}})
+	prepared, err := PrepareImages([]MediaSource{DiskSource{Path: pngPath}, DiskSource{Path: gifPath}, DiskSource{Path: jpegPath}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,12 +114,12 @@ func TestPrepareImages(t *testing.T) {
 	if err := os.WriteFile(notAnImage, []byte("not an image"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := prepareImages([]MediaSource{DiskSource{Path: notAnImage}}); err == nil {
+	if _, err := PrepareImages([]MediaSource{DiskSource{Path: notAnImage}}); err == nil {
 		t.Error("an unreadable file prepared without an error")
 	}
 
 	//the header check runs first, so an oversized claim fails before any decode
-	if _, err := prepareImages([]MediaSource{writeTestFile(t, "huge.png", pngClaiming(t, 20000, 10001))}); !errors.Is(err, notification.ErrImageTooLarge) {
+	if _, err := PrepareImages([]MediaSource{writeTestFile(t, "huge.png", pngClaiming(t, 20000, 10001))}); !errors.Is(err, notification.ErrImageTooLarge) {
 		t.Errorf("a header claiming 20000x10001: err %v, want ErrImageTooLarge", err)
 	}
 }
@@ -153,7 +153,7 @@ func TestWritePreparedImagesCopiesOriginal(t *testing.T) {
 		files = append(files, writeTestFile(t, "upload."+format, sources[format]))
 	}
 
-	prepared, err := prepareImages(files)
+	prepared, err := PrepareImages(files)
 	if err != nil {
 		t.Fatal(err)
 	}

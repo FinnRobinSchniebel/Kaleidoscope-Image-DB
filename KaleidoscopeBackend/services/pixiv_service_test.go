@@ -131,7 +131,7 @@ func TestPixivWritesStopBeforeTheDB(t *testing.T) {
 
 		writes := map[string][]notification.ItemResult{
 			"missing mark":    markPixivSourceMissing(tt.ctx, "pixiv-busy-user", 5),
-			"metadata update": applyPixivSourceUpdate(tt.ctx, "pixiv-busy-user", &pixivmodel.Illust{ID: 5}, false),
+			"metadata update": applyPixivSourceUpdate(tt.ctx, "pixiv-busy-user", pixivSourceInfo(&pixivmodel.Illust{ID: 5}, false), nil),
 		}
 		for write, items := range writes {
 			if len(items) != 1 || items[0].Kind != tt.kind || items[0].Reason != tt.reason {
@@ -246,6 +246,39 @@ func TestIsPixivSourceHeldInEverySet(t *testing.T) {
 	for _, tc := range tests {
 		if got := isPixivSourceHeldInEverySet(tc.sets, "7"); got != tc.want {
 			t.Errorf("%s: isPixivSourceHeldInEverySet = %t, want %t", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestDoesPixivSourceNeedImageCheckInAnySet(t *testing.T) {
+
+	created := time.Date(2026, 8, 27, 9, 12, 12, 0, time.UTC)
+	il := pixivmodel.Illust{ID: 7, CreateDate: created}
+	withCopy := func(date time.Time, state imageset.ImageChangeState) *imageset.ImageSetMongo {
+		return &imageset.ImageSetMongo{Sources: []imageset.SourceInfo{{Name: pixivServiceName, SourceID: "7", Date: date, LastChecked: time.Now(), ImageChangeState: state}}}
+	}
+
+	moved, current := withCopy(created.Add(-time.Hour), imageset.ImageChangeNone), withCopy(created, imageset.ImageChangeNone)
+	heldMoved := withCopy(created.Add(-time.Hour), imageset.ImageChangePending)
+	sameDay := withCopy(imageset.DayOnlyDate(created), imageset.ImageChangeNone)
+	without := &imageset.ImageSetMongo{Sources: []imageset.SourceInfo{{Name: pixivServiceName, SourceID: "8", Date: created.Add(-time.Hour)}}}
+
+	tests := []struct {
+		name string
+		sets []*imageset.ImageSetMongo
+		want bool
+	}{
+		{"one copy moved", []*imageset.ImageSetMongo{moved}, true},
+		{"only a held copy moved", []*imageset.ImageSetMongo{heldMoved, current}, false},
+		{"every copy current", []*imageset.ImageSetMongo{current, current}, false},
+		{"day-only on the listing's day", []*imageset.ImageSetMongo{sameDay}, false},
+		{"one of two sets moved", []*imageset.ImageSetMongo{current, moved}, true},
+		{"the copy missing from its set", []*imageset.ImageSetMongo{without}, false},
+	}
+
+	for _, tc := range tests {
+		if got := doesPixivSourceNeedImageCheckInAnySet(il, tc.sets); got != tc.want {
+			t.Errorf("%s: doesPixivSourceNeedImageCheckInAnySet = %t, want %t", tc.name, got, tc.want)
 		}
 	}
 }

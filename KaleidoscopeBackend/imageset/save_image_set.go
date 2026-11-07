@@ -153,7 +153,7 @@ func ProcessImageSet(ctx context.Context, set *ImageSetMongo, files []MediaSourc
 		return []notification.ItemResult{notification.FailedItem(userID, ref, bson.NilObjectID, err)}
 	}
 
-	prepared, err := prepareImages(files)
+	prepared, err := PrepareImages(files)
 	if err != nil {
 		return []notification.ItemResult{notification.FailedItem(userID, ref, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err))}
 	}
@@ -196,10 +196,11 @@ type PreparedImage struct {
 	Plain  bool   //a plain page (see isPlain), which never makes a stored set a merge candidate
 }
 
-// prepareImages gives each file a new image ID, checks its header and decodes
+// PrepareImages gives each file a new image ID, checks its header and decodes
 // it once to hash and measure it, so matching can run before anything is
-// written. A file that can't be read or is too large fails the whole list.
-func prepareImages(files []MediaSource) ([]PreparedImage, error) {
+// written; the sync's image check hashes the pages it fetches with it too. A
+// file that can't be read or is too large fails the whole list.
+func PrepareImages(files []MediaSource) ([]PreparedImage, error) {
 	prepared := make([]PreparedImage, 0, len(files))
 	for _, file := range files {
 		format, err := checkImageHeader(file)
@@ -244,7 +245,7 @@ const unknownAuthor = "unknown"
 // reports it as a failed item, and PostImageSet answers HTTP 400 with it.
 var ErrNoMedia = errors.New("no media attached")
 
-// addImageSet saves each image (from prepareImages) as a file named by its ID,
+// addImageSet saves each image (from PrepareImages) as a file named by its ID,
 // then inserts imageSet under the ID it already has (ProcessImageSet gives it;
 // a zero ID is an error). Attribution is checked before anything is written,
 // and a later failure undoes its own partial writes.
