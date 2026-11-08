@@ -74,10 +74,9 @@ func resetHeldSourceCopies(set *ImageSetMongo) {
 // copies (resetHeldSourceCopies), and incoming's source is attached to the
 // images it covers. Nothing is written before checkAttribution,
 // and a failure removes the new files and undoes the recorded tag counts.
-// imagesAdded (the set needs checking in turn) and sourceAdded (a source new to
-// the set) are only reported for a write that landed. The caller holds
-// LockUserSets.
-func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []PreparedImage, match mergeCandidate) (item notification.ItemResult, imagesAdded, sourceAdded bool) {
+// imagesAdded (the set needs checking in turn) is only reported for a write
+// that landed. The caller holds LockUserSets.
+func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []PreparedImage, match mergeCandidate) (item notification.ItemResult, imagesAdded bool) {
 
 	target := match.set
 	before := slices.Clone(target.Image)
@@ -100,7 +99,7 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 	}
 
 	if err := target.checkAttribution(); err != nil {
-		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false, false
+		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
 	}
 
 	// Until the write lands, a failure removes the new files and the counts recorded so far.
@@ -120,13 +119,13 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 		}
 
 		if err := writePreparedImages(target, toWrite); err != nil {
-			return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false, false
+			return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
 		}
 	}
 
 	counted, err := Tagger.ProcessSourceTags(userID, target, index, incoming.Sources[0].Tags)
 	if err != nil {
-		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: processing source tags: %w", notification.ErrSaveFailed, err)), false, false
+		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: processing source tags: %w", notification.ErrSaveFailed, err)), false
 	}
 
 	source := &target.Sources[index]
@@ -139,7 +138,7 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 
 	if !realChange && !otherChange {
 		committed = true
-		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, false, false
+		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, false
 	}
 
 	if realChange {
@@ -151,20 +150,20 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 	}
 
 	if err := saveMergedSet(target, before); err != nil {
-		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false, false
+		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
 	}
 	committed = true
 	refreshUntagged(userID)
 
 	switch {
 	case !realChange:
-		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, false, false
+		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, false
 	case len(added) == 1:
-		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "added 1 new image to an existing set"}, true, isNew
+		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "added 1 new image to an existing set"}, true
 	case len(added) > 1:
-		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: fmt.Sprintf("added %d new images to an existing set", len(added))}, true, isNew
+		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: fmt.Sprintf("added %d new images to an existing set", len(added))}, true
 	default:
-		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "matched an existing set"}, false, isNew
+		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "matched an existing set"}, false
 	}
 }
 
@@ -196,11 +195,10 @@ func undoImageInsert(set *ImageSetMongo, added map[int]ImageInfo, counted TagCou
 
 // suggestMerge publishes one suggested merge for setID and returns its Pending
 // item, or nothing when there is nobody to suggest. It names each candidate
-// with its image pairs (their image IDs must be setID's own), then every set
-// holding one of sources that has an ID, without pairs. setID and the excluded
-// sets are never named, and no set twice. A failed publish is a Failed item for
-// setID; a failed lookup is only logged.
-func suggestMerge(userID, ref string, setID bson.ObjectID, candidates []mergeCandidate, sources []SourceInfo, excluded []bson.ObjectID) []notification.ItemResult {
+// with its image pairs (their image IDs must be setID's own). setID and the
+// excluded sets are never named, and no set twice. A failed publish is a Failed
+// item for setID.
+func suggestMerge(userID, ref string, setID bson.ObjectID, candidates []mergeCandidate, excluded []bson.ObjectID) []notification.ItemResult {
 
 	skip := map[bson.ObjectID]bool{setID: true}
 	for _, id := range excluded {
@@ -212,26 +210,6 @@ func suggestMerge(userID, ref string, setID bson.ObjectID, candidates []mergeCan
 		if !skip[candidate.set.ID] {
 			suggestion.Candidates = append(suggestion.Candidates, notification.MergeCandidate{SetID: candidate.set.ID, Pairs: candidate.pairs})
 			skip[candidate.set.ID] = true
-		}
-	}
-
-	for _, source := range sources {
-
-		if source.SourceID == "" {
-			continue //ID-less sources never match across sets
-		}
-
-		found, err := findSetIDsWithSource(userID, source.Name, source.SourceID)
-		if err != nil {
-			log.Printf("------ Warning: import [%s] %s: same-source lookup: %s ------", userID, ref, err)
-			continue
-		}
-
-		for _, id := range found {
-			if !skip[id] {
-				suggestion.Candidates = append(suggestion.Candidates, notification.MergeCandidate{SetID: id})
-				skip[id] = true
-			}
 		}
 	}
 

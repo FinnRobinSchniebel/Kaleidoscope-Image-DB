@@ -153,7 +153,7 @@ func TestMergeIntoSetChecksAttributionFirst(t *testing.T) {
 	match := mergeCandidate{set: target, scenario: scenarioAddition, exactOf: [][]bson.ObjectID{{imageA}, nil}}
 
 	//no Tagger here, so getting past the check would crash in ProcessSourceTags
-	item, _, _ := mergeIntoSet("user1", "group", incoming, prepared, match)
+	item, _ := mergeIntoSet("user1", "group", incoming, prepared, match)
 	if item.Kind != notification.ItemFailed {
 		t.Errorf("item = %+v, want a failed item for the broken attribution", item)
 	}
@@ -187,9 +187,9 @@ func TestMergeIntoSetUnchanged(t *testing.T) {
 	match := mergeCandidate{set: target, scenario: scenarioDuplicate, exactOf: [][]bson.ObjectID{{imageA}, {imageB}}}
 
 	//no database here, so attempting the write would crash on the nil Collection
-	item, imagesAdded, sourceAdded := mergeIntoSet("user1", "group", incoming, prepared, match)
-	if item.Kind != notification.ItemUnchanged || imagesAdded || sourceAdded {
-		t.Errorf("item = %+v, imagesAdded %t, sourceAdded %t; want unchanged with nothing added", item, imagesAdded, sourceAdded)
+	item, imagesAdded := mergeIntoSet("user1", "group", incoming, prepared, match)
+	if item.Kind != notification.ItemUnchanged || imagesAdded {
+		t.Errorf("item = %+v, imagesAdded %t; want unchanged with nothing added", item, imagesAdded)
 	}
 }
 
@@ -243,7 +243,7 @@ func TestMergeIntoSetResetsHeldCopiesOnAddition(t *testing.T) {
 			prepared, match.exactOf = append(prepared, preparedWithPixels(2), newPage), [][]bson.ObjectID{{imageA}, {imageB}, nil}
 		}
 
-		if item, _, _ := mergeIntoSet("user1", "group", incoming, prepared, match); item.Kind != notification.ItemFailed {
+		if item, _ := mergeIntoSet("user1", "group", incoming, prepared, match); item.Kind != notification.ItemFailed {
 			t.Fatalf("%s: item %+v, want the failed tag step", tc.name, item)
 		}
 

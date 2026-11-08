@@ -11,8 +11,7 @@ import (
 // mergeTargetOutcome is what one merge round did to one of its targets.
 type mergeTargetOutcome struct {
 	setID       bson.ObjectID
-	imagesAdded bool         //the target joins the check queue
-	received    []SourceInfo //sources it now holds whose other sets get looked up
+	imagesAdded bool //the target joins the check queue
 }
 
 // mergeResult is what mergeFlow did.
@@ -26,34 +25,14 @@ type mergeResult struct {
 // removed), and a match that gained images is checked in turn. Suggested merges
 // are published here and nowhere else; no set is created. set is an import not
 // stored yet when isNew, otherwise a stored set that changed, and prepared holds
-// its images (storedSetAsPreparedImages for a stored set). set's own same-source
-// lookup covers only lookup; a set it merges into looks up every source it
-// received. err means the first lookup failed and nothing was decided. The
-// caller holds LockUserSets.
-func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage, isNew bool, lookup []SourceInfo) (mergeResult, error) {
+// its images (storedSetAsPreparedImages for a stored set). err means the first
+// lookup failed and nothing was decided. The caller holds LockUserSets.
+func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage, isNew bool) (mergeResult, error) {
 
 	var result mergeResult
 	var excluded []bson.ObjectID
 	queue := []bson.ObjectID{set.ID}
 	queued := map[bson.ObjectID]bool{set.ID: true}
-	removed := make(map[bson.ObjectID]bool)
-
-	//sources each set received but hasn't looked up yet; pendingOrder keeps the suggestions' order stable
-	var pendingOrder []bson.ObjectID
-	pending := make(map[bson.ObjectID][]SourceInfo)
-	receive := func(id bson.ObjectID, sources []SourceInfo) {
-
-		if _, waiting := pending[id]; !waiting {
-			pendingOrder = append(pendingOrder, id)
-		}
-
-		for _, source := range sources {
-			if !slices.ContainsFunc(pending[id], func(held SourceInfo) bool { return SameSource(held, source) }) {
-				pending[id] = append(pending[id], source)
-			}
-		}
-	}
-	receive(set.ID, lookup)
 
 	first := true
 	for len(queue) > 0 {
@@ -94,10 +73,8 @@ func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage,
 		wasFirst := first
 		first = false
 
-		sources := pending[entry.ID]
-		delete(pending, entry.ID) //used for its own suggestion, or reaching its targets as received sources
 		if len(automatic) == 0 {
-			result.items = append(result.items, suggestMerge(userID, ref, entry.ID, suggested, sources, excluded)...)
+			result.items = append(result.items, suggestMerge(userID, ref, entry.ID, suggested, excluded)...)
 			continue
 		}
 
@@ -109,10 +86,8 @@ func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage,
 
 			var gone bool
 			items, outcomes, gone = mergeStoredSetIntoTargets(userID, ref, entry, automatic)
-			if gone {
-				removed[entry.ID] = true
-			} else {
-				outcomes = nil //an interrupted round queues and records nothing
+			if !gone {
+				outcomes = nil //an interrupted round queues nothing
 			}
 		}
 		result.items = append(result.items, items...)
@@ -125,27 +100,11 @@ func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage,
 		}
 
 		for _, outcome := range outcomes {
-
-			if outcome.received != nil {
-				receive(outcome.setID, outcome.received)
-			}
-
 			if outcome.imagesAdded && !queued[outcome.setID] {
 				queue = append(queue, outcome.setID)
 				queued[outcome.setID] = true
 			}
 		}
-	}
-
-	for _, id := range pendingOrder {
-
-		sources, waiting := pending[id]
-		if !waiting || removed[id] {
-			continue
-		}
-
-		delete(pending, id)
-		result.items = append(result.items, suggestMerge(userID, ref, id, nil, sources, excluded)...)
 	}
 	return result, nil
 }
@@ -185,14 +144,9 @@ func mergeImportIntoTargets(userID, ref string, set *ImageSetMongo, prepared []P
 
 	for _, target := range targets {
 
-		item, imagesAdded, sourceAdded := mergeIntoSet(userID, ref, set, prepared, target)
+		item, imagesAdded := mergeIntoSet(userID, ref, set, prepared, target)
 		items = append(items, item)
-
-		outcome := mergeTargetOutcome{setID: target.set.ID, imagesAdded: imagesAdded}
-		if imagesAdded || sourceAdded {
-			outcome.received = set.Sources
-		}
-		outcomes = append(outcomes, outcome)
+		outcomes = append(outcomes, mergeTargetOutcome{setID: target.set.ID, imagesAdded: imagesAdded})
 	}
 	return items, outcomes
 }

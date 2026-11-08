@@ -39,14 +39,14 @@ func TestSuggestMergeReportsFailedPublish(t *testing.T) {
 
 	notifications := notification.Collection
 	notification.Collection = db.Collection("rejecting")
-	items := suggestMerge("user1", "art/g", setID, candidates, nil, nil)
+	items := suggestMerge("user1", "art/g", setID, candidates, nil)
 	notification.Collection = notifications
 
 	if len(items) != 1 || items[0].Kind != notification.ItemFailed || items[0].Ref != "art/g" || items[0].SetID != setID || items[0].Reason != notification.ErrSuggestionSaveFailed.Error() {
 		t.Errorf("failed publish: %+v, want one failed item for the set with the suggestion reason", items)
 	}
 
-	items = suggestMerge("user1", "art/g", setID, candidates, nil, nil)
+	items = suggestMerge("user1", "art/g", setID, candidates, nil)
 	if len(items) != 1 || items[0].Kind != notification.ItemPending || items[0].SetID != setID || items[0].Reason != "suggested a merge with 1 set" {
 		t.Errorf("publish: %+v, want one pending item for the set", items)
 	}
@@ -117,6 +117,21 @@ func storeImages(t *testing.T, set *ImageSetMongo, pages ...PreparedImage) []Ima
 	return images
 }
 
+// storeTestSet builds user's set named name with pages as its images, their
+// files in its own folder in the volume. It has no sources and isn't inserted.
+func storeTestSet(t *testing.T, user, name string, dateAdded time.Time, pages ...PreparedImage) *ImageSetMongo {
+
+	t.Helper()
+	folder := filepath.Join(BackendVolumeLocation, name) + "/"
+	if err := os.MkdirAll(folder, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	set := &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: user, Title: name, Authors: []string{"author"}, Path: folder, DateAdded: dateAdded, AutoTags: []bson.ObjectID{}}
+	set.Image = storeImages(t, set, pages...)
+	return set
+}
+
 func TestImportResetsAndKeepsHeldCopies(t *testing.T) {
 
 	useTestDatabase(t, fakeTagger{})
@@ -151,17 +166,6 @@ func TestImportResetsAndKeepsHeldCopies(t *testing.T) {
 	ctx := context.Background()
 	checked := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	heldDate, zipDate := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
-	newSet := func(name string, pages ...PreparedImage) *ImageSetMongo {
-
-		folder := filepath.Join(BackendVolumeLocation, name) + "/"
-		if err := os.MkdirAll(folder, 0700); err != nil {
-			t.Fatal(err)
-		}
-
-		set := &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: user, Title: name, Authors: []string{"author"}, Path: folder, DateAdded: checked, AutoTags: []bson.ObjectID{}}
-		set.Image = storeImages(t, set, pages...)
-		return set
-	}
 
 	//the items as "kind set reason", sorted: the hash lookup's read is unordered
 	summarize := func(items []notification.ItemResult) []string {
@@ -175,7 +179,7 @@ func TestImportResetsAndKeepsHeldCopies(t *testing.T) {
 	}
 
 	//part 1: an import that adds a page to S resets S's held copies, its own source's included
-	s := newSet("s", pages[0], pages[1])
+	s := storeTestSet(t, user, "s", checked, pages[0], pages[1])
 	s.Sources = []SourceInfo{
 		{Name: "zipsrc", SourceID: "1", AttributedTo: []bson.ObjectID{s.Image[0].ID}, LastChecked: checked, Date: heldDate, ImageChangeState: ImageChangePending},
 		{Name: "fanbox", SourceID: "2", AttributedTo: []bson.ObjectID{s.Image[1].ID}, LastChecked: checked, ImageChangeState: ImageChangeDeclined},
@@ -198,14 +202,14 @@ func TestImportResetsAndKeepsHeldCopies(t *testing.T) {
 	}
 
 	//part 2: U keeps its held copies through the import's less and through V combining into it as a less
-	u := newSet("u", pages[3], pages[4], pages[5])
+	u := storeTestSet(t, user, "u", checked, pages[3], pages[4], pages[5])
 	u.Sources = []SourceInfo{
 		{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{u.Image[0].ID, u.Image[1].ID, u.Image[2].ID}, LastChecked: checked, Date: heldDate, ImageChangeState: ImageChangePending},
 		{Name: "fanbox", SourceID: "8", AttributedTo: []bson.ObjectID{u.Image[0].ID}, LastChecked: checked, ImageChangeState: ImageChangeDeclined},
 	}
 
 	//V is a subset of U that was never merged, which only old data has
-	v := newSet("v", pages[3])
+	v := storeTestSet(t, user, "v", checked, pages[3])
 	v.Sources = []SourceInfo{{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{v.Image[0].ID}, Date: zipDate}}
 	insertSets(t, *u, *v)
 
@@ -232,5 +236,72 @@ func TestImportResetsAndKeepsHeldCopies(t *testing.T) {
 
 	if stored.Sources[0].ImageChangeState != ImageChangePending || stored.Sources[1].ImageChangeState != ImageChangeDeclined {
 		t.Errorf("U's states %q/%q; want pending and declined kept", stored.Sources[0].ImageChangeState, stored.Sources[1].ImageChangeState)
+	}
+}
+
+func TestImportSuggestsNoSetBySourceAlone(t *testing.T) {
+
+	useTestDatabase(t, fakeTagger{})
+	useTestVolume(t)
+
+	files := writeBlockPNGs(t, t.TempDir(), 4)
+	pages, err := PrepareImages(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	//no two pages may relate by hash, or a suggestion could come from the images
+	for i := range pages {
+
+		if pages[i].Plain {
+			t.Fatalf("page %d is plain", i)
+		}
+
+		for j := i + 1; j < len(pages); j++ {
+			if distance := PDQDistance(pages[i].Info.PDQ, pages[j].Info.PDQ); distance <= SimilarDistance {
+				t.Fatalf("pages %d and %d are only %d apart", i, j, distance)
+			}
+		}
+	}
+
+	const user = "source-alone-user"
+	ctx := context.Background()
+	added := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+
+	w := storeTestSet(t, user, "w", added, pages[0])
+	w.Sources = []SourceInfo{{Name: "zipsrc", SourceID: "1", AttributedTo: []bson.ObjectID{w.Image[0].ID}}}
+	target := storeTestSet(t, user, "t", added, pages[2])
+	target.Sources = []SourceInfo{{Name: "fanbox", SourceID: "2", AttributedTo: []bson.ObjectID{target.Image[0].ID}}}
+	u := storeTestSet(t, user, "u", added, pages[3])
+	u.Sources = []SourceInfo{{Name: "zipsrc", SourceID: "3", AttributedTo: []bson.ObjectID{u.Image[0].ID}}}
+	insertSets(t, *w, *target, *u)
+
+	//case a: an import sharing only W's source becomes a new set, and W isn't suggested
+	incoming := &ImageSetMongo{Title: "import", Sources: []SourceInfo{{Name: "zipsrc", SourceID: "1"}}}
+	items := ProcessImageSet(ctx, incoming, files[1:2], user, "a")
+	if len(items) != 1 || items[0].Kind != notification.ItemAdded || items[0].SetID != incoming.ID {
+		t.Errorf("case a items %+v, want only the new set's Added item", items)
+	}
+
+	//case b: a duplicate of T brings U's source to T, and U isn't suggested to T
+	incoming = &ImageSetMongo{Title: "import", Sources: []SourceInfo{{Name: "zipsrc", SourceID: "3"}}}
+	items = ProcessImageSet(ctx, incoming, files[2:3], user, "b")
+	matched := notification.ItemResult{Kind: notification.ItemUpdated, Ref: "b", SetID: target.ID, Reason: "matched an existing set"}
+	if !slices.Equal(items, []notification.ItemResult{matched}) {
+		t.Errorf("case b items %+v, want only T's %+v", items, matched)
+	}
+
+	if stored := loadSet(t, target.ID); !slices.ContainsFunc(stored.Sources, func(src SourceInfo) bool { return SameSource(src, u.Sources[0]) }) {
+		t.Errorf("T's sources %+v, want zipsrc/3 attached", stored.Sources)
+	}
+
+	var suggestions []bson.M
+	cursor, err := notification.Collection.Find(ctx, bson.M{"type": notification.TypeSuggestedMerge})
+	if err == nil {
+		err = cursor.All(ctx, &suggestions)
+	}
+
+	if err != nil || len(suggestions) != 0 {
+		t.Errorf("stored suggestions %v (%v), want none", suggestions, err)
 	}
 }

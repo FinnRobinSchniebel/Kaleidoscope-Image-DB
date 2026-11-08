@@ -71,10 +71,10 @@ func mergeStoredSetIntoTargets(userID, ref string, set *ImageSetMongo, targets [
 
 	for _, target := range targets {
 
-		var imagesAdded, sourcesAdded bool
+		var imagesAdded bool
 		plan, err := makeAutoMergePlan(target, set)
 		if err == nil {
-			imagesAdded, sourcesAdded, err = applyMergePlan(userID, plan)
+			imagesAdded, err = applyMergePlan(userID, plan)
 		}
 
 		if err != nil {
@@ -84,11 +84,7 @@ func mergeStoredSetIntoTargets(userID, ref string, set *ImageSetMongo, targets [
 		reason := fmt.Sprintf("combined with set %s", set.ID.Hex())
 		items = append(items, notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.set.ID, Reason: reason})
 
-		outcome := mergeTargetOutcome{setID: target.set.ID, imagesAdded: imagesAdded}
-		if imagesAdded || sourcesAdded {
-			outcome.received = set.Sources
-		}
-		outcomes = append(outcomes, outcome)
+		outcomes = append(outcomes, mergeTargetOutcome{setID: target.set.ID, imagesAdded: imagesAdded})
 	}
 
 	if err := removeMergedSet(userID, set); err != nil {
@@ -160,15 +156,15 @@ func makeAutoMergePlan(target mergeCandidate, absorbed *ImageSetMongo) (mergePla
 // is written until the merged set passes checkAttribution; until the save lands,
 // a failure removes the new links and undoes the counts. The caller holds
 // LockUserSets.
-func applyMergePlan(userID string, plan mergePlan) (imagesAdded, sourcesAdded bool, err error) {
+func applyMergePlan(userID string, plan mergePlan) (imagesAdded bool, err error) {
 
 	survivor, absorbed := plan.survivor, plan.absorbed
 	if survivor.KscopeUserId != userID || absorbed.KscopeUserId != userID {
-		return false, false, fmt.Errorf("sets %s and %s aren't both the user's", survivor.ID.Hex(), absorbed.ID.Hex())
+		return false, fmt.Errorf("sets %s and %s aren't both the user's", survivor.ID.Hex(), absorbed.ID.Hex())
 	}
 
 	if survivor.ID == absorbed.ID {
-		return false, false, fmt.Errorf("set %s can't be merged with itself", survivor.ID.Hex())
+		return false, fmt.Errorf("set %s can't be merged with itself", survivor.ID.Hex())
 	}
 
 	held := make(map[bson.ObjectID]bool, len(survivor.Image))
@@ -179,16 +175,15 @@ func applyMergePlan(userID string, plan mergePlan) (imagesAdded, sourcesAdded bo
 	//removeMergedSet deletes every absorbed file, so a shared image would take the survivor's file with it
 	for _, img := range absorbed.Image {
 		if held[img.ID] {
-			return false, false, fmt.Errorf("sets %s and %s share image %s", survivor.ID.Hex(), absorbed.ID.Hex(), img.ID.Hex())
+			return false, fmt.Errorf("sets %s and %s share image %s", survivor.ID.Hex(), absorbed.ID.Hex(), img.ID.Hex())
 		}
 	}
 
 	before := slices.Clone(survivor.Image)
-	sourcesBefore := len(survivor.Sources)
 
 	images, err := plan.orderedImages()
 	if err != nil {
-		return false, false, err
+		return false, err
 	}
 	survivor.Image = images
 	survivor.Description = plan.description
@@ -196,7 +191,7 @@ func applyMergePlan(userID string, plan mergePlan) (imagesAdded, sourcesAdded bo
 	mergeSetFields(survivor, absorbed)
 
 	if err := survivor.checkAttribution(); err != nil {
-		return false, false, err
+		return false, err
 	}
 
 	// Until survivor's write lands, a failure removes the new links and the counts recorded so far.
@@ -236,12 +231,12 @@ func applyMergePlan(userID string, plan mergePlan) (imagesAdded, sourcesAdded bo
 
 		sourceID, copied := plan.copiedFrom[gained.ID]
 		if !copied {
-			return false, false, fmt.Errorf("image %s is new to set %s but isn't a copy", gained.ID.Hex(), survivor.ID.Hex())
+			return false, fmt.Errorf("image %s is new to set %s but isn't a copy", gained.ID.Hex(), survivor.ID.Hex())
 		}
 
 		//linked under its new name even within one folder
 		if err := linkIntoFolder(absorbed.Path, absorbedNames[sourceID], survivor.Path, gained.Name); err != nil {
-			return false, false, err
+			return false, err
 		}
 		linked = append(linked, gained.Name)
 	}
@@ -250,24 +245,24 @@ func applyMergePlan(userID string, plan mergePlan) (imagesAdded, sourcesAdded bo
 
 		change, err := Tagger.ProcessSourceTags(userID, survivor, index, absorbed.Sources[a].Tags)
 		if err != nil {
-			return false, false, fmt.Errorf("processing source tags: %w", err)
+			return false, fmt.Errorf("processing source tags: %w", err)
 		}
 		counted = append(counted, change)
 	}
 
 	change, err := Tagger.CombineTagOverrides(userID, survivor, absorbed.TagRuleOverrides)
 	if err != nil {
-		return false, false, fmt.Errorf("combining tag overrides: %w", err)
+		return false, fmt.Errorf("combining tag overrides: %w", err)
 	}
 	counted = append(counted, change)
 
 	if err := saveMergedSet(survivor, before); err != nil {
-		return false, false, err
+		return false, err
 	}
 	committed = true
 	refreshUntagged(userID)
 
-	return len(survivor.Image) > len(before), len(survivor.Sources) > sourcesBefore, nil
+	return len(survivor.Image) > len(before), nil
 }
 
 // removeMergedSet removes absorbed once its content has been written into its

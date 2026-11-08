@@ -19,7 +19,7 @@ import (
 var Collection *mongo.Collection
 
 // EnsureIndexes creates the indexes used to find image sets by owner plus
-// a source (sync's page lookup, the merge's same-source lookup), source tag or
+// a source (sync's page lookup and by-source writers), source tag or
 // AutoTag (tagging.applyAutoTagToSets' candidate query), and the indexes
 // search's own pipeline relies on: the default newest-first sort (with an _id
 // tie-breaker for determinism), and tags/authors membership lookups. The

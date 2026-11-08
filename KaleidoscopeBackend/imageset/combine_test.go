@@ -500,7 +500,7 @@ func TestApplyMergePlanRejectsBadPlans(t *testing.T) {
 		//the absorbed file exists and the tagger stops the merge, so a skipped check would reach the tags
 		processed := false
 		Tagger = fakeTagger{processed: &processed, processErr: errors.New("stop before the database")}
-		if _, _, err := applyMergePlan("user1", tt.plan); err == nil || processed {
+		if _, err := applyMergePlan("user1", tt.plan); err == nil || processed {
 			t.Errorf("%s: err %v, tags processed %t; want an error before any tag work", tt.name, err, processed)
 		}
 
@@ -529,7 +529,7 @@ func TestApplyMergePlanRejectsBadPlans(t *testing.T) {
 
 	processed := false
 	Tagger = fakeTagger{processed: &processed, processErr: errors.New("stop before the database")}
-	if _, _, err := applyMergePlan("user1", plan); err == nil || processed {
+	if _, err := applyMergePlan("user1", plan); err == nil || processed {
 		t.Errorf("shared image: err %v, tags processed %t; want it refused before any link or tag work", err, processed)
 	}
 
@@ -552,7 +552,7 @@ func TestApplyMergePlanAppliesPlan(t *testing.T) {
 	plan.inactive = map[bson.ObjectID]bool{copyOfC: true}
 	plan.description = "chosen"
 
-	if _, _, err := applyMergePlan("user1", plan); err == nil || !processed {
+	if _, err := applyMergePlan("user1", plan); err == nil || !processed {
 		t.Fatalf("err %v, tags processed %t; want the merge to reach ProcessSourceTags", err, processed)
 	}
 
@@ -603,7 +603,7 @@ func TestApplyMergePlanAppliesPlan(t *testing.T) {
 		}
 	}}
 
-	if _, _, err := applyMergePlan("user1", plan); err == nil || !checked {
+	if _, err := applyMergePlan("user1", plan); err == nil || !checked {
 		t.Errorf("same folder: err %v, checked %t; want the merge to reach ProcessSourceTags", err, checked)
 	}
 
@@ -634,7 +634,7 @@ func TestApplyMergePlanAppliesPlan(t *testing.T) {
 
 	processed = false
 	Tagger = fakeTagger{processed: &processed, processErr: errors.New("stop before the database")}
-	if _, _, err := applyMergePlan("user1", plan); err == nil || processed {
+	if _, err := applyMergePlan("user1", plan); err == nil || processed {
 		t.Errorf("taken name: err %v, tags processed %t; want the link to its taken name to fail first", err, processed)
 	}
 }

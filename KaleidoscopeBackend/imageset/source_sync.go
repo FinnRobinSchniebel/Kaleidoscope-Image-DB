@@ -233,8 +233,8 @@ func insertSourcePagesInSet(set *ImageSetMongo, index int, newSrc SourceInfo, ma
 }
 
 // mergeSetAfterSourceInsert runs mergeFlow on set, which just gained pages from
-// its copy at set.Sources[index], looking up only that source's other sets, and
-// returns the flow's items. The caller holds the user's set lock.
+// its copy at set.Sources[index], and returns the flow's items. The caller holds
+// the user's set lock.
 func mergeSetAfterSourceInsert(set *ImageSetMongo, index int) []notification.ItemResult {
 
 	userID, src := set.KscopeUserId, set.Sources[index]
@@ -243,7 +243,7 @@ func mergeSetAfterSourceInsert(set *ImageSetMongo, index int) []notification.Ite
 		return []notification.ItemResult{notification.FailedItem(userID, src.SourceID, set.ID, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err))}
 	}
 
-	merged, err := mergeFlow(userID, src.SourceID, set, prepared, false, []SourceInfo{src})
+	merged, err := mergeFlow(userID, src.SourceID, set, prepared, false)
 	if err != nil {
 		return []notification.ItemResult{notification.FailedItem(userID, src.SourceID, set.ID, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err))}
 	}

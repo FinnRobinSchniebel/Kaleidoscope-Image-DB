@@ -167,7 +167,7 @@ func ProcessImageSet(ctx context.Context, set *ImageSetMongo, files []MediaSourc
 	}
 	defer unlock()
 
-	merged, err := mergeFlow(userID, ref, set, prepared, true, set.Sources)
+	merged, err := mergeFlow(userID, ref, set, prepared, true)
 	if err != nil {
 		return []notification.ItemResult{notification.FailedItem(userID, ref, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err))}
 	}

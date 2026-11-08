@@ -17,8 +17,7 @@ type SuggestedMerge struct {
 	Candidates []MergeCandidate `json:"candidates" bson:"candidates"`
 }
 
-// MergeCandidate is one set suggested for merging. No Pairs means it was
-// found only by sharing a source.
+// MergeCandidate is one set suggested for merging.
 type MergeCandidate struct {
 	SetID bson.ObjectID `json:"set_id" bson:"set_id"`
 	Pairs []ImagePair   `json:"pairs,omitempty" bson:"pairs,omitempty"`
