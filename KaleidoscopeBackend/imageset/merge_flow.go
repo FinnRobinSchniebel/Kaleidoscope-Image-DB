@@ -26,9 +26,11 @@ type mergeResult struct {
 // removed), and a match that gained images is checked in turn. Suggested merges
 // are published here and nowhere else; no set is created. set is an import not
 // stored yet when isNew, otherwise a stored set that changed, and prepared holds
-// its images (storedSetAsPreparedImages for a stored set). err means the first
-// lookup failed and nothing was decided. The caller holds LockUserSets.
-func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage, isNew bool) (mergeResult, error) {
+// its images (storedSetAsPreparedImages for a stored set). set's own same-source
+// lookup covers only lookup; a set it merges into looks up every source it
+// received. err means the first lookup failed and nothing was decided. The
+// caller holds LockUserSets.
+func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage, isNew bool, lookup []SourceInfo) (mergeResult, error) {
 
 	var result mergeResult
 	var excluded []bson.ObjectID
@@ -51,7 +53,7 @@ func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage,
 			}
 		}
 	}
-	receive(set.ID, set.Sources)
+	receive(set.ID, lookup)
 
 	first := true
 	for len(queue) > 0 {

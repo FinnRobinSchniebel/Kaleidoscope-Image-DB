@@ -32,6 +32,7 @@ const (
 	SourceReorder        SourceWriteKind = "reorder"
 	SourceRemoval        SourceWriteKind = "removal"
 	SourceAttribution    SourceWriteKind = "attribution"
+	SourceInsert         SourceWriteKind = "insert"
 	SourcePendingFlip    SourceWriteKind = "pending flip"
 	SourceMissingMark    SourceWriteKind = "missing mark"
 	SourceImageCheck     SourceWriteKind = "image check" //a check that failed or couldn't decide, so nothing was written
@@ -44,7 +45,8 @@ type SourceWriteResult struct {
 	SetID   bson.ObjectID
 	Kind    SourceWriteKind
 	Changed bool
-	Held    ImageChangeState //the copy's state when a hold kept the write from applying; none otherwise
+	Held    ImageChangeState          //the copy's state when a hold kept the write from applying; none otherwise
+	Merged  []notification.ItemResult //mergeFlow's items after an insert, each naming its own set
 	Err     error
 }
 
@@ -125,9 +127,10 @@ func ApplySourceUpdate(ctx context.Context, userID string, newSrc SourceInfo, pa
 // applySourceUpdateInSet gives the copy at set.Sources[index] its outcome. A
 // copy that needs no image check (NeedsImageCheck) gets the metadata update,
 // which only stamps a held one; any other is checked (checkSourceImages) and
-// then flipped to pending, or has its attribution rewritten along with the
-// metadata. A rewrite the set's attribution check rejects writes nothing. The
-// caller holds the user's set lock.
+// then flipped to pending, gets its new pages inserted (insertSourcePagesInSet)
+// with mergeFlow run on the set afterwards, or has its attribution rewritten
+// along with the metadata. A rewrite the set's attribution check rejects writes
+// nothing. The caller holds the user's set lock.
 func applySourceUpdateInSet(set *ImageSetMongo, index int, newSrc SourceInfo, pages *FetchedPages, checkedAt time.Time) SourceWriteResult {
 
 	if !NeedsImageCheck(set.Sources[index], newSrc.Date) {
@@ -146,6 +149,12 @@ func applySourceUpdateInSet(set *ImageSetMongo, index int, newSrc SourceInfo, pa
 		return SourceWriteResult{SetID: set.ID, Kind: SourceImageCheck, Err: ErrSetChangedDuringSync}
 	case check.kind == SourcePendingFlip:
 		return markSourcePendingImageChangeInSet(set, index, checkedAt)
+	case check.kind == SourceInsert:
+		result := insertSourcePagesInSet(set, index, newSrc, check.matched, pages.Originals, checkedAt)
+		if result.Err == nil {
+			result.Merged = mergeSetAfterSourceInsert(set, index)
+		}
+		return result
 	}
 
 	set.Sources[index].AttributedTo = check.attribution
@@ -156,6 +165,89 @@ func applySourceUpdateInSet(set *ImageSetMongo, index int, newSrc SourceInfo, pa
 	result := applySourceMetadataUpdateInSet(set, index, newSrc, checkedAt)
 	result.Kind, result.Changed = check.kind, result.Err == nil
 	return result
+}
+
+// insertSourcePagesInSet inserts the service's new pages, the zero entries of
+// matched, into set where an import's addition would place them, attributes the
+// copy at set.Sources[index] to every page in the service's order, resets the
+// set's held copies and applies newSrc's metadata, in one guarded write
+// (saveMergedSet). originals holds each new page's fetched original. A failure
+// leaves the set as it was. The caller holds the user's set lock.
+func insertSourcePagesInSet(set *ImageSetMongo, index int, newSrc SourceInfo, matched []bson.ObjectID, originals map[int]PreparedImage, checkedAt time.Time) SourceWriteResult {
+
+	result := SourceWriteResult{SetID: set.ID, Kind: SourceInsert}
+	before := slices.Clone(set.Image)
+
+	//one entry per page, as the planning indexes them; only the new pages' are read
+	prepared := make([]PreparedImage, len(matched))
+	match := mergeCandidate{set: set, scenario: scenarioAddition, exactOf: make([][]bson.ObjectID, len(matched))}
+	for i, id := range matched {
+
+		if id.IsZero() {
+			prepared[i] = originals[i]
+		} else {
+			match.exactOf[i] = []bson.ObjectID{id}
+		}
+	}
+
+	keeperOf, added := planImagesToMerge(prepared, match)
+	set.Image = placeMergedImages(set.Image, match, keeperOf, added)
+	set.Sources[index].AttributedTo = mergeAttribution(set.Sources[index].AttributedTo, findMergedAttributionImageIDs(match, keeperOf, added))
+	resetHeldSourceCopies(set)
+
+	if result.Err = set.checkAttribution(); result.Err != nil {
+		return result
+	}
+
+	// Until the write lands, a failure removes the new files and the counts recorded so far.
+	committed := false
+	var counted TagCountChange
+	defer func() {
+		if !committed {
+			undoImageInsert(set, added, counted)
+		}
+	}()
+
+	if _, counted, result.Err = applySourceMetadataAndTags(set, index, newSrc, checkedAt); result.Err != nil {
+		return result
+	}
+
+	toWrite := make(map[bson.ObjectID]PreparedImage, len(added))
+	for i, info := range added {
+		toWrite[info.ID] = prepared[i]
+	}
+
+	if result.Err = writePreparedImages(set, toWrite); result.Err != nil {
+		return result
+	}
+
+	set.Sources[index].LastImageUpdate, set.Sources[index].LastAppliedUpdate = checkedAt, checkedAt
+	if result.Err = saveMergedSet(set, before); result.Err != nil {
+		return result
+	}
+
+	committed = true
+	refreshUntagged(set.KscopeUserId)
+	result.Changed = true
+	return result
+}
+
+// mergeSetAfterSourceInsert runs mergeFlow on set, which just gained pages from
+// its copy at set.Sources[index], looking up only that source's other sets, and
+// returns the flow's items. The caller holds the user's set lock.
+func mergeSetAfterSourceInsert(set *ImageSetMongo, index int) []notification.ItemResult {
+
+	userID, src := set.KscopeUserId, set.Sources[index]
+	prepared, err := storedSetAsPreparedImages(set.Image)
+	if err != nil {
+		return []notification.ItemResult{notification.FailedItem(userID, src.SourceID, set.ID, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err))}
+	}
+
+	merged, err := mergeFlow(userID, src.SourceID, set, prepared, false, []SourceInfo{src})
+	if err != nil {
+		return []notification.ItemResult{notification.FailedItem(userID, src.SourceID, set.ID, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err))}
+	}
+	return merged.items
 }
 
 // applySourceMetadataUpdateInSet updates the copy at set.Sources[index] with
@@ -176,15 +268,10 @@ func applySourceMetadataUpdateInSet(set *ImageSetMongo, index int, newSrc Source
 	before := set.Sources[index]
 	// ProcessSourceTags edits tags in place, so the copy needs its own slice.
 	before.Tags = slices.Clone(before.Tags)
-	fields := applySourceMetadata(set, index, newSrc)
 
-	// Must precede ProcessSourceTags: its system-tag recompute reads SourceMissing.
-	set.Sources[index].LastChecked = checkedAt
-	set.Sources[index].SourceMissing = false
-
-	counted, err := Tagger.ProcessSourceTags(userID, set, index, newSrc.Tags)
+	fields, counted, err := applySourceMetadataAndTags(set, index, newSrc, checkedAt)
 	if err != nil {
-		return SourceWriteResult{SetID: set.ID, Kind: SourceMetadataUpdate, Err: fmt.Errorf("processing source tags: %w", err)}
+		return SourceWriteResult{SetID: set.ID, Kind: SourceMetadataUpdate, Err: err}
 	}
 
 	changed := sourceDataChanged(before, set.Sources[index])
@@ -199,6 +286,25 @@ func applySourceMetadataUpdateInSet(set *ImageSetMongo, index int, newSrc Source
 		return SourceWriteResult{SetID: set.ID, Kind: SourceMetadataUpdate, Err: errors.Join(err, Tagger.UndoTagCounts(userID, counted))}
 	}
 	return SourceWriteResult{SetID: set.ID, Kind: SourceMetadataUpdate, Changed: changed || before.SourceMissing}
+}
+
+// applySourceMetadataAndTags applies newSrc's metadata (applySourceMetadata) and
+// tags (ProcessSourceTags) to the copy at set.Sources[index] in memory, as a sync
+// saw it at checkedAt, and clears SourceMissing. It returns the set-level fields
+// applySourceMetadata changed and the tag counts recorded, which the caller
+// undoes if its write fails. The caller holds the user's set lock.
+func applySourceMetadataAndTags(set *ImageSetMongo, index int, newSrc SourceInfo, checkedAt time.Time) (fields bson.M, counted TagCountChange, err error) {
+
+	fields = applySourceMetadata(set, index, newSrc)
+
+	// Must precede ProcessSourceTags: its system-tag recompute reads SourceMissing.
+	set.Sources[index].LastChecked = checkedAt
+	set.Sources[index].SourceMissing = false
+
+	if counted, err = Tagger.ProcessSourceTags(set.KscopeUserId, set, index, newSrc.Tags); err != nil {
+		return nil, TagCountChange{}, fmt.Errorf("processing source tags: %w", err)
+	}
+	return fields, counted, nil
 }
 
 // applySourceMetadata copies newSrc's non-empty title, description, known author

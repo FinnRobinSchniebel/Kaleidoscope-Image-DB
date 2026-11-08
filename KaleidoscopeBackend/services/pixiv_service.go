@@ -455,8 +455,8 @@ func markPixivSourceMissing(ctx context.Context, userId string, illustID uint64)
 // reportPixivSourceWrites turns a by-source writer's per-set results into report
 // items, each with its set ID: a set that changed since the sync read it is
 // Skipped, a failed one Failed, a held one Skipped and a changed one reported by
-// its kind (reportChangedPixivCopy). If no set gave an item, the work is one
-// Unchanged item.
+// its kind (reportChangedPixivCopy), followed by the items of the merge flow an
+// insert ran. If no set gave an item, the work is one Unchanged item.
 func reportPixivSourceWrites(userId, sourceID string, results []imageset.SourceWriteResult) []notification.ItemResult {
 
 	var items []notification.ItemResult
@@ -473,6 +473,7 @@ func reportPixivSourceWrites(userId, sourceID string, results []imageset.SourceW
 		case result.Changed:
 			items = append(items, reportChangedPixivCopy(sourceID, result))
 		}
+		items = append(items, result.Merged...)
 	}
 
 	if len(items) == 0 {
@@ -497,6 +498,8 @@ func reportChangedPixivCopy(sourceID string, result imageset.SourceWriteResult) 
 		item.Reason = "pages were removed at the source"
 	case imageset.SourceAttribution:
 		item.Reason = "matched pages already in the set"
+	case imageset.SourceInsert:
+		item.Reason = "pages were added at the source"
 	}
 	return item
 }

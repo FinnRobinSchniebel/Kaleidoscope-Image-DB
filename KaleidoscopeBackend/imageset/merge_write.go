@@ -103,33 +103,12 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false, false
 	}
 
-	plannedIDs := make(map[bson.ObjectID]bool, len(added))
-	for _, info := range added {
-		plannedIDs[info.ID] = true
-	}
-
 	// Until the write lands, a failure removes the new files and the counts recorded so far.
 	committed := false
 	var counted TagCountChange
 	defer func() {
-
-		if committed {
-			return
-		}
-
-		var written []ImageInfo
-		for _, img := range target.Image {
-			if plannedIDs[img.ID] {
-				written = append(written, img)
-			}
-		}
-
-		if err := DeleteFilesFromInfoList(target.Path, written); err != nil {
-			log.Printf("------ Warning: removing files of failed merge into %s: %s ------", target.ID.Hex(), err)
-		}
-
-		if err := Tagger.UndoTagCounts(userID, counted); err != nil {
-			log.Printf("------ Warning: undoing tag counts of failed merge into %s: %s ------", target.ID.Hex(), err)
+		if !committed {
+			undoImageInsert(target, added, counted)
 		}
 	}()
 
@@ -186,6 +165,32 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: fmt.Sprintf("added %d new images to an existing set", len(added))}, true, isNew
 	default:
 		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "matched an existing set"}, false, isNew
+	}
+}
+
+// undoImageInsert reverses an insert into set whose write didn't land: it removes
+// the files written for added (named on set.Image) and undoes counted. Failures
+// are only logged.
+func undoImageInsert(set *ImageSetMongo, added map[int]ImageInfo, counted TagCountChange) {
+
+	planned := make(map[bson.ObjectID]bool, len(added))
+	for _, info := range added {
+		planned[info.ID] = true
+	}
+
+	var written []ImageInfo
+	for _, img := range set.Image {
+		if planned[img.ID] {
+			written = append(written, img)
+		}
+	}
+
+	if err := DeleteFilesFromInfoList(set.Path, written); err != nil {
+		log.Printf("------ Warning: removing files of failed insert into %s: %s ------", set.ID.Hex(), err)
+	}
+
+	if err := Tagger.UndoTagCounts(set.KscopeUserId, counted); err != nil {
+		log.Printf("------ Warning: undoing tag counts of failed insert into %s: %s ------", set.ID.Hex(), err)
 	}
 }
 

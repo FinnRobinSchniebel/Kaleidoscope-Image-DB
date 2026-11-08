@@ -57,6 +57,7 @@ func FindPagesNeedingOriginals(sets []*ImageSetMongo, newSrc SourceInfo, pages F
 type sourceImageCheck struct {
 	kind           SourceWriteKind
 	attribution    []bson.ObjectID //the copy's new AttributedTo, for the outcomes that write it
+	matched        []bson.ObjectID //an insert's set image per page; zero for a page to insert
 	needsOriginals []int           //pages to fetch before deciding; when set, nothing else is
 }
 
@@ -65,8 +66,9 @@ type sourceImageCheck struct {
 // only the pages whose originals it needs first. With nothing visible changed,
 // an exact-dated copy is pending, since nothing explains its Date move, and a
 // zip-dated one gets its baseline; a zip-dated copy whose first page's size
-// differs is pending whatever the outcome. Pure: the caller decides when a copy
-// is checked (NeedsImageCheck).
+// differs is pending whatever the outcome. An insert returns each page's match
+// instead of an attribution, since the writer makes the new pages' IDs. Pure:
+// the caller decides when a copy is checked (NeedsImageCheck).
 func checkSourceImages(set *ImageSetMongo, index int, pages FetchedPages) (sourceImageCheck, error) {
 
 	src := set.Sources[index]
@@ -92,8 +94,11 @@ func checkSourceImages(set *ImageSetMongo, index int, pages FetchedPages) (sourc
 		kind = SourcePendingFlip
 	}
 
-	if kind == SourcePendingFlip {
+	switch kind {
+	case SourcePendingFlip:
 		return sourceImageCheck{kind: kind}, nil
+	case SourceInsert:
+		return sourceImageCheck{kind: kind, matched: matched}, nil
 	}
 	return sourceImageCheck{kind: kind, attribution: mergeAttribution(src.AttributedTo, matched)}, nil
 }
@@ -142,11 +147,14 @@ func matchPagesToSourceImages(own []bson.ObjectID, imagesByID map[bson.ObjectID]
 }
 
 // matchPagesToSetImages fills in matched, in place, for the pages the own steps
-// left unmatched. A page hits when findHashMatches finds an image of stored
-// outside own; it's matched when its original is pixel-identical to an image no
-// page took yet, and similar otherwise. Hit pages whose original wasn't fetched
-// are returned in needsOriginals. A page with no hit stops it with nothing to
-// fetch: nothing can be added yet, so the outcome is pending anyway.
+// left unmatched. Their originals are needed only while the outcome can still
+// apply on its own: every own image matched (a possible pure addition), or every
+// unmatched page hitting an image of stored outside own (findHashMatches).
+// Otherwise it stops with nothing to fetch, since the outcome is pending anyway.
+// An original pixel-identical to an image no page took yet is matched; a hit
+// page, or one pixel-identical to an image another page took, is similar; any
+// other page stays zero, a page to insert. Pages whose original wasn't fetched
+// are returned in needsOriginals.
 func matchPagesToSetImages(own []bson.ObjectID, stored []StoredImageHash, matched []bson.ObjectID, pages FetchedPages) (similar bool, needsOriginals []int) {
 
 	isOwn := make(map[bson.ObjectID]bool, len(own))
@@ -168,14 +176,31 @@ func matchPagesToSetImages(own []bson.ObjectID, stored []StoredImageHash, matche
 		}
 	}
 
+	everyOwnMatched := len(own) > 0
+	for _, id := range own {
+		if !claimed[id] {
+			everyOwnMatched = false
+			break
+		}
+	}
+
+	hasHit := make([]bool, len(pages.Previews))
 	for i, preview := range pages.Previews {
 
 		if !matched[i].IsZero() {
 			continue
 		}
 
-		if len(findHashMatches(preview.Info.ImageHashes, preview.Plain, others)) == 0 {
+		hasHit[i] = len(findHashMatches(preview.Info.ImageHashes, preview.Plain, others)) > 0
+		if !hasHit[i] && !everyOwnMatched {
 			return false, nil
+		}
+	}
+
+	for i := range pages.Previews {
+
+		if !matched[i].IsZero() {
+			continue
 		}
 
 		original, fetched := pages.Originals[i]
@@ -185,25 +210,35 @@ func matchPagesToSetImages(own []bson.ObjectID, stored []StoredImageHash, matche
 		}
 
 		hits := findHashMatches(original.Info.ImageHashes, original.Plain, stored)
-		exact := slices.IndexFunc(hits, func(hit HashMatch) bool { return hit.Exact && !claimed[hit.ImageID] })
-		if exact < 0 {
-			similar = true
+		if exact := slices.IndexFunc(hits, func(hit HashMatch) bool { return hit.Exact && !claimed[hit.ImageID] }); exact >= 0 {
+			matched[i] = hits[exact].ImageID
+			claimed[matched[i]] = true
 			continue
 		}
 
-		matched[i] = hits[exact].ImageID
-		claimed[matched[i]] = true
+		if hasHit[i] || slices.ContainsFunc(hits, func(hit HashMatch) bool { return hit.Exact }) {
+			similar = true
+		}
 	}
 	return similar, needsOriginals
 }
 
 // decideSourceImageChange returns the first outcome, in the order checked, that
 // the service's pages matched against the copy's own images call for;
-// SourceMetadataUpdate means nothing visible changed. Own images unmatched after
-// every matched one are leftovers of earlier removals, not a removal.
+// SourceMetadataUpdate means nothing visible changed. A page matched to nothing
+// is an insert when every own image, at least one, is matched in any order, and
+// pending otherwise. Own images unmatched after every matched one are leftovers
+// of earlier removals, not a removal.
 func decideSourceImageChange(own, matched []bson.ObjectID, similar bool) SourceWriteKind {
 
-	if similar || slices.Contains(matched, bson.NilObjectID) {
+	if similar {
+		return SourcePendingFlip
+	}
+
+	if slices.Contains(matched, bson.NilObjectID) {
+		if len(own) > 0 && !slices.ContainsFunc(own, func(id bson.ObjectID) bool { return !slices.Contains(matched, id) }) {
+			return SourceInsert
+		}
 		return SourcePendingFlip
 	}
 

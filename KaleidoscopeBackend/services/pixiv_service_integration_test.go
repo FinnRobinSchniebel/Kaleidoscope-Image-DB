@@ -18,6 +18,8 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -390,6 +392,14 @@ func TestCheckPixivSourceImages(t *testing.T) {
 		imageset.Collection, notification.Collection, imageset.Tagger, enqueuePixivWorkTask = oldCollection, oldNotifications, oldTagger, oldEnqueue
 	})
 
+	//an insert writes the new pages into the set's folder
+	oldVolume := imageset.BackendVolumeLocation
+	imageset.BackendVolumeLocation = t.TempDir()
+	t.Cleanup(func() { imageset.BackendVolumeLocation = oldVolume })
+	if err := imageset.ResetTempDir(); err != nil {
+		t.Fatal(err)
+	}
+
 	var queued Task
 	enqueuePixivWorkTask = func(_ string, task Task) error {
 		queued = task
@@ -421,7 +431,7 @@ func TestCheckPixivSourceImages(t *testing.T) {
 	}
 
 	//stored hashes come from decoding the served bytes, as the check hashes its downloads
-	names := []string{"a1", "a2", "a3", "b1", "b2", "b3", "c1", "d1", "d2", "e1", "e2", "g1", "g2", "g3"}
+	names := []string{"a1", "a2", "a3", "b1", "b2", "b3", "c1", "d1", "d2", "e1", "e2", "g1", "g2", "g3", "h1", "h2", "h3"}
 	pageBytes, hashes := make(map[string][]byte), make(map[string]imageset.ImageHashes)
 	for i, name := range names {
 
@@ -494,6 +504,11 @@ func TestCheckPixivSourceImages(t *testing.T) {
 
 		ids := make(map[string]bson.ObjectID)
 		set := imageset.ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: user, Title: "Old"}
+		set.Path = filepath.Join(imageset.BackendVolumeLocation, set.ID.Hex()) + "/"
+		if err := os.MkdirAll(set.Path, 0700); err != nil {
+			t.Fatal(err)
+		}
+
 		attribute := func(pages []string) []bson.ObjectID {
 
 			attributed := make([]bson.ObjectID, len(pages))
@@ -634,6 +649,28 @@ func TestCheckPixivSourceImages(t *testing.T) {
 		if requested(originalPath("g", page)) != 0 {
 			t.Errorf("work G: page %s's original requested, want none", page)
 		}
+	}
+
+	//H: a page added at Pixiv; only its original is downloaded, and it's inserted into the set
+	serve("h", "h1", "h2", "h3")
+	setH, idsH := storeSet(19, d0, checked, []string{"h1", "h2"}, nil)
+	expectItems("H", check(ctx, listing(19, "h", "h1", "h2", "h3")), []notification.ItemResult{{Kind: notification.ItemUpdated, Ref: "19", SetID: setH.ID, Reason: "pages were added at the source"}})
+
+	var storedH imageset.ImageSetMongo
+	if err := imageset.Collection.FindOne(ctx, bson.M{"_id": setH.ID}).Decode(&storedH); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(storedH.Image) != 3 || storedH.Image[0].ID != idsH["h1"] || storedH.Image[1].ID != idsH["h2"] {
+		t.Fatalf("work H's images %+v, want h1, h2 and the new page", storedH.Image)
+	}
+
+	if _, err := os.Stat(filepath.Join(storedH.Path, storedH.Image[2].Name)); storedH.Image[2].Name == "" || err != nil {
+		t.Errorf("work H's new page %q has no stored file (%v)", storedH.Image[2].Name, err)
+	}
+
+	if requested(originalPath("h", "h1")) != 0 || requested(originalPath("h", "h2")) != 0 || requested(originalPath("h", "h3")) != 1 {
+		t.Errorf("work H: originals requested %d, %d and %d times, want h3's only, once", requested(originalPath("h", "h1")), requested(originalPath("h", "h2")), requested(originalPath("h", "h3")))
 	}
 
 	stopped, cancel := context.WithCancel(ctx)

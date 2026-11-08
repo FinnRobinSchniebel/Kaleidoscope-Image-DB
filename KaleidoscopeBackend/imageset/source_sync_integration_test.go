@@ -7,6 +7,8 @@ import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/testdb"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -762,6 +764,210 @@ func TestApplySourceUpdateFailuresLeaveSetsUntouched(t *testing.T) {
 	for _, set := range []*ImageSetMongo{dangling, moving} {
 		if src := loadSet(t, set.ID).Sources[0]; !slices.Equal(src.AttributedTo, set.Sources[0].AttributedTo) || src.Title != "Old" || !src.Date.Equal(checkDate) {
 			t.Errorf("set %s's copy %+v, want it as stored", set.ID.Hex(), src)
+		}
+	}
+}
+
+// useTestVolume points BackendVolumeLocation at a fresh folder, with its temp
+// folder ready, until the test ends.
+func useTestVolume(t *testing.T) {
+
+	t.Helper()
+	old := BackendVolumeLocation
+	BackendVolumeLocation = t.TempDir()
+	t.Cleanup(func() { BackendVolumeLocation = old })
+	if err := ResetTempDir(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// storeSetFiles gives set a folder named name in the volume and a file for each
+// of its images.
+func storeSetFiles(t *testing.T, set *ImageSetMongo, name string) {
+
+	t.Helper()
+	set.Path = filepath.Join(BackendVolumeLocation, name) + "/"
+	if err := os.MkdirAll(set.Path, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := range set.Image {
+
+		set.Image[i].Name, set.Image[i].IsImageActive = ImageFileName(set.Title, set.Image[i].ID, "png"), true
+		if err := os.WriteFile(filepath.Join(set.Path, set.Image[i].Name), []byte(set.Image[i].Name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// fetchedOriginal is the fetched original of the page named name, with a file
+// behind it as a download has.
+func fetchedOriginal(t *testing.T, name string) PreparedImage {
+
+	page := original(name)
+	page.Media, page.Format = writeTestFile(t, name+".png", []byte(name)), "png"
+	return page
+}
+
+// folderEntries returns the names of the files in folder.
+func folderEntries(t *testing.T, folder string) []string {
+
+	t.Helper()
+	entries, err := os.ReadDir(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i] = entry.Name()
+	}
+	return names
+}
+
+func TestApplySourceUpdateInsertsPages(t *testing.T) {
+
+	useTestDatabase(t, fakeTagger{})
+	useTestVolume(t)
+	ctx := context.Background()
+	lastChecked := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
+	//S3 gains a page in front; its declined zip copy resets, and S4, which shares only that zip source, isn't suggested
+	s3, s3IDs := newCheckSet(checkDate, []string{"q1", "q2"}, nil)
+	s3.Sources[0].SourceID, s3.Sources[0].SourceMissing, s3.ThumbNail = "2", true, "thumb.png"
+	s3.Sources = append(s3.Sources, SourceInfo{Name: "zipsrc", SourceID: "5", AttributedTo: []bson.ObjectID{s3IDs["q1"]}, LastChecked: lastChecked, ImageChangeState: ImageChangeDeclined})
+	storeSetFiles(t, s3, "s3")
+
+	s4, _ := newCheckSet(checkDate, []string{"r1"}, nil)
+	s4.Sources[0] = SourceInfo{Name: "zipsrc", SourceID: "5", AttributedTo: s4.Sources[0].AttributedTo}
+	insertSets(t, *s3, *s4)
+
+	pages := &FetchedPages{Previews: previewsOf("q0", "q1", "q2"), Originals: map[int]PreparedImage{0: fetchedOriginal(t, "q0")}, FirstPageWidth: 100, FirstPageHeight: 200}
+	checkedAt := time.Now().UTC().Truncate(time.Millisecond)
+	results, err := ApplySourceUpdate(ctx, "user1", SourceInfo{Name: "pixiv", SourceID: "2", Title: "New", Date: serviceDate}, pages, checkedAt)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("S3: %+v, %v; want one result", results, err)
+	}
+
+	if r := results[0]; r.SetID != s3.ID || r.Kind != SourceInsert || !r.Changed || r.Err != nil || len(r.Merged) != 0 {
+		t.Errorf("S3: %+v, want a landed insert with no flow items", r)
+	}
+
+	stored := loadSet(t, s3.ID)
+	if len(stored.Image) != 3 || stored.Image[1].ID != s3IDs["q1"] || stored.Image[2].ID != s3IDs["q2"] {
+		t.Fatalf("S3's images %v, want the new page first, then q1 and q2", imageIDs(stored.Image))
+	}
+
+	added, src := stored.Image[0], stored.Sources[0]
+	if want := []bson.ObjectID{added.ID, s3IDs["q1"], s3IDs["q2"]}; !slices.Equal(src.AttributedTo, want) {
+		t.Errorf("S3's attribution %v, want %v", src.AttributedTo, want)
+	}
+
+	if added.Name != ImageFileName("New", added.ID, "png") || !slices.Contains(folderEntries(t, stored.Path), added.Name) {
+		t.Errorf("S3's new image named %q, folder %v; want its file stored under the new title", added.Name, folderEntries(t, stored.Path))
+	}
+
+	if src.SourceMissing || !src.Date.Equal(serviceDate) || src.Title != "New" || !src.LastChecked.Equal(checkedAt) || !src.LastImageUpdate.Equal(checkedAt) || !src.LastAppliedUpdate.Equal(checkedAt) {
+		t.Errorf("S3's copy %+v: want it back from missing, at the service's Date and title, with every stamp at %v", src, checkedAt)
+	}
+
+	if stored.Sources[1].ImageChangeState != ImageChangeNone || stored.ThumbNail != "" {
+		t.Errorf("S3: zip copy %q, thumbnail %q; want the zip copy reset and the thumbnail cleared", stored.Sources[1].ImageChangeState, stored.ThumbNail)
+	}
+
+	//S1 gains p3 and then extends S2, so it combines into S2, whose pending zip copy resets
+	s1, s1IDs := newCheckSet(checkDate, []string{"p1", "p2"}, nil)
+	s1.Sources = append(s1.Sources, SourceInfo{Name: "fanbox", SourceID: "8", AttributedTo: []bson.ObjectID{s1IDs["p1"]}, LastChecked: lastChecked, ImageChangeState: ImageChangePending})
+	storeSetFiles(t, s1, "s1")
+
+	s2, s2IDs := newCheckSet(checkDate, []string{"p1", "p3"}, nil)
+	s2.Sources[0] = SourceInfo{Name: "zipsrc", SourceID: "9", AttributedTo: s2.Sources[0].AttributedTo, LastChecked: lastChecked, ImageChangeState: ImageChangePending}
+	storeSetFiles(t, s2, "s2")
+	insertSets(t, *s1, *s2)
+
+	pages = &FetchedPages{Previews: previewsOf("p1", "p2", "p3"), Originals: map[int]PreparedImage{2: fetchedOriginal(t, "p3")}, FirstPageWidth: 100, FirstPageHeight: 200}
+	results, err = ApplySourceUpdate(ctx, "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: serviceDate}, pages, checkedAt)
+	if err != nil || len(results) != 1 {
+		t.Fatalf("S1: %+v, %v; want one result", results, err)
+	}
+
+	combined := notification.ItemResult{Kind: notification.ItemUpdated, Ref: "1", SetID: s2.ID, Reason: "combined with set " + s1.ID.Hex()}
+	if r := results[0]; r.SetID != s1.ID || r.Kind != SourceInsert || !r.Changed || r.Err != nil || !slices.Equal(r.Merged, []notification.ItemResult{combined}) {
+		t.Errorf("S1: %+v, want a landed insert whose flow combined it into S2", r)
+	}
+
+	if left, err := Collection.CountDocuments(ctx, bson.M{"_id": s1.ID}); err != nil || left != 0 {
+		t.Errorf("S1: %d left (%v), want it combined away", left, err)
+	}
+
+	stored = loadSet(t, s2.ID)
+	if len(stored.Image) != 3 || stored.Image[0].ID != s2IDs["p1"] || stored.Image[2].ID != s2IDs["p3"] {
+		t.Fatalf("S2's images %v, want p1, a copy of p2, then p3", imageIDs(stored.Image))
+	}
+
+	states := make(map[string]ImageChangeState)
+	for _, src := range stored.Sources {
+		states[src.Name] = src.ImageChangeState
+	}
+
+	if len(states) != 3 || states["zipsrc"] != ImageChangeNone || states["pixiv"] != ImageChangeNone || states["fanbox"] != ImageChangeNone {
+		t.Errorf("S2's sources' states %v, want zipsrc, pixiv and fanbox, all none", states)
+	}
+}
+
+func TestSourceInsertFailureLeavesSetUntouched(t *testing.T) {
+
+	ctx := context.Background()
+	processed := 0
+	var undone []TagCountChange
+	var moving *ImageSetMongo
+	tagger := fakeTagger{undone: &undone}
+	tagger.onProcess = func() {
+
+		processed++
+		//an image is added between the re-read and the write, so the guarded write matches nothing
+		if _, err := Collection.UpdateOne(ctx, bson.M{"_id": moving.ID}, bson.M{"$push": bson.M{"images": bson.M{"id": bson.NewObjectID()}}}); err != nil {
+			t.Errorf("adding an image: %v", err)
+		}
+	}
+	useTestDatabase(t, tagger)
+	useTestVolume(t)
+
+	//another source attributes an image the set doesn't have, so the insert's attribution check refuses it
+	dangling, _ := newCheckSet(checkDate, []string{"p1", "p2"}, nil)
+	dangling.Sources = append(dangling.Sources, SourceInfo{Name: "zipsrc", SourceID: "9", AttributedTo: []bson.ObjectID{bson.NewObjectID()}})
+	storeSetFiles(t, dangling, "dangling")
+
+	moving, _ = newCheckSet(checkDate, []string{"p1", "p2"}, nil)
+	storeSetFiles(t, moving, "moving")
+	insertSets(t, *dangling, *moving)
+
+	pages := &FetchedPages{Previews: previewsOf("p1", "p2", "p3"), Originals: map[int]PreparedImage{2: fetchedOriginal(t, "p3")}, FirstPageWidth: 100, FirstPageHeight: 200}
+	results, err := ApplySourceUpdate(ctx, "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: serviceDate}, pages, time.Now())
+	if err != nil || len(results) != 2 {
+		t.Fatalf("%+v, %v; want a result for each set", results, err)
+	}
+
+	if r := results[0]; r.SetID != dangling.ID || r.Kind != SourceInsert || !errors.Is(r.Err, errBrokenAttribution) || r.Changed {
+		t.Errorf("set with a dangling attribution: %+v, want its insert refused by the attribution check", r)
+	}
+
+	if r := results[1]; r.SetID != moving.ID || r.Kind != SourceInsert || r.Err == nil || r.Changed {
+		t.Errorf("set whose images changed: %+v, want its insert failed", r)
+	}
+
+	if processed != 1 || len(undone) != 1 || undone[0].SourceName != moving.ID.Hex() {
+		t.Errorf("tags processed %d times, undone %+v; want only the changed set's counted and undone", processed, undone)
+	}
+
+	for _, set := range []*ImageSetMongo{dangling, moving} {
+
+		if got := folderEntries(t, set.Path); len(got) != 2 {
+			t.Errorf("set %s's folder %v, want only its own two files", set.ID.Hex(), got)
+		}
+
+		if src := loadSet(t, set.ID).Sources[0]; !slices.Equal(src.AttributedTo, set.Sources[0].AttributedTo) || src.Title != "Old" || !src.Date.Equal(checkDate) || !src.LastChecked.Equal(set.Sources[0].LastChecked) {
+			t.Errorf("set %s's copy %+v, want it as stored and unstamped", set.ID.Hex(), src)
 		}
 	}
 }

@@ -158,12 +158,15 @@ func TestSavePixivIllustStoppedSync(t *testing.T) {
 
 func TestReportPixivSourceWrites(t *testing.T) {
 
-	ids := make([]bson.ObjectID, 10)
+	ids := make([]bson.ObjectID, 12)
 	for i := range ids {
 		ids[i] = bson.NewObjectID()
 	}
 
+	//the insert's flow items, which must follow its own item rather than come last
+	merged := []notification.ItemResult{{Kind: notification.ItemUpdated, Ref: "7", SetID: ids[11], Reason: "combined with set " + ids[10].Hex()}}
 	results := []imageset.SourceWriteResult{
+		{SetID: ids[10], Kind: imageset.SourceInsert, Changed: true, Merged: merged},
 		{SetID: ids[0], Kind: imageset.SourceMetadataUpdate, Err: errors.New("write failed")},
 		{SetID: ids[1], Kind: imageset.SourceImageCheck, Err: imageset.ErrSetChangedDuringSync},
 		{SetID: ids[2], Kind: imageset.SourceHeldStamp, Held: imageset.ImageChangePending},
@@ -177,6 +180,8 @@ func TestReportPixivSourceWrites(t *testing.T) {
 		{SetID: bson.NewObjectID(), Kind: imageset.SourceMetadataUpdate},
 	}
 	want := []notification.ItemResult{
+		{Kind: notification.ItemUpdated, Ref: "7", SetID: ids[10], Reason: "pages were added at the source"},
+		merged[0],
 		{Kind: notification.ItemFailed, Ref: "7", SetID: ids[0], Reason: notification.ErrLibraryAccess.Error()},
 		{Kind: notification.ItemSkipped, Ref: "7", SetID: ids[1], Reason: "the set changed during the sync"},
 		{Kind: notification.ItemSkipped, Ref: "7", SetID: ids[2], Reason: "an image update is waiting for review"},

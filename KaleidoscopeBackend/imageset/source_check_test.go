@@ -128,6 +128,7 @@ func TestCheckSourceImages(t *testing.T) {
 		firstPage   [2]int //the listing's width and height; zero means 100x200
 		kind        SourceWriteKind
 		attribution []string
+		matched     []string //an insert's match per page; "" is a page to insert
 		needs       []int
 	}{
 		{
@@ -166,7 +167,54 @@ func TestCheckSourceImages(t *testing.T) {
 		},
 		{
 			name: "a page added", date: checkDate, own: []string{"p1", "p2"},
+			previews: previewsOf("p1", "p2", "p3"), needs: []int{2},
+		},
+		{
+			name: "a page added, original fetched", date: checkDate, own: []string{"p1", "p2"},
+			previews: previewsOf("p1", "p2", "p3"), originals: map[int]PreparedImage{2: original("p3")},
+			kind: SourceInsert, matched: []string{"p1", "p2", ""},
+		},
+		{
+			name: "a page added first", date: checkDate, own: []string{"p1", "p2"},
+			previews: previewsOf("p3", "p1", "p2"), originals: map[int]PreparedImage{0: original("p3")},
+			kind: SourceInsert, matched: []string{"", "p1", "p2"},
+		},
+		{
+			name: "reordered with a page added", date: checkDate, own: []string{"p1", "p2"},
+			previews: previewsOf("p2", "p1", "p3"), originals: map[int]PreparedImage{2: original("p3")},
+			kind: SourceInsert, matched: []string{"p2", "p1", ""},
+		},
+		{
+			name: "a page added beside a page another source brought", date: checkDate, own: []string{"p1"}, others: []string{"x"},
+			previews:  []PreparedImage{preview(pagePDQ("p1")), preview(nearX(10)), preview(pagePDQ("p3"))},
+			originals: map[int]PreparedImage{1: original("x"), 2: original("p3")},
+			kind:      SourceInsert, matched: []string{"p1", "x", ""},
+		},
+		{
+			name: "a page added that looks like an own page", date: checkDate, own: []string{"p1", "p2"},
+			previews:  []PreparedImage{preview(pagePDQ("p1")), preview(pagePDQ("p2")), preview(flipBits(pagePDQ("p2"), 0, 1, 2, 3, 4, 5, 6, 7, 8, 9))},
+			originals: map[int]PreparedImage{2: {Info: ImageInfo{ImageHashes: ImageHashes{Pixel: pagePixels("variant"), PDQ: flipBits(pagePDQ("p2"), 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)}}}},
+			kind:      SourceInsert, matched: []string{"p1", "p2", ""},
+		},
+		{
+			name: "a page added that is pixel-identical to a page already taken", date: checkDate, own: []string{"p1", "p2"},
+			previews:  []PreparedImage{preview(pagePDQ("p1")), preview(pagePDQ("p2")), preview(flipBits(pagePDQ("p2"), 0, 1, 2, 3, 4, 5))},
+			originals: map[int]PreparedImage{2: original("p2")},
+			kind:      SourcePendingFlip,
+		},
+		{
+			name: "a page added while a leftover sits at the end", date: checkDate, own: []string{"p1", "p2", "old"},
 			previews: previewsOf("p1", "p2", "p3"), kind: SourcePendingFlip,
+		},
+		{
+			name: "zip-dated, a page added first", date: zipDate, own: []string{"p1", "p2"},
+			previews: previewsOf("p3", "p1", "p2"), originals: map[int]PreparedImage{0: original("p3")},
+			kind: SourcePendingFlip,
+		},
+		{
+			name: "zip-dated, a page added at the end", date: zipDate, own: []string{"p1", "p2"},
+			previews: previewsOf("p1", "p2", "p3"), originals: map[int]PreparedImage{2: original("p3")},
+			kind: SourceInsert, matched: []string{"p1", "p2", ""},
 		},
 		{
 			name: "a page near another image, no original", date: checkDate, own: []string{"p1", "p2", "p3"}, others: []string{"x"},
@@ -282,8 +330,9 @@ func TestCheckSourceImages(t *testing.T) {
 			continue
 		}
 
-		if check.kind != tt.kind || !slices.Equal(check.attribution, idsOf(ids, tt.attribution)) || !slices.Equal(check.needsOriginals, tt.needs) {
-			t.Errorf("%s: kind %q, attribution %v, needs %v; want %q, %v (%v), %v", tt.name, check.kind, check.attribution, check.needsOriginals, tt.kind, idsOf(ids, tt.attribution), tt.attribution, tt.needs)
+		if check.kind != tt.kind || !slices.Equal(check.attribution, idsOf(ids, tt.attribution)) || !slices.Equal(check.matched, idsOf(ids, tt.matched)) || !slices.Equal(check.needsOriginals, tt.needs) {
+			t.Errorf("%s: kind %q, attribution %v, matched %v, needs %v; want %q, %v (%v), %v (%v), %v", tt.name, check.kind, check.attribution, check.matched, check.needsOriginals,
+				tt.kind, idsOf(ids, tt.attribution), tt.attribution, idsOf(ids, tt.matched), tt.matched, tt.needs)
 		}
 	}
 }
@@ -349,5 +398,12 @@ func TestFindPagesNeedingOriginals(t *testing.T) {
 
 	if !slices.Equal(needed, []int{0, 2}) {
 		t.Errorf("needed %v, want [0 2]: the held and current sets left out", needed)
+	}
+
+	//a possible pure addition needs the originals of the pages that matched nothing
+	added := build(checkDate, ImageChangeNone, []string{"q0"}, nil)
+	needed, err = FindPagesNeedingOriginals([]*ImageSetMongo{added}, SourceInfo{Name: "pixiv", SourceID: "1", Date: serviceDate}, pages)
+	if err != nil || !slices.Equal(needed, []int{1, 2}) {
+		t.Errorf("pure addition: needed %v (%v), want [1 2]", needed, err)
 	}
 }
