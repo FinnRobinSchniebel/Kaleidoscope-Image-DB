@@ -74,6 +74,33 @@ func loadPendingUpdates(t *testing.T) []storedPendingUpdate {
 	return updates
 }
 
+// testPublished is when publishTestPendingUpdate's notifications were published.
+var testPublished = time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+
+// publishTestPendingUpdate stores user's pending-update notification for key
+// with status, published at testPublished, and returns its ID.
+func publishTestPendingUpdate(t *testing.T, user string, key notification.PendingUpdateKey, status notification.Status) bson.ObjectID {
+
+	t.Helper()
+	n := notification.Notification{UserID: user, Type: notification.TypePendingImageUpdate, CreatedAt: testPublished, UpdatedAt: testPublished, Status: status, Payload: notification.PendingImageUpdate{PendingUpdateKey: key}}
+	result, err := notification.Collection.InsertOne(context.Background(), n)
+	if err != nil {
+		t.Fatalf("storing a pending update notification: %v", err)
+	}
+	return result.InsertedID.(bson.ObjectID)
+}
+
+// loadPendingUpdate returns the stored pending-update notification id.
+func loadPendingUpdate(t *testing.T, id bson.ObjectID) storedPendingUpdate {
+
+	t.Helper()
+	var update storedPendingUpdate
+	if err := notification.Collection.FindOne(context.Background(), bson.M{"_id": id}).Decode(&update); err != nil {
+		t.Fatalf("loading notification %s: %v", id.Hex(), err)
+	}
+	return update
+}
+
 func setIDs(sets []*ImageSetMongo) []bson.ObjectID {
 	ids := make([]bson.ObjectID, len(sets))
 	for i, set := range sets {
@@ -841,6 +868,7 @@ func TestApplySourceUpdateInsertsPages(t *testing.T) {
 	s4, _ := newCheckSet(checkDate, []string{"r1"}, nil)
 	s4.Sources[0] = SourceInfo{Name: "zipsrc", SourceID: "5", AttributedTo: s4.Sources[0].AttributedTo}
 	insertSets(t, *s3, *s4)
+	s3Zip := publishTestPendingUpdate(t, "user1", notification.PendingUpdateKey{SetID: s3.ID, Service: "zipsrc", SourceID: "5"}, notification.StatusDeclined)
 
 	pages := &FetchedPages{Previews: previewsOf("q0", "q1", "q2"), Originals: map[int]PreparedImage{0: fetchedOriginal(t, "q0")}, FirstPageWidth: 100, FirstPageHeight: 200}
 	checkedAt := time.Now().UTC().Truncate(time.Millisecond)
@@ -875,6 +903,10 @@ func TestApplySourceUpdateInsertsPages(t *testing.T) {
 		t.Errorf("S3: zip copy %q, thumbnail %q; want the zip copy reset and the thumbnail cleared", stored.Sources[1].ImageChangeState, stored.ThumbNail)
 	}
 
+	if got := loadPendingUpdate(t, s3Zip); got.Status != notification.StatusInvalid {
+		t.Errorf("S3's zip notification %+v, want it invalid with its copy reset by the insert", got)
+	}
+
 	//S1 gains p3 and then extends S2, so it combines into S2, whose pending zip copy resets
 	s1, s1IDs := newCheckSet(checkDate, []string{"p1", "p2"}, nil)
 	s1.Sources = append(s1.Sources, SourceInfo{Name: "fanbox", SourceID: "8", AttributedTo: []bson.ObjectID{s1IDs["p1"]}, LastChecked: lastChecked, ImageChangeState: ImageChangePending})
@@ -884,6 +916,8 @@ func TestApplySourceUpdateInsertsPages(t *testing.T) {
 	s2.Sources[0] = SourceInfo{Name: "zipsrc", SourceID: "9", AttributedTo: s2.Sources[0].AttributedTo, LastChecked: lastChecked, ImageChangeState: ImageChangePending}
 	storeSetFiles(t, s2, "s2")
 	insertSets(t, *s1, *s2)
+	s1Fanbox := publishTestPendingUpdate(t, "user1", notification.PendingUpdateKey{SetID: s1.ID, Service: "fanbox", SourceID: "8"}, notification.StatusPending)
+	s2Zip := publishTestPendingUpdate(t, "user1", notification.PendingUpdateKey{SetID: s2.ID, Service: "zipsrc", SourceID: "9"}, notification.StatusPending)
 
 	pages = &FetchedPages{Previews: previewsOf("p1", "p2", "p3"), Originals: map[int]PreparedImage{2: fetchedOriginal(t, "p3")}, FirstPageWidth: 100, FirstPageHeight: 200}
 	results, err = ApplySourceUpdate(ctx, "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: serviceDate}, pages, checkedAt)
@@ -913,6 +947,13 @@ func TestApplySourceUpdateInsertsPages(t *testing.T) {
 	if len(states) != 3 || states["zipsrc"] != ImageChangeNone || states["pixiv"] != ImageChangeNone || states["fanbox"] != ImageChangeNone {
 		t.Errorf("S2's sources' states %v, want zipsrc, pixiv and fanbox, all none", states)
 	}
+
+	//S1's by its insert, S2's by the flow's combine
+	for name, id := range map[string]bson.ObjectID{"S1's fanbox": s1Fanbox, "S2's zip": s2Zip} {
+		if got := loadPendingUpdate(t, id); got.Status != notification.StatusInvalid {
+			t.Errorf("%s notification %+v, want it invalid with its copy reset", name, got)
+		}
+	}
 }
 
 func TestSourceInsertFailureLeavesSetUntouched(t *testing.T) {
@@ -938,9 +979,13 @@ func TestSourceInsertFailureLeavesSetUntouched(t *testing.T) {
 	dangling.Sources = append(dangling.Sources, SourceInfo{Name: "zipsrc", SourceID: "9", AttributedTo: []bson.ObjectID{bson.NewObjectID()}})
 	storeSetFiles(t, dangling, "dangling")
 
-	moving, _ = newCheckSet(checkDate, []string{"p1", "p2"}, nil)
+	//its declined fanbox copy is reset only in memory, since the write misses
+	var movingIDs map[string]bson.ObjectID
+	moving, movingIDs = newCheckSet(checkDate, []string{"p1", "p2"}, nil)
+	moving.Sources = append(moving.Sources, SourceInfo{Name: "fanbox", SourceID: "8", AttributedTo: []bson.ObjectID{movingIDs["p1"]}, LastChecked: checkDate, ImageChangeState: ImageChangeDeclined})
 	storeSetFiles(t, moving, "moving")
 	insertSets(t, *dangling, *moving)
+	movingFanbox := publishTestPendingUpdate(t, "user1", notification.PendingUpdateKey{SetID: moving.ID, Service: "fanbox", SourceID: "8"}, notification.StatusDeclined)
 
 	pages := &FetchedPages{Previews: previewsOf("p1", "p2", "p3"), Originals: map[int]PreparedImage{2: fetchedOriginal(t, "p3")}, FirstPageWidth: 100, FirstPageHeight: 200}
 	results, err := ApplySourceUpdate(ctx, "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: serviceDate}, pages, time.Now())
@@ -969,6 +1014,10 @@ func TestSourceInsertFailureLeavesSetUntouched(t *testing.T) {
 		if src := loadSet(t, set.ID).Sources[0]; !slices.Equal(src.AttributedTo, set.Sources[0].AttributedTo) || src.Title != "Old" || !src.Date.Equal(checkDate) || !src.LastChecked.Equal(set.Sources[0].LastChecked) {
 			t.Errorf("set %s's copy %+v, want it as stored and unstamped", set.ID.Hex(), src)
 		}
+	}
+
+	if got := loadPendingUpdate(t, movingFanbox); got.Status != notification.StatusDeclined || got.Payload.SetID != moving.ID {
+		t.Errorf("the changed set's fanbox notification %+v, want it still declined on the set", got)
 	}
 }
 

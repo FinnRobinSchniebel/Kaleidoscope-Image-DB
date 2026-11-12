@@ -185,6 +185,10 @@ func TestImportResetsAndKeepsHeldCopies(t *testing.T) {
 		{Name: "fanbox", SourceID: "2", AttributedTo: []bson.ObjectID{s.Image[1].ID}, LastChecked: checked, ImageChangeState: ImageChangeDeclined},
 	}
 	insertSets(t, *s)
+	sNotes := []bson.ObjectID{
+		publishTestPendingUpdate(t, user, notification.PendingUpdateKey{SetID: s.ID, Service: "zipsrc", SourceID: "1"}, notification.StatusPending),
+		publishTestPendingUpdate(t, user, notification.PendingUpdateKey{SetID: s.ID, Service: "fanbox", SourceID: "2"}, notification.StatusDeclined),
+	}
 
 	incoming := &ImageSetMongo{Title: "import", Sources: []SourceInfo{{Name: "zipsrc", SourceID: "1", Date: zipDate}}}
 	items := ProcessImageSet(ctx, incoming, files[0:3], user, "part1")
@@ -201,6 +205,12 @@ func TestImportResetsAndKeepsHeldCopies(t *testing.T) {
 		t.Errorf("S's reset copy has Date %v, want its held %v kept", stored.Sources[0].Date, heldDate)
 	}
 
+	for _, id := range sNotes {
+		if got := loadPendingUpdate(t, id); got.Status != notification.StatusInvalid {
+			t.Errorf("S's notification %+v, want it invalid with its copy reset", got)
+		}
+	}
+
 	//part 2: U keeps its held copies through the import's less and through V combining into it as a less
 	u := storeTestSet(t, user, "u", checked, pages[3], pages[4], pages[5])
 	u.Sources = []SourceInfo{
@@ -212,6 +222,8 @@ func TestImportResetsAndKeepsHeldCopies(t *testing.T) {
 	v := storeTestSet(t, user, "v", checked, pages[3])
 	v.Sources = []SourceInfo{{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{v.Image[0].ID}, Date: zipDate}}
 	insertSets(t, *u, *v)
+	uPixiv := publishTestPendingUpdate(t, user, notification.PendingUpdateKey{SetID: u.ID, Service: "pixiv", SourceID: "7"}, notification.StatusPending)
+	uFanbox := publishTestPendingUpdate(t, user, notification.PendingUpdateKey{SetID: u.ID, Service: "fanbox", SourceID: "8"}, notification.StatusDeclined)
 
 	incoming = &ImageSetMongo{Title: "import", Sources: []SourceInfo{{Name: "zipsrc", SourceID: "3", Date: zipDate}}}
 	items = ProcessImageSet(ctx, incoming, files[3:5], user, "part2")
@@ -236,6 +248,14 @@ func TestImportResetsAndKeepsHeldCopies(t *testing.T) {
 
 	if stored.Sources[0].ImageChangeState != ImageChangePending || stored.Sources[1].ImageChangeState != ImageChangeDeclined {
 		t.Errorf("U's states %q/%q; want pending and declined kept", stored.Sources[0].ImageChangeState, stored.Sources[1].ImageChangeState)
+	}
+
+	if got := loadPendingUpdate(t, uPixiv); got.Status != notification.StatusPending || got.Payload.SetID != u.ID {
+		t.Errorf("U's pixiv notification %+v, want it still pending on U", got)
+	}
+
+	if got := loadPendingUpdate(t, uFanbox); got.Status != notification.StatusDeclined || got.Payload.SetID != u.ID {
+		t.Errorf("U's fanbox notification %+v, want it still declined on U", got)
 	}
 }
 
@@ -303,5 +323,174 @@ func TestImportSuggestsNoSetBySourceAlone(t *testing.T) {
 
 	if err != nil || len(suggestions) != 0 {
 		t.Errorf("stored suggestions %v (%v), want none", suggestions, err)
+	}
+}
+
+func TestMergeFlowMovesHeldCopyNotifications(t *testing.T) {
+
+	useTestDatabase(t, fakeTagger{})
+	useTestVolume(t)
+
+	files := writeBlockPNGs(t, t.TempDir(), 8)
+	pages, err := PrepareImages(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	//the pictures must be far apart, so sets relate only through the pages they share
+	for i := range pages {
+
+		if pages[i].Plain {
+			t.Fatalf("page %d is plain", i)
+		}
+
+		for j := i + 1; j < len(pages); j++ {
+			if distance := PDQDistance(pages[i].Info.PDQ, pages[j].Info.PDQ); distance <= SimilarDistance {
+				t.Fatalf("pages %d and %d are only %d apart", i, j, distance)
+			}
+		}
+	}
+
+	const user = "moves-user"
+	ctx := context.Background()
+	checked := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+
+	//a stored set whose one source, in state, is attributed to all its pages
+	newSet := func(name, service, sourceID string, state ImageChangeState, pages ...PreparedImage) *ImageSetMongo {
+
+		t.Helper()
+		set := storeTestSet(t, user, name, checked, pages...)
+		set.Sources = []SourceInfo{{Name: service, SourceID: sourceID, AttributedTo: imageIDs(set.Image), LastChecked: checked, ImageChangeState: state}}
+		insertSets(t, *set)
+		return set
+	}
+
+	runFlow := func(entry *ImageSetMongo) {
+
+		t.Helper()
+		prepared, err := storedSetAsPreparedImages(entry.Image)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := mergeFlow(user, "ref", entry, prepared, false); err != nil {
+			t.Fatalf("flow of %s: %v", entry.Title, err)
+		}
+	}
+
+	stateOf := func(setID bson.ObjectID, service, sourceID string) ImageChangeState {
+
+		t.Helper()
+		stored := loadSet(t, setID)
+		index := slices.IndexFunc(stored.Sources, func(src SourceInfo) bool { return src.Name == service && src.SourceID == sourceID })
+		if index < 0 {
+			t.Fatalf("set %s has no %s/%s", stored.Title, service, sourceID)
+		}
+		return stored.Sources[index].ImageChangeState
+	}
+
+	exists := func(setID bson.ObjectID) bool {
+
+		t.Helper()
+		count, err := Collection.CountDocuments(ctx, bson.M{"_id": setID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return count == 1
+	}
+
+	//retarget: E extends T, so E's hold moves to T and E is removed
+	tA := newSet("t", "zipsrc", "1", ImageChangeNone, pages[0])
+	e := newSet("e", "pixiv", "7", ImageChangePending, pages[0], pages[1])
+	eNote := publishTestPendingUpdate(t, user, notification.PendingUpdateKey{SetID: e.ID, Service: "pixiv", SourceID: "7"}, notification.StatusPending)
+	runFlow(e)
+
+	if exists(e.ID) || stateOf(tA.ID, "pixiv", "7") != ImageChangePending {
+		t.Errorf("retarget: E left %t, T's pixiv copy %q; want E gone and its hold on T", exists(e.ID), stateOf(tA.ID, "pixiv", "7"))
+	}
+
+	if got := loadPendingUpdate(t, eNote); got.Status != notification.StatusPending || got.Payload.SetID != tA.ID {
+		t.Errorf("retarget: E's notification %+v, want it pending on T", got)
+	}
+
+	//replaced: E2's pending copy wins over T2's declined one of the same source
+	t2 := newSet("t2", "fanbox", "8", ImageChangeDeclined, pages[2])
+	e2 := newSet("e2", "fanbox", "8", ImageChangePending, pages[2], pages[3])
+	t2Note := publishTestPendingUpdate(t, user, notification.PendingUpdateKey{SetID: t2.ID, Service: "fanbox", SourceID: "8"}, notification.StatusDeclined)
+	e2Note := publishTestPendingUpdate(t, user, notification.PendingUpdateKey{SetID: e2.ID, Service: "fanbox", SourceID: "8"}, notification.StatusPending)
+	runFlow(e2)
+
+	if got := stateOf(t2.ID, "fanbox", "8"); got != ImageChangePending {
+		t.Errorf("replaced: T2's fanbox copy %q, want E2's pending kept", got)
+	}
+
+	if got := loadPendingUpdate(t, t2Note); got.Status != notification.StatusInvalid {
+		t.Errorf("replaced: T2's own notification %+v, want it invalid", got)
+	}
+
+	if got := loadPendingUpdate(t, e2Note); got.Status != notification.StatusPending || got.Payload.SetID != t2.ID {
+		t.Errorf("replaced: E2's notification %+v, want it pending on T2", got)
+	}
+
+	//two targets collapsing: E3 extends both, which then combine as duplicates
+	t3a := newSet("t3a", "zipsrc", "31", ImageChangeNone, pages[4])
+	t3b := newSet("t3b", "zipsrc", "32", ImageChangeNone, pages[5])
+	e3 := newSet("e3", "pixiv", "9", ImageChangePending, pages[4], pages[5])
+	e3Note := publishTestPendingUpdate(t, user, notification.PendingUpdateKey{SetID: e3.ID, Service: "pixiv", SourceID: "9"}, notification.StatusPending)
+	runFlow(e3)
+
+	survivor := t3b.ID
+	if exists(t3a.ID) {
+		survivor = t3a.ID
+	}
+
+	if exists(e3.ID) || exists(t3a.ID) == exists(t3b.ID) {
+		t.Errorf("two targets: E3 left %t, T3a %t, T3b %t; want only one target left", exists(e3.ID), exists(t3a.ID), exists(t3b.ID))
+	}
+
+	if got := loadPendingUpdate(t, e3Note); got.Status != notification.StatusPending || got.Payload.SetID != survivor {
+		t.Errorf("two targets: E3's notification %+v, want it pending on the target left", got)
+	}
+
+	live := bson.M{"type": notification.TypePendingImageUpdate, "payload.source_id": "9", "status": notification.StatusPending}
+	if count, err := notification.Collection.CountDocuments(ctx, live); err != nil || count != 1 {
+		t.Errorf("two targets: %d live notifications for pixiv/9 (%v), want 1", count, err)
+	}
+
+	//interrupted: E4's removal misses after both writes landed; the targets are made first, so E4 sorts last
+	t4a := newSet("t4a", "zipsrc", "41", ImageChangeNone, pages[6])
+	t4b := newSet("t4b", "zipsrc", "42", ImageChangeNone, pages[7])
+	e4 := newSet("e4", "zipsrc", "4", ImageChangePending, pages[6], pages[7])
+	e4Note := publishTestPendingUpdate(t, user, notification.PendingUpdateKey{SetID: e4.ID, Service: "zipsrc", SourceID: "4"}, notification.StatusPending)
+
+	armed := true
+	Tagger = fakeTagger{onProcess: func() {
+
+		if !armed {
+			return
+		}
+		armed = false
+
+		result, err := Collection.UpdateOne(ctx, bson.M{"_id": e4.ID}, bson.M{"$push": bson.M{"images": bson.M{"id": bson.NewObjectID()}}})
+		if err != nil || result.MatchedCount != 1 {
+			t.Errorf("adding an image to E4: matched %v (%v), want 1", result, err)
+		}
+	}}
+	runFlow(e4)
+
+	if !exists(e4.ID) || stateOf(t4a.ID, "zipsrc", "4") != ImageChangePending || stateOf(t4b.ID, "zipsrc", "4") != ImageChangePending {
+		t.Errorf("interrupted: E4 left %t; want E4 kept and its hold on T4a and T4b", exists(e4.ID))
+	}
+
+	if got := loadPendingUpdate(t, e4Note); got.Status != notification.StatusPending || got.Payload.SetID != e4.ID {
+		t.Errorf("interrupted: E4's notification %+v, want it pending on E4", got)
+	}
+
+	for name, target := range map[string]bson.ObjectID{"T4a": t4a.ID, "T4b": t4b.ID} {
+
+		copied := bson.M{"type": notification.TypePendingImageUpdate, "payload.set_id": target, "payload.source_id": "4", "status": notification.StatusPending, "created_at": testPublished}
+		if count, err := notification.Collection.CountDocuments(ctx, copied); err != nil || count != 1 {
+			t.Errorf("interrupted: %d copies on %s with E4's CreatedAt (%v), want 1", count, name, err)
+		}
 	}
 }

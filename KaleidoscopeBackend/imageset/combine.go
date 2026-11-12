@@ -71,10 +71,10 @@ func mergeStoredSetIntoTargets(userID, ref string, set *ImageSetMongo, targets [
 
 	for _, target := range targets {
 
-		var imagesAdded bool
+		var outcome mergeTargetOutcome
 		plan, err := makeAutoMergePlan(target, set)
 		if err == nil {
-			imagesAdded, err = applyMergePlan(userID, plan)
+			outcome, err = applyMergePlan(userID, plan)
 		}
 
 		if err != nil {
@@ -84,7 +84,7 @@ func mergeStoredSetIntoTargets(userID, ref string, set *ImageSetMongo, targets [
 		reason := fmt.Sprintf("combined with set %s", set.ID.Hex())
 		items = append(items, notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.set.ID, Reason: reason})
 
-		outcomes = append(outcomes, mergeTargetOutcome{setID: target.set.ID, imagesAdded: imagesAdded})
+		outcomes = append(outcomes, outcome)
 	}
 
 	if err := removeMergedSet(userID, set); err != nil {
@@ -154,17 +154,17 @@ func makeAutoMergePlan(target mergeCandidate, absorbed *ImageSetMongo) (mergePla
 // the absorbed set stays until removeMergedSet. The survivor is changed in
 // place, even when this fails. Sets sharing an image ID are refused, and nothing
 // is written until the merged set passes checkAttribution; until the save lands,
-// a failure removes the new links and undoes the counts. The caller holds
-// LockUserSets.
-func applyMergePlan(userID string, plan mergePlan) (imagesAdded bool, err error) {
+// a failure removes the new links and undoes the counts. The outcome is only
+// filled once the save landed. The caller holds LockUserSets.
+func applyMergePlan(userID string, plan mergePlan) (mergeTargetOutcome, error) {
 
 	survivor, absorbed := plan.survivor, plan.absorbed
 	if survivor.KscopeUserId != userID || absorbed.KscopeUserId != userID {
-		return false, fmt.Errorf("sets %s and %s aren't both the user's", survivor.ID.Hex(), absorbed.ID.Hex())
+		return mergeTargetOutcome{}, fmt.Errorf("sets %s and %s aren't both the user's", survivor.ID.Hex(), absorbed.ID.Hex())
 	}
 
 	if survivor.ID == absorbed.ID {
-		return false, fmt.Errorf("set %s can't be merged with itself", survivor.ID.Hex())
+		return mergeTargetOutcome{}, fmt.Errorf("set %s can't be merged with itself", survivor.ID.Hex())
 	}
 
 	held := make(map[bson.ObjectID]bool, len(survivor.Image))
@@ -175,7 +175,7 @@ func applyMergePlan(userID string, plan mergePlan) (imagesAdded bool, err error)
 	//removeMergedSet deletes every absorbed file, so a shared image would take the survivor's file with it
 	for _, img := range absorbed.Image {
 		if held[img.ID] {
-			return false, fmt.Errorf("sets %s and %s share image %s", survivor.ID.Hex(), absorbed.ID.Hex(), img.ID.Hex())
+			return mergeTargetOutcome{}, fmt.Errorf("sets %s and %s share image %s", survivor.ID.Hex(), absorbed.ID.Hex(), img.ID.Hex())
 		}
 	}
 
@@ -183,15 +183,15 @@ func applyMergePlan(userID string, plan mergePlan) (imagesAdded bool, err error)
 
 	images, err := plan.orderedImages()
 	if err != nil {
-		return false, err
+		return mergeTargetOutcome{}, err
 	}
 	survivor.Image = images
 	survivor.Description = plan.description
-	indexes := mergeSourcesInto(plan)
+	indexes, heldCopies := mergeSourcesInto(plan)
 	mergeSetFields(survivor, absorbed)
 
 	if err := survivor.checkAttribution(); err != nil {
-		return false, err
+		return mergeTargetOutcome{}, err
 	}
 
 	// Until survivor's write lands, a failure removes the new links and the counts recorded so far.
@@ -231,12 +231,12 @@ func applyMergePlan(userID string, plan mergePlan) (imagesAdded bool, err error)
 
 		sourceID, copied := plan.copiedFrom[gained.ID]
 		if !copied {
-			return false, fmt.Errorf("image %s is new to set %s but isn't a copy", gained.ID.Hex(), survivor.ID.Hex())
+			return mergeTargetOutcome{}, fmt.Errorf("image %s is new to set %s but isn't a copy", gained.ID.Hex(), survivor.ID.Hex())
 		}
 
 		//linked under its new name even within one folder
 		if err := linkIntoFolder(absorbed.Path, absorbedNames[sourceID], survivor.Path, gained.Name); err != nil {
-			return false, err
+			return mergeTargetOutcome{}, err
 		}
 		linked = append(linked, gained.Name)
 	}
@@ -245,24 +245,24 @@ func applyMergePlan(userID string, plan mergePlan) (imagesAdded bool, err error)
 
 		change, err := Tagger.ProcessSourceTags(userID, survivor, index, absorbed.Sources[a].Tags)
 		if err != nil {
-			return false, fmt.Errorf("processing source tags: %w", err)
+			return mergeTargetOutcome{}, fmt.Errorf("processing source tags: %w", err)
 		}
 		counted = append(counted, change)
 	}
 
 	change, err := Tagger.CombineTagOverrides(userID, survivor, absorbed.TagRuleOverrides)
 	if err != nil {
-		return false, fmt.Errorf("combining tag overrides: %w", err)
+		return mergeTargetOutcome{}, fmt.Errorf("combining tag overrides: %w", err)
 	}
 	counted = append(counted, change)
 
 	if err := saveMergedSet(survivor, before); err != nil {
-		return false, err
+		return mergeTargetOutcome{}, err
 	}
 	committed = true
 	refreshUntagged(userID)
 
-	return len(survivor.Image) > len(before), nil
+	return mergeTargetOutcome{setID: survivor.ID, imagesAdded: len(survivor.Image) > len(before), heldCopies: heldCopies}, nil
 }
 
 // removeMergedSet removes absorbed once its content has been written into its
@@ -378,15 +378,25 @@ func collapseMergedSetImages(survivor, absorbed *ImageSetMongo) (images []ImageI
 // winning copy's order first, metadata from the absorbed copy only when
 // doesIncomingSourceInfoWin, bookkeeping by collapseMergedSourceBookkeeping); any
 // other is appended with no tags. Every copy's image-change state then follows
-// plan.scenario (decideCombinedImageChangeState). Returns each absorbed source's
-// index in survivor.Sources, where the caller applies its tags with
-// ProcessSourceTags.
-func mergeSourcesInto(plan mergePlan) []int {
+// plan.scenario (decideCombinedImageChangeState), and heldCopies holds each
+// change to a hold. Returns each absorbed source's index in survivor.Sources,
+// where the caller applies its tags with ProcessSourceTags.
+func mergeSourcesInto(plan mergePlan) (indexes []int, heldCopies []heldCopyChange) {
 
 	survivor, absorbed := plan.survivor, plan.absorbed.Sources
 	survivorSources := len(survivor.Sources)
 	collapsed := make(map[int]bool, len(absorbed))
-	indexes := make([]int, len(absorbed))
+	indexes = make([]int, len(absorbed))
+	setCombinedState := func(dst, survivorCopy, absorbedCopy *SourceInfo) {
+
+		state, change := decideCombinedImageChangeState(survivorCopy, absorbedCopy, plan.scenario)
+		dst.ImageChangeState = state
+
+		if change.survivorLost || change.absorbedKept {
+			heldCopies = append(heldCopies, change)
+		}
+	}
+
 	for a, source := range absorbed {
 
 		remapped := make([]bson.ObjectID, 0, len(source.AttributedTo))
@@ -415,7 +425,7 @@ func mergeSourcesInto(plan mergePlan) []int {
 
 		if index == -1 {
 			source.Tags = nil
-			source.ImageChangeState = decideCombinedImageChangeState(nil, &source, plan.scenario)
+			setCombinedState(&source, nil, &source)
 			survivor.Sources = append(survivor.Sources, source)
 			indexes[a] = len(survivor.Sources) - 1
 			continue
@@ -430,19 +440,19 @@ func mergeSourcesInto(plan mergePlan) []int {
 
 		survivor.Sources[index].AttributedTo = mergeAttribution(loser.AttributedTo, winner.AttributedTo)
 		collapseMergedSourceBookkeeping(&survivor.Sources[index], winner, loser)
-		survivor.Sources[index].ImageChangeState = decideCombinedImageChangeState(&survivorBefore, &source, plan.scenario)
+		setCombinedState(&survivor.Sources[index], &survivorBefore, &source)
 		collapsed[index] = true
 		indexes[a] = index
 	}
 
 	for i := range survivorSources {
 		if !collapsed[i] {
-			survivor.Sources[i].ImageChangeState = decideCombinedImageChangeState(&survivor.Sources[i], nil, plan.scenario)
+			setCombinedState(&survivor.Sources[i], &survivor.Sources[i], nil)
 		}
 	}
 
 	deriveAuthors(survivor)
-	return indexes
+	return indexes, heldCopies
 }
 
 // doesIncomingSourceInfoWin reports whether incoming, an absorbed set's or an
@@ -492,8 +502,9 @@ func collapseMergedSourceBookkeeping(kept *SourceInfo, winner, loser SourceInfo)
 // decideCombinedImageChangeState returns one source's image-change state after a
 // combine: the kept copy's, the absorbed set's in an addition and the survivor's
 // in a less or duplicate. A nil copy (a set without the source) and any other
-// scenario, such as a manual merge's zero one, give none.
-func decideCombinedImageChangeState(survivor, absorbed *SourceInfo, scenario mergeScenario) ImageChangeState {
+// scenario, such as a manual merge's zero one, give none. change says which held
+// copy lost or kept its hold; neither flag is set when no hold was affected.
+func decideCombinedImageChangeState(survivor, absorbed *SourceInfo, scenario mergeScenario) (ImageChangeState, heldCopyChange) {
 
 	var kept *SourceInfo
 	switch scenario {
@@ -503,10 +514,21 @@ func decideCombinedImageChangeState(survivor, absorbed *SourceInfo, scenario mer
 		kept = survivor
 	}
 
-	if kept == nil {
-		return ImageChangeNone
+	var change heldCopyChange
+	if survivor != nil {
+		change.service, change.sourceID = survivor.Name, survivor.SourceID
+		change.survivorLost = survivor.ImageChangeState != ImageChangeNone && kept != survivor
 	}
-	return kept.ImageChangeState
+
+	if absorbed != nil {
+		change.service, change.sourceID = absorbed.Name, absorbed.SourceID
+		change.absorbedKept = absorbed.ImageChangeState != ImageChangeNone && kept == absorbed
+	}
+
+	if kept == nil {
+		return ImageChangeNone, change
+	}
+	return kept.ImageChangeState, change
 }
 
 // mergeSetFields takes absorbed's set-level fields into survivor: an empty Itype

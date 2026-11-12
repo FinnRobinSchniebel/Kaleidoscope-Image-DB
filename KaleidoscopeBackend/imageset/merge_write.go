@@ -61,24 +61,36 @@ func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.Obj
 
 // resetHeldSourceCopies sets every pending or declined copy on set back to none,
 // for a set that gained images: a hold only covers the images its check saw.
-// Each copy's held Date is left alone, so the next sync checks it again.
-func resetHeldSourceCopies(set *ImageSetMongo) {
+// Each copy's held Date is left alone, so the next sync checks it again. Returns
+// a survivorLost change for each copy it reset.
+func resetHeldSourceCopies(set *ImageSetMongo) []heldCopyChange {
 
+	var reset []heldCopyChange
 	for i := range set.Sources {
-		set.Sources[i].ImageChangeState = ImageChangeNone
+
+		src := &set.Sources[i]
+		if src.ImageChangeState == ImageChangeNone {
+			continue
+		}
+
+		reset = append(reset, heldCopyChange{service: src.Name, sourceID: src.SourceID, survivorLost: true})
+		src.ImageChangeState = ImageChangeNone
 	}
+	return reset
 }
 
 // mergeIntoSet writes incoming into match's set (a duplicate, addition or less
 // candidate): an addition inserts its new images and resets the set's held
 // copies (resetHeldSourceCopies), and incoming's source is attached to the
 // images it covers. Nothing is written before checkAttribution,
-// and a failure removes the new files and undoes the recorded tag counts.
-// imagesAdded (the set needs checking in turn) is only reported for a write
-// that landed. The caller holds LockUserSets.
-func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []PreparedImage, match mergeCandidate) (item notification.ItemResult, imagesAdded bool) {
+// and a failure removes the new files and undoes the recorded tag counts. The
+// outcome's imagesAdded (the set needs checking in turn) and heldCopies (the
+// copies the addition reset) are only reported for a write that landed. The
+// caller holds LockUserSets.
+func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []PreparedImage, match mergeCandidate) (item notification.ItemResult, outcome mergeTargetOutcome) {
 
 	target := match.set
+	unwritten := mergeTargetOutcome{setID: target.ID}
 	before := slices.Clone(target.Image)
 	tagsBefore, autoTagsBefore := slices.Clone(target.Tags), slices.Clone(target.AutoTags)
 	itypeBefore, otherBefore := target.Itype, target.Other
@@ -94,12 +106,13 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 	index, isNew := attachIncomingSource(target, incoming, findMergedAttributionImageIDs(match, keeperOf, added))
 
 	//after the attach, which keeps a held copy's Date
+	var reset []heldCopyChange
 	if len(added) > 0 {
-		resetHeldSourceCopies(target)
+		reset = resetHeldSourceCopies(target)
 	}
 
 	if err := target.checkAttribution(); err != nil {
-		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), unwritten
 	}
 
 	// Until the write lands, a failure removes the new files and the counts recorded so far.
@@ -119,13 +132,13 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 		}
 
 		if err := writePreparedImages(target, toWrite); err != nil {
-			return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+			return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), unwritten
 		}
 	}
 
 	counted, err := Tagger.ProcessSourceTags(userID, target, index, incoming.Sources[0].Tags)
 	if err != nil {
-		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: processing source tags: %w", notification.ErrSaveFailed, err)), false
+		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: processing source tags: %w", notification.ErrSaveFailed, err)), unwritten
 	}
 
 	source := &target.Sources[index]
@@ -138,7 +151,7 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 
 	if !realChange && !otherChange {
 		committed = true
-		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, false
+		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, unwritten
 	}
 
 	if realChange {
@@ -150,20 +163,21 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 	}
 
 	if err := saveMergedSet(target, before); err != nil {
-		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), false
+		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), unwritten
 	}
 	committed = true
 	refreshUntagged(userID)
 
+	landed := mergeTargetOutcome{setID: target.ID, imagesAdded: len(added) > 0, heldCopies: reset}
 	switch {
 	case !realChange:
-		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, false
+		return notification.ItemResult{Kind: notification.ItemUnchanged, Ref: ref, SetID: target.ID}, landed
 	case len(added) == 1:
-		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "added 1 new image to an existing set"}, true
+		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "added 1 new image to an existing set"}, landed
 	case len(added) > 1:
-		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: fmt.Sprintf("added %d new images to an existing set", len(added))}, true
+		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: fmt.Sprintf("added %d new images to an existing set", len(added))}, landed
 	default:
-		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "matched an existing set"}, false
+		return notification.ItemResult{Kind: notification.ItemUpdated, Ref: ref, SetID: target.ID, Reason: "matched an existing set"}, landed
 	}
 }
 

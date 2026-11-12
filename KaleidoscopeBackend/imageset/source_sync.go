@@ -171,7 +171,8 @@ func applySourceUpdateInSet(set *ImageSetMongo, index int, newSrc SourceInfo, pa
 // matched, into set where an import's addition would place them, attributes the
 // copy at set.Sources[index] to every page in the service's order, resets the
 // set's held copies and applies newSrc's metadata, in one guarded write
-// (saveMergedSet). originals holds each new page's fetched original. A failure
+// (saveMergedSet); once it lands, the reset copies' notifications are
+// invalidated. originals holds each new page's fetched original. A failure
 // leaves the set as it was. The caller holds the user's set lock.
 func insertSourcePagesInSet(set *ImageSetMongo, index int, newSrc SourceInfo, matched []bson.ObjectID, originals map[int]PreparedImage, checkedAt time.Time) SourceWriteResult {
 
@@ -193,7 +194,7 @@ func insertSourcePagesInSet(set *ImageSetMongo, index int, newSrc SourceInfo, ma
 	keeperOf, added := planImagesToMerge(prepared, match)
 	set.Image = placeMergedImages(set.Image, match, keeperOf, added)
 	set.Sources[index].AttributedTo = mergeAttribution(set.Sources[index].AttributedTo, findMergedAttributionImageIDs(match, keeperOf, added))
-	resetHeldSourceCopies(set)
+	reset := resetHeldSourceCopies(set)
 
 	if result.Err = set.checkAttribution(); result.Err != nil {
 		return result
@@ -228,6 +229,13 @@ func insertSourcePagesInSet(set *ImageSetMongo, index int, newSrc SourceInfo, ma
 
 	committed = true
 	refreshUntagged(set.KscopeUserId)
+
+	var carried carriedNotifications
+	for _, change := range reset {
+		carried.dropLocation(change.makeKey(set.ID))
+	}
+	carried.settle(set.KscopeUserId)
+
 	result.Changed = true
 	return result
 }

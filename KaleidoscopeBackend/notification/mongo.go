@@ -2,8 +2,11 @@ package notification
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"maps"
+	"slices"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -55,6 +58,117 @@ func findPendingUpdateKeys(ctx context.Context, setIDs []bson.ObjectID) ([]Pendi
 		keys[i] = n.Payload
 	}
 	return keys, nil
+}
+
+// livePendingUpdateStatuses are the statuses a pending-update notification can
+// still be settled from.
+var livePendingUpdateStatuses = bson.M{"$in": []Status{StatusPending, StatusDeclined}}
+
+// storedPendingImageUpdate is a stored pending-update notification, read back to
+// be settled.
+type storedPendingImageUpdate struct {
+	ID        bson.ObjectID      `bson:"_id"`
+	UserID    string             `bson:"user_id"`
+	CreatedAt time.Time          `bson:"created_at"`
+	ReadAt    time.Time          `bson:"read_at,omitempty"`
+	Status    Status             `bson:"status"`
+	Payload   PendingImageUpdate `bson:"payload"`
+}
+
+// findLivePendingImageUpdates returns userID's pending-update notifications
+// still pending or declined under any of keys.
+func findLivePendingImageUpdates(ctx context.Context, userID string, keys []PendingUpdateKey) ([]storedPendingImageUpdate, error) {
+
+	if len(keys) == 0 {
+		return nil, nil
+	}
+
+	matchKeys := make(bson.A, len(keys))
+	for i, key := range keys {
+		matchKeys[i] = bson.M{"payload.set_id": key.SetID, "payload.service": key.Service, "payload.source_id": key.SourceID}
+	}
+
+	filter := bson.M{"user_id": userID, "type": TypePendingImageUpdate, "status": livePendingUpdateStatuses, "$or": matchKeys}
+	cursor, err := Collection.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("finding live pending image update notifications: %w", err)
+	}
+
+	var live []storedPendingImageUpdate
+	if err := cursor.All(ctx, &live); err != nil {
+		return nil, fmt.Errorf("reading live pending image update notifications: %w", err)
+	}
+	return live, nil
+}
+
+// settleOnePendingImageUpdate makes n follow its copy to sets: with none it's
+// invalidated; otherwise it's retargeted to sets[0], unless its own set is among
+// them, and every other set gets a copy keeping its status and dates. Writes
+// only take n while it's still live, and a retarget that misses copies nothing.
+func settleOnePendingImageUpdate(ctx context.Context, n storedPendingImageUpdate, sets []bson.ObjectID, now time.Time) error {
+
+	stillLive := bson.M{"_id": n.ID, "user_id": n.UserID, "status": livePendingUpdateStatuses}
+	if len(sets) == 0 {
+
+		if _, err := Collection.UpdateOne(ctx, stillLive, bson.M{"$set": bson.M{"status": StatusInvalid, "updated_at": now}}); err != nil {
+			return fmt.Errorf("invalidating notification %s: %w", n.ID.Hex(), err)
+		}
+		return nil
+	}
+
+	copyTo := sets
+	if !slices.Contains(sets, n.Payload.SetID) {
+
+		result, err := Collection.UpdateOne(ctx, stillLive, bson.M{"$set": bson.M{"payload.set_id": sets[0], "updated_at": now}})
+		if err != nil {
+			return fmt.Errorf("retargeting notification %s: %w", n.ID.Hex(), err)
+		}
+
+		if result.MatchedCount == 0 {
+			return nil //resolved since it was read
+		}
+		copyTo = sets[1:]
+	}
+
+	var errs []error
+	for _, setID := range copyTo {
+
+		if setID == n.Payload.SetID {
+			continue
+		}
+
+		payload := n.Payload
+		payload.SetID = setID
+		copied := newNotification(n.UserID, payload, now)
+		copied.CreatedAt, copied.ReadAt, copied.Status = n.CreatedAt, n.ReadAt, n.Status
+		if _, err := Collection.InsertOne(ctx, copied); err != nil {
+			errs = append(errs, fmt.Errorf("copying notification %s to set %s: %w", n.ID.Hex(), setID.Hex(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// SettlePendingImageUpdates makes userID's pending-update notifications follow
+// their copies after a merge. locations maps each origin, the key a notification
+// is stored under, to the sets its copy is held on now; with several, the first
+// takes a retarget (settleOnePendingImageUpdate). Every live notification is
+// read before any is written, so one moved onto a key another origin leaves is
+// never settled twice. A failure doesn't stop the rest.
+func SettlePendingImageUpdates(ctx context.Context, userID string, locations map[PendingUpdateKey][]bson.ObjectID) error {
+
+	live, err := findLivePendingImageUpdates(ctx, userID, slices.Collect(maps.Keys(locations)))
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	var errs []error
+	for _, n := range live {
+		if err := settleOnePendingImageUpdate(ctx, n, locations[n.Payload.PendingUpdateKey], now); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // UserPendingImageUpdate is a pending-update payload and the user it's

@@ -187,9 +187,9 @@ func TestMergeIntoSetUnchanged(t *testing.T) {
 	match := mergeCandidate{set: target, scenario: scenarioDuplicate, exactOf: [][]bson.ObjectID{{imageA}, {imageB}}}
 
 	//no database here, so attempting the write would crash on the nil Collection
-	item, imagesAdded := mergeIntoSet("user1", "group", incoming, prepared, match)
-	if item.Kind != notification.ItemUnchanged || imagesAdded {
-		t.Errorf("item = %+v, imagesAdded %t; want unchanged with nothing added", item, imagesAdded)
+	item, outcome := mergeIntoSet("user1", "group", incoming, prepared, match)
+	if item.Kind != notification.ItemUnchanged || outcome.imagesAdded {
+		t.Errorf("item = %+v, imagesAdded %t; want unchanged with nothing added", item, outcome.imagesAdded)
 	}
 }
 
@@ -243,7 +243,8 @@ func TestMergeIntoSetResetsHeldCopiesOnAddition(t *testing.T) {
 			prepared, match.exactOf = append(prepared, preparedWithPixels(2), newPage), [][]bson.ObjectID{{imageA}, {imageB}, nil}
 		}
 
-		if item, _ := mergeIntoSet("user1", "group", incoming, prepared, match); item.Kind != notification.ItemFailed {
+		item, outcome := mergeIntoSet("user1", "group", incoming, prepared, match)
+		if item.Kind != notification.ItemFailed {
 			t.Fatalf("%s: item %+v, want the failed tag step", tc.name, item)
 		}
 
@@ -251,6 +252,11 @@ func TestMergeIntoSetResetsHeldCopiesOnAddition(t *testing.T) {
 		got := []ImageChangeState{target.Sources[0].ImageChangeState, target.Sources[1].ImageChangeState}
 		if !slices.Equal(got, tc.want) || !target.Sources[0].Date.Equal(heldDate) {
 			t.Errorf("%s: states %q, held copy's Date %v; want %q and its Date kept", tc.name, got, target.Sources[0].Date, tc.want)
+		}
+
+		//the write never landed, so the copies are still held where they're stored
+		if len(outcome.heldCopies) != 0 {
+			t.Errorf("%s: the failed write reported held-copy changes %+v", tc.name, outcome.heldCopies)
 		}
 
 		if entries, _ := os.ReadDir(folder); len(entries) != 0 {

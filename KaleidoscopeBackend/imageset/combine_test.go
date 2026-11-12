@@ -202,7 +202,7 @@ func TestMergeSourcesInto(t *testing.T) {
 		{Name: "other", SourceID: "601", Description: "other text", Tags: []SourceTag{{Default: "cat"}}, AttributedTo: []bson.ObjectID{imgC}},
 	}
 
-	indexes := mergeSourcesInto(mergePlan{survivor: survivor, absorbed: &ImageSetMongo{Sources: absorbed}, idMap: idMap})
+	indexes, _ := mergeSourcesInto(mergePlan{survivor: survivor, absorbed: &ImageSetMongo{Sources: absorbed}, idMap: idMap})
 	if !slices.Equal(indexes, []int{0, 1}) {
 		t.Fatalf("indexes = %v, want [0 1]", indexes)
 	}
@@ -249,7 +249,7 @@ func TestMergeSourcesInto(t *testing.T) {
 	}
 
 	uploads := &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imgA}}}}
-	if got := mergeSourcesInto(mergePlan{survivor: uploads, absorbed: &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imgC}}}}, idMap: idMap}); !slices.Equal(got, []int{0}) {
+	if got, _ := mergeSourcesInto(mergePlan{survivor: uploads, absorbed: &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imgC}}}}, idMap: idMap}); !slices.Equal(got, []int{0}) {
 		t.Errorf("ID-less upload: indexes %v, want it collapsed into the existing upload source", got)
 	}
 
@@ -258,9 +258,14 @@ func TestMergeSourcesInto(t *testing.T) {
 	states := []struct {
 		scenario                              mergeScenario
 		collapsed, survivorCopy, absorbedCopy ImageChangeState
+		held                                  []heldCopyChange
 	}{
-		{scenarioLess, ImageChangePending, ImageChangeDeclined, ImageChangeNone},
-		{scenarioAddition, ImageChangeNone, ImageChangeNone, ImageChangePending},
+		{scenarioLess, ImageChangePending, ImageChangeDeclined, ImageChangeNone, nil},
+		{scenarioAddition, ImageChangeNone, ImageChangeNone, ImageChangePending, []heldCopyChange{
+			{service: "pixiv", sourceID: "7", survivorLost: true},
+			{service: "zipsrc", sourceID: "9", absorbedKept: true},
+			{service: "fanbox", sourceID: "8", survivorLost: true},
+		}},
 	}
 
 	for _, tc := range states {
@@ -275,10 +280,14 @@ func TestMergeSourcesInto(t *testing.T) {
 		}}
 		kept := map[bson.ObjectID]bson.ObjectID{shared: shared, absorbedOnly: absorbedOnly}
 
-		mergeSourcesInto(mergePlan{survivor: held, absorbed: incoming, idMap: kept, scenario: tc.scenario})
+		_, heldCopies := mergeSourcesInto(mergePlan{survivor: held, absorbed: incoming, idMap: kept, scenario: tc.scenario})
 		got := []ImageChangeState{held.Sources[0].ImageChangeState, held.Sources[1].ImageChangeState, held.Sources[2].ImageChangeState}
 		if want := []ImageChangeState{tc.collapsed, tc.survivorCopy, tc.absorbedCopy}; !slices.Equal(got, want) {
 			t.Errorf("%s: states (collapsed, survivor-only, absorbed-only) %q, want %q", tc.scenario, got, want)
+		}
+
+		if !slices.Equal(heldCopies, tc.held) {
+			t.Errorf("%s: held-copy changes %+v, want %+v", tc.scenario, heldCopies, tc.held)
 		}
 	}
 }
@@ -365,33 +374,48 @@ func TestDecideCombinedImageChangeState(t *testing.T) {
 		return &SourceInfo{Name: "pixiv", SourceID: "7", ImageChangeState: state}
 	}
 
-	//want is the state after an addition, a less and a duplicate; a nil copy is a set without the source
+	//want is the state after an addition, a less and a duplicate, and lost and kept the flags an addition sets;
+	//a less or duplicate sets neither. A nil copy is a set without the source
 	tests := []struct {
 		name               string
 		survivor, absorbed *SourceInfo
 		want               [3]ImageChangeState
+		lost, kept         bool
 	}{
-		{"survivor pending, absorbed none", copyWith(pending), copyWith(none), [3]ImageChangeState{none, pending, pending}},
-		{"survivor none, absorbed pending", copyWith(none), copyWith(pending), [3]ImageChangeState{pending, none, none}},
-		{"survivor declined, absorbed pending", copyWith(declined), copyWith(pending), [3]ImageChangeState{pending, declined, declined}},
-		{"survivor pending, absorbed declined", copyWith(pending), copyWith(declined), [3]ImageChangeState{declined, pending, pending}},
-		{"only absorbed, declined", nil, copyWith(declined), [3]ImageChangeState{declined, none, none}},
-		{"only survivor, declined", copyWith(declined), nil, [3]ImageChangeState{none, declined, declined}},
+		{"survivor pending, absorbed none", copyWith(pending), copyWith(none), [3]ImageChangeState{none, pending, pending}, true, false},
+		{"survivor none, absorbed pending", copyWith(none), copyWith(pending), [3]ImageChangeState{pending, none, none}, false, true},
+		{"survivor declined, absorbed pending", copyWith(declined), copyWith(pending), [3]ImageChangeState{pending, declined, declined}, true, true},
+		{"survivor pending, absorbed declined", copyWith(pending), copyWith(declined), [3]ImageChangeState{declined, pending, pending}, true, true},
+		{"only absorbed, declined", nil, copyWith(declined), [3]ImageChangeState{declined, none, none}, false, true},
+		{"only survivor, declined", copyWith(declined), nil, [3]ImageChangeState{none, declined, declined}, true, false},
 	}
 
 	scenarios := [3]mergeScenario{scenarioAddition, scenarioLess, scenarioDuplicate}
 	for _, tc := range tests {
 		for i, scenario := range scenarios {
-			if got := decideCombinedImageChangeState(tc.survivor, tc.absorbed, scenario); got != tc.want[i] {
+
+			got, change := decideCombinedImageChangeState(tc.survivor, tc.absorbed, scenario)
+			if got != tc.want[i] {
 				t.Errorf("%s, %s: state %q, want %q", tc.name, scenario, got, tc.want[i])
+			}
+
+			want := heldCopyChange{service: "pixiv", sourceID: "7"}
+			if scenario == scenarioAddition {
+				want.survivorLost, want.absorbedKept = tc.lost, tc.kept
+			}
+
+			if change != want {
+				t.Errorf("%s, %s: change %+v, want %+v", tc.name, scenario, change, want)
 			}
 		}
 	}
 
 	//a manual merge has no automatic scenario, and resets every held copy
 	for _, scenario := range []mergeScenario{scenarioPartial, ""} {
-		if got := decideCombinedImageChangeState(copyWith(pending), copyWith(pending), scenario); got != none {
-			t.Errorf("scenario %q: state %q, want none", scenario, got)
+
+		got, change := decideCombinedImageChangeState(copyWith(pending), copyWith(pending), scenario)
+		if want := (heldCopyChange{service: "pixiv", sourceID: "7", survivorLost: true}); got != none || change != want {
+			t.Errorf("scenario %q: state %q, change %+v; want none and %+v", scenario, got, change, want)
 		}
 	}
 }
