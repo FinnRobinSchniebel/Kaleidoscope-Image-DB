@@ -369,12 +369,7 @@ func TestMergeFlowMovesHeldCopyNotifications(t *testing.T) {
 	runFlow := func(entry *ImageSetMongo) {
 
 		t.Helper()
-		prepared, err := storedSetAsPreparedImages(entry.Image)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if _, err := mergeFlow(user, "ref", entry, prepared, false); err != nil {
+		if _, err := mergeFlow(user, "ref", entry, storedSetAsPreparedImages(entry.Image), false); err != nil {
 			t.Fatalf("flow of %s: %v", entry.Title, err)
 		}
 	}
@@ -562,11 +557,7 @@ func TestSetWriteWithLostReplyKeepsFiles(t *testing.T) {
 	//combine
 	survivor := newSet("survivor", "3", pages[2])
 	absorbed := newSet("absorbed", "4", pages[2], pages[3])
-	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor, scenario: scenarioAddition}, absorbed)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	plan := makeAutoMergePlan(classifyAgainst(survivor, absorbed), absorbed)
 	_, err = applyMergePlan(user, plan)
 	Collection = direct
 
@@ -657,11 +648,7 @@ func TestMergeWriteMissRemovesNewFiles(t *testing.T) {
 	survivor := newSet("survivor", "3", pages[2])
 	absorbed := newSet("absorbed", "4", pages[2], pages[3])
 	missing = survivor
-	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor, scenario: scenarioAddition}, absorbed)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	plan := makeAutoMergePlan(classifyAgainst(survivor, absorbed), absorbed)
 	if _, err := applyMergePlan(user, plan); err == nil {
 		t.Error("combine: no error, want the missed write reported")
 	}

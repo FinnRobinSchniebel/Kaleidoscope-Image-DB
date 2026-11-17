@@ -324,13 +324,7 @@ func TestCheckSourceImages(t *testing.T) {
 			pages.FirstPageWidth, pages.FirstPageHeight = tt.firstPage[0], tt.firstPage[1]
 		}
 
-		check, err := checkSourceImages(set, 0, pages)
-		if err != nil {
-			t.Errorf("%s: %v", tt.name, err)
-			continue
-		}
-
-		if check.kind != tt.kind || !slices.Equal(check.attribution, idsOf(ids, tt.attribution)) || !slices.Equal(check.matched, idsOf(ids, tt.matched)) || !slices.Equal(check.needsOriginals, tt.needs) {
+		if check := checkSourceImages(set, 0, pages); check.kind != tt.kind || !slices.Equal(check.attribution, idsOf(ids, tt.attribution)) || !slices.Equal(check.matched, idsOf(ids, tt.matched)) || !slices.Equal(check.needsOriginals, tt.needs) {
 			t.Errorf("%s: kind %q, attribution %v, matched %v, needs %v; want %q, %v (%v), %v (%v), %v", tt.name, check.kind, check.attribution, check.matched, check.needsOriginals,
 				tt.kind, idsOf(ids, tt.attribution), tt.attribution, idsOf(ids, tt.matched), tt.matched, tt.needs)
 		}
@@ -391,19 +385,13 @@ func TestFindPagesNeedingOriginals(t *testing.T) {
 	}
 
 	pages := FetchedPages{Previews: previewsOf("q0", "p1", "q2"), FirstPageWidth: 100, FirstPageHeight: 200}
-	needed, err := FindPagesNeedingOriginals(sets, SourceInfo{Name: "pixiv", SourceID: "1", Date: serviceDate}, pages)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !slices.Equal(needed, []int{0, 2}) {
+	if needed := FindPagesNeedingOriginals(sets, SourceInfo{Name: "pixiv", SourceID: "1", Date: serviceDate}, pages); !slices.Equal(needed, []int{0, 2}) {
 		t.Errorf("needed %v, want [0 2]: the held and current sets left out", needed)
 	}
 
 	//a possible pure addition needs the originals of the pages that matched nothing
 	added := build(checkDate, ImageChangeNone, []string{"q0"}, nil)
-	needed, err = FindPagesNeedingOriginals([]*ImageSetMongo{added}, SourceInfo{Name: "pixiv", SourceID: "1", Date: serviceDate}, pages)
-	if err != nil || !slices.Equal(needed, []int{1, 2}) {
-		t.Errorf("pure addition: needed %v (%v), want [1 2]", needed, err)
+	if needed := FindPagesNeedingOriginals([]*ImageSetMongo{added}, SourceInfo{Name: "pixiv", SourceID: "1", Date: serviceDate}, pages); !slices.Equal(needed, []int{1, 2}) {
+		t.Errorf("pure addition: needed %v, want [1 2]", needed)
 	}
 }

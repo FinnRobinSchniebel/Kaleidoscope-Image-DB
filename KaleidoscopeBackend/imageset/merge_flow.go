@@ -92,7 +92,7 @@ func (c *carriedNotifications) recordSetRemoved(set *ImageSetMongo) {
 
 	for i := range set.Sources {
 		if set.Sources[i].ImageChangeState != ImageChangeNone {
-			c.dropLocation(newPendingImageUpdate(set, i).PendingUpdateKey)
+			c.dropLocation(makePendingUpdateKey(set, i))
 		}
 	}
 }
@@ -176,11 +176,7 @@ func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage,
 				continue //merged into another set since it was queued
 			}
 
-			entry, entryIsNew = &sets[0], false
-			if entryPrepared, err = storedSetAsPreparedImages(entry.Image); err != nil {
-				result.items = append(result.items, notification.FailedItem(userID, ref, id, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err)))
-				continue
-			}
+			entry, entryPrepared, entryIsNew = &sets[0], storedSetAsPreparedImages(sets[0].Image), false
 		}
 
 		automatic, suggested, err := findMergeCandidates(userID, entryPrepared, entry.ID)

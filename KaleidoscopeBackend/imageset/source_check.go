@@ -32,7 +32,7 @@ func NeedsImageCheck(src SourceInfo, serviceDate time.Time) bool {
 // FindPagesNeedingOriginals returns, sorted, the pages whose originals the image
 // check needs for any of sets whose copy of newSrc NeedsImageCheck. It works on
 // the page lookup's projected sets (GetImageSetsBySourceIDs), before the lock.
-func FindPagesNeedingOriginals(sets []*ImageSetMongo, newSrc SourceInfo, pages FetchedPages) ([]int, error) {
+func FindPagesNeedingOriginals(sets []*ImageSetMongo, newSrc SourceInfo, pages FetchedPages) []int {
 
 	var needed []int
 	for _, set := range sets {
@@ -42,15 +42,11 @@ func FindPagesNeedingOriginals(sets []*ImageSetMongo, newSrc SourceInfo, pages F
 			continue
 		}
 
-		check, err := checkSourceImages(set, index, pages)
-		if err != nil {
-			return nil, err
-		}
-		needed = append(needed, check.needsOriginals...)
+		needed = append(needed, checkSourceImages(set, index, pages).needsOriginals...)
 	}
 
 	slices.Sort(needed)
-	return slices.Compact(needed), nil
+	return slices.Compact(needed)
 }
 
 // sourceImageCheck is checkSourceImages' outcome for one copy.
@@ -69,7 +65,7 @@ type sourceImageCheck struct {
 // differs is pending whatever the outcome. An insert returns each page's match
 // instead of an attribution, since the writer makes the new pages' IDs. Pure:
 // the caller decides when a copy is checked (NeedsImageCheck).
-func checkSourceImages(set *ImageSetMongo, index int, pages FetchedPages) (sourceImageCheck, error) {
+func checkSourceImages(set *ImageSetMongo, index int, pages FetchedPages) sourceImageCheck {
 
 	src := set.Sources[index]
 	imagesByID := make(map[bson.ObjectID]ImageInfo, len(set.Image))
@@ -77,15 +73,11 @@ func checkSourceImages(set *ImageSetMongo, index int, pages FetchedPages) (sourc
 		imagesByID[image.ID] = image
 	}
 
-	stored, err := appendStoredImageHashes(nil, set.ID, set.Image)
-	if err != nil {
-		return sourceImageCheck{}, err
-	}
-
+	stored := appendStoredImageHashes(nil, set.ID, set.Image)
 	matched := matchPagesToSourceImages(src.AttributedTo, imagesByID, pages.Previews)
 	similar, needsOriginals := matchPagesToSetImages(src.AttributedTo, stored, matched, pages)
 	if len(needsOriginals) > 0 {
-		return sourceImageCheck{needsOriginals: needsOriginals}, nil
+		return sourceImageCheck{needsOriginals: needsOriginals}
 	}
 
 	kind := decideSourceImageChange(src.AttributedTo, matched, similar)
@@ -96,11 +88,11 @@ func checkSourceImages(set *ImageSetMongo, index int, pages FetchedPages) (sourc
 
 	switch kind {
 	case SourcePendingFlip:
-		return sourceImageCheck{kind: kind}, nil
+		return sourceImageCheck{kind: kind}
 	case SourceInsert:
-		return sourceImageCheck{kind: kind, matched: matched}, nil
+		return sourceImageCheck{kind: kind, matched: matched}
 	}
-	return sourceImageCheck{kind: kind, attribution: mergeAttribution(src.AttributedTo, matched)}, nil
+	return sourceImageCheck{kind: kind, attribution: mergeAttribution(src.AttributedTo, matched)}
 }
 
 // matchPagesToSourceImages matches each preview to one of the source's own

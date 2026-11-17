@@ -5,6 +5,7 @@ import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"slices"
 	"sync"
@@ -19,8 +20,14 @@ var published = struct {
 }{byUser: make(map[string]int)}
 
 // TestMain swaps publishReport for a recorder before any test starts a
-// scheduler, so no test writes to the database.
+// scheduler, so no test writes to the database. It first computes plain
+// white's hash, as main does at startup.
 func TestMain(m *testing.M) {
+
+	if err := imageset.ComputePlainPageHash(); err != nil {
+		log.Fatal(err)
+	}
+
 	publishReport = func(userID string, _ notification.Payload) error {
 		published.mu.Lock()
 		defer published.mu.Unlock()

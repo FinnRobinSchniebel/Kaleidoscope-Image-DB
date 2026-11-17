@@ -71,12 +71,7 @@ func mergeStoredSetIntoTargets(userID, ref string, set *ImageSetMongo, targets [
 
 	for _, target := range targets {
 
-		var outcome mergeTargetOutcome
-		plan, err := makeAutoMergePlan(target, set)
-		if err == nil {
-			outcome, err = applyMergePlan(userID, plan)
-		}
-
+		outcome, err := applyMergePlan(userID, makeAutoMergePlan(target, set))
 		if err != nil {
 			return append(items, notification.FailedItem(userID, ref, target.set.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err))), outcomes, false
 		}
@@ -94,17 +89,15 @@ func mergeStoredSetIntoTargets(userID, ref string, set *ImageSetMongo, targets [
 }
 
 // makeAutoMergePlan makes the automatic merge's decisions for absorbed going
-// into target, the survivor as classified against absorbed's images:
-// collapseMergedSetImages' order (kept absorbed images become fresh-ID copies),
-// an image inactive only when every copy of it was, the descriptions joined when
-// they differ, and the target's scenario. Changes neither set.
-func makeAutoMergePlan(target mergeCandidate, absorbed *ImageSetMongo) (mergePlan, error) {
+// into target, the survivor as the round classified it against absorbed's
+// images: collapseMergedSetImagesByMatch's order (kept absorbed images become
+// fresh-ID copies), an image inactive only when every copy of it was, the
+// descriptions joined when they differ, and the target's scenario. Changes
+// neither set.
+func makeAutoMergePlan(target mergeCandidate, absorbed *ImageSetMongo) mergePlan {
 
 	survivor := target.set
-	images, idMap, err := collapseMergedSetImages(survivor, absorbed)
-	if err != nil {
-		return mergePlan{}, err
-	}
+	images, idMap := collapseMergedSetImagesByMatch(target, absorbed)
 
 	existing := make(map[bson.ObjectID]bool, len(survivor.Image)+len(absorbed.Image))
 	for _, img := range slices.Concat(survivor.Image, absorbed.Image) {
@@ -147,7 +140,7 @@ func makeAutoMergePlan(target mergeCandidate, absorbed *ImageSetMongo) (mergePla
 	if absorbed.Description != survivor.Description {
 		plan.description = JoinDescriptions(survivor.Description, absorbed.Description)
 	}
-	return plan, nil
+	return plan
 }
 
 // applyMergePlan writes plan.absorbed into plan.survivor and saves the survivor;
@@ -155,7 +148,7 @@ func makeAutoMergePlan(target mergeCandidate, absorbed *ImageSetMongo) (mergePla
 // place, even when this fails. Sets sharing an image ID are refused, and nothing
 // is written until the merged set passes checkAttribution; until the save lands,
 // a failure removes the new links and undoes the counts, unless the save may
-// have landed (mayWriteHaveLanded). The outcome is only filled once the save
+// have landed (isWritePossibleFromError). The outcome is only filled once the save
 // landed. The caller holds LockUserSets.
 func applyMergePlan(userID string, plan mergePlan) (mergeTargetOutcome, error) {
 
@@ -168,14 +161,14 @@ func applyMergePlan(userID string, plan mergePlan) (mergeTargetOutcome, error) {
 		return mergeTargetOutcome{}, fmt.Errorf("set %s can't be merged with itself", survivor.ID.Hex())
 	}
 
-	held := make(map[bson.ObjectID]bool, len(survivor.Image))
+	survivorHad := make(map[bson.ObjectID]bool, len(survivor.Image))
 	for _, img := range survivor.Image {
-		held[img.ID] = true
+		survivorHad[img.ID] = true
 	}
 
 	//removeMergedSet deletes every absorbed file, so a shared image would take the survivor's file with it
 	for _, img := range absorbed.Image {
-		if held[img.ID] {
+		if survivorHad[img.ID] {
 			return mergeTargetOutcome{}, fmt.Errorf("sets %s and %s share image %s", survivor.ID.Hex(), absorbed.ID.Hex(), img.ID.Hex())
 		}
 	}
@@ -226,7 +219,7 @@ func applyMergePlan(userID string, plan mergePlan) (mergeTargetOutcome, error) {
 	for i := range survivor.Image {
 
 		gained := &survivor.Image[i]
-		if held[gained.ID] {
+		if survivorHad[gained.ID] {
 			continue
 		}
 
@@ -304,19 +297,13 @@ func removeMergedSet(userID string, absorbed *ImageSetMongo) error {
 // storedSetAsPreparedImages wraps a stored set's images as an incoming list for
 // the lookup and classification. Media is left empty, so the result can't be
 // written.
-func storedSetAsPreparedImages(images []ImageInfo) ([]PreparedImage, error) {
+func storedSetAsPreparedImages(images []ImageInfo) []PreparedImage {
 
 	prepared := make([]PreparedImage, len(images))
 	for i, img := range images {
-
-		plain, err := isPlain(img.PDQ)
-		if err != nil {
-			return nil, err
-		}
-
-		prepared[i] = PreparedImage{Info: img, Plain: plain}
+		prepared[i] = PreparedImage{Info: img, Plain: isPlain(img.PDQ)}
 	}
-	return prepared, nil
+	return prepared
 }
 
 // mergedSetExactMatches returns each image's pixel-identical images in set, in
@@ -339,29 +326,31 @@ func mergedSetExactMatches(images []PreparedImage, set *ImageSetMongo) Collision
 	return matches
 }
 
-// collapseMergedSetImages merges absorbed's images into a new list after
-// survivor's. An absorbed image the survivor already has collapses into the
+// collapseMergedSetImages is collapseMergedSetImagesByMatch with survivor first
+// classified against absorbed's images (mergedSetExactMatches).
+func collapseMergedSetImages(survivor, absorbed *ImageSetMongo) (images []ImageInfo, idMap map[bson.ObjectID]bson.ObjectID) {
+
+	incoming := storedSetAsPreparedImages(absorbed.Image)
+	return collapseMergedSetImagesByMatch(classifyMergeCandidate(survivor, incoming, mergedSetExactMatches(incoming, survivor)), absorbed)
+}
+
+// collapseMergedSetImagesByMatch merges absorbed's images into a new list after
+// target.set's. An absorbed image the survivor already has collapses into the
 // survivor's copy, and repeats within absorbed into the first. The rest keep
 // their entries under a fresh ID, so no two sets ever share an image, and are
 // placed after the nearest earlier matched image (the automatic order). Every
 // image keeps its stored flag. idMap maps every absorbed ID to the ID it is kept
-// under.
-func collapseMergedSetImages(survivor, absorbed *ImageSetMongo) (images []ImageInfo, idMap map[bson.ObjectID]bson.ObjectID, err error) {
+// under. target must be classified against absorbed's images, in their order.
+func collapseMergedSetImagesByMatch(target mergeCandidate, absorbed *ImageSetMongo) (images []ImageInfo, idMap map[bson.ObjectID]bson.ObjectID) {
 
-	incoming, err := storedSetAsPreparedImages(absorbed.Image)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	match := classifyMergeCandidate(survivor, incoming, mergedSetExactMatches(incoming, survivor))
-	keeperOf, added := planImagesToMerge(incoming, match)
+	keeperOf, added := planImagesToMerge(storedSetAsPreparedImages(absorbed.Image), target)
 
 	idMap = make(map[bson.ObjectID]bson.ObjectID, len(absorbed.Image))
 	for i, img := range absorbed.Image {
 
 		switch keeper := keeperOf[i]; {
 		case keeper == -1:
-			idMap[img.ID] = match.exactOf[i][0]
+			idMap[img.ID] = target.exactOf[i][0]
 		case keeper == i:
 			kept := img
 			kept.ID = added[i].ID
@@ -371,7 +360,7 @@ func collapseMergedSetImages(survivor, absorbed *ImageSetMongo) (images []ImageI
 			idMap[img.ID] = idMap[absorbed.Image[keeper].ID] //a keeper always comes before its repeats
 		}
 	}
-	return placeMergedImages(survivor.Image, match, keeperOf, added), idMap, nil
+	return placeMergedImages(target.set.Image, target, keeperOf, added), idMap
 }
 
 // mergeSourcesInto merges plan.absorbed's sources into plan.survivor in memory,

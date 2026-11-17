@@ -195,6 +195,10 @@ func TestPDQFlattensTransparency(t *testing.T) {
 
 func TestIsPlain(t *testing.T) {
 
+	if len(whitePDQ) != pdqHashBytes {
+		t.Fatalf("plain white's hash is %x; want the 32 bytes TestMain computed", whitePDQ)
+	}
+
 	plainPage := func(c color.Color) image.Image {
 		page := image.NewNRGBA(image.Rect(0, 0, 200, 300))
 		draw.Draw(page, page.Bounds(), image.NewUniform(c), image.Point{}, draw.Src)
@@ -219,19 +223,13 @@ func TestIsPlain(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		plain, err := isPlain(hashes.PDQ)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if plain != tt.plain {
-			white, _ := whitePDQ()
-			t.Errorf("%s: plain = %t, want %t (distance from white %d)", tt.name, plain, tt.plain, PDQDistance(hashes.PDQ, white))
+		if plain := isPlain(hashes.PDQ); plain != tt.plain {
+			t.Errorf("%s: plain = %t, want %t (distance from white %d)", tt.name, plain, tt.plain, PDQDistance(hashes.PDQ, whitePDQ))
 		}
 	}
 
-	if plain, err := isPlain(nil); err != nil || plain {
-		t.Errorf("a missing hash: plain = %t, err = %v; want not plain", plain, err)
+	if isPlain(nil) {
+		t.Error("a missing hash counts as plain")
 	}
 }
 

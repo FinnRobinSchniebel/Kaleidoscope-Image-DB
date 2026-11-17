@@ -54,6 +54,9 @@ func main() {
 	if err := imageset.ResetTempDir(); err != nil {
 		log.Fatal(err)
 	}
+	if err := imageset.ComputePlainPageHash(); err != nil {
+		log.Fatal(err)
+	}
 
 	SecretKey, err := readSecret("jwt_secret")
 	if err != nil {

@@ -1,6 +1,7 @@
 package imageset
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"bytes"
 	"errors"
 	"maps"
@@ -32,6 +33,14 @@ func imageIDs(images []ImageInfo) []bson.ObjectID {
 	return ids
 }
 
+// classifyAgainst returns survivor classified against absorbed's images, as a
+// merge round classifies its target.
+func classifyAgainst(survivor, absorbed *ImageSetMongo) mergeCandidate {
+
+	incoming := storedSetAsPreparedImages(absorbed.Image)
+	return classifyMergeCandidate(survivor, incoming, mergedSetExactMatches(incoming, survivor))
+}
+
 func TestCollapseMergedSetImages(t *testing.T) {
 
 	imgA, imgB := storedImage(1, false), storedImage(2, true)
@@ -39,11 +48,7 @@ func TestCollapseMergedSetImages(t *testing.T) {
 	survivor := &ImageSetMongo{ID: bson.NewObjectID(), Image: []ImageInfo{imgA, imgB}}
 	absorbed := &ImageSetMongo{ID: bson.NewObjectID(), Image: []ImageInfo{copyOfB, imgC, copyOfA, repeatOfC}}
 
-	images, idMap, err := collapseMergedSetImages(survivor, absorbed)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	images, idMap := collapseMergedSetImages(survivor, absorbed)
 	freshC := idMap[imgC.ID]
 	if freshC.IsZero() || freshC == imgC.ID || idMap[repeatOfC.ID] != freshC {
 		t.Errorf("C kept as %v, its repeat as %v; want both on one fresh ID, not C's own %v", freshC, idMap[repeatOfC.ID], imgC.ID)
@@ -67,13 +72,58 @@ func TestCollapseMergedSetImages(t *testing.T) {
 
 	//images without a pixel hash are never the same image
 	unknownA, unknownB := storedImage(0, true), storedImage(0, true)
-	images, idMap, err = collapseMergedSetImages(&ImageSetMongo{Image: []ImageInfo{unknownA}}, &ImageSetMongo{Image: []ImageInfo{unknownB}})
+	images, idMap = collapseMergedSetImages(&ImageSetMongo{Image: []ImageInfo{unknownA}}, &ImageSetMongo{Image: []ImageInfo{unknownB}})
+	if kept := idMap[unknownB.ID]; len(images) != 2 || kept.IsZero() || kept == unknownB.ID {
+		t.Errorf("two images without hashes: %d images, the absorbed one kept as %v; want both, the absorbed one under a fresh ID", len(images), kept)
+	}
+}
+
+func TestMergedSetExactMatchesAgreeWithLookup(t *testing.T) {
+
+	hashes, err := HashImage(testPicture(0, false))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if kept := idMap[unknownB.ID]; len(images) != 2 || kept.IsZero() || kept == unknownB.ID {
-		t.Errorf("two images without hashes: %d images, the absorbed one kept as %v; want both, the absorbed one under a fresh ID", len(images), kept)
+	picture, nearPicture := hashes.PDQ, flipBits(hashes.PDQ, 0, 1, 2)
+	if isPlain(picture) || isPlain(nearPicture) {
+		t.Fatal("the test picture's hash counts as plain")
+	}
+
+	withPDQ := func(img ImageInfo, pdq []byte) ImageInfo {
+		img.PDQ = pdq
+		return img
+	}
+
+	s0, s1, s2, s3 := storedImage(1, true), withPDQ(storedImage(2, true), picture), storedImage(1, true), withPDQ(storedImage(5, true), whitePDQ)
+	survivor := &ImageSetMongo{ID: bson.NewObjectID(), Image: []ImageInfo{s0, s1, s2, s3}}
+	other := &ImageSetMongo{ID: bson.NewObjectID(), Image: []ImageInfo{storedImage(7, true)}}
+
+	//pixel-identical to s0 and s2, a similar-only match of s1, a plain exact match of s3, and an image only other has
+	absorbed := &ImageSetMongo{ID: bson.NewObjectID(), Image: []ImageInfo{
+		storedImage(1, true), withPDQ(storedImage(9, true), nearPicture), withPDQ(storedImage(5, true), whitePDQ), storedImage(7, true),
+	}}
+	incoming := storedSetAsPreparedImages(absorbed.Image)
+
+	stored := appendStoredImageHashes(appendStoredImageHashes(nil, survivor.ID, survivor.Image), other.ID, other.Image)
+	matches := make(CollisionMap)
+	for i, img := range incoming {
+		matches[i] = findHashMatches(img.Info.ImageHashes, img.Plain, stored)
+	}
+
+	fromLookup := classifyMergeCandidate(survivor, incoming, matches)
+	fromSet := classifyMergeCandidate(survivor, incoming, mergedSetExactMatches(incoming, survivor))
+
+	want := [][]bson.ObjectID{{s0.ID, s2.ID}, nil, {s3.ID}, nil}
+	for i := range want {
+		if !slices.Equal(fromLookup.exactOf[i], want[i]) || !slices.Equal(fromSet.exactOf[i], want[i]) {
+			t.Errorf("image %d: exact hits %v from the lookup, %v from the set; want %v", i, fromLookup.exactOf[i], fromSet.exactOf[i], want[i])
+		}
+	}
+
+	similar := notification.ImagePair{ImageID: absorbed.Image[1].ID, CandidateImageID: s1.ID, Match: notification.MatchSimilar}
+	if !slices.Contains(fromLookup.pairs, similar) || slices.Contains(fromSet.pairs, similar) {
+		t.Errorf("pairs %v from the lookup, %v from the set; want the similar pair in the lookup's only", fromLookup.pairs, fromSet.pairs)
 	}
 }
 
@@ -84,11 +134,10 @@ func TestMakeAutoMergePlan(t *testing.T) {
 	survivor := &ImageSetMongo{ID: bson.NewObjectID(), Description: "one", Image: []ImageInfo{imgA, imgB}}
 	absorbed := &ImageSetMongo{ID: bson.NewObjectID(), Description: "two", Image: []ImageInfo{copyOfA, imgC, repeatOfC, imgD}}
 
-	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor, scenario: scenarioAddition}, absorbed)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	//these sets classify as partial; the plan must still take the target's scenario
+	target := classifyAgainst(survivor, absorbed)
+	target.scenario = scenarioAddition
+	plan := makeAutoMergePlan(target, absorbed)
 	if plan.scenario != scenarioAddition {
 		t.Errorf("scenario = %q, want the target's addition", plan.scenario)
 	}
@@ -115,12 +164,8 @@ func TestMakeAutoMergePlan(t *testing.T) {
 		t.Errorf("a set changed: survivor %+v, absorbed %+v", survivor, absorbed)
 	}
 
-	same, err := makeAutoMergePlan(mergeCandidate{set: &ImageSetMongo{Description: "same"}}, &ImageSetMongo{Description: "same"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if same.description != "same" {
+	sameSurvivor, sameAbsorbed := &ImageSetMongo{Description: "same"}, &ImageSetMongo{Description: "same"}
+	if same := makeAutoMergePlan(classifyAgainst(sameSurvivor, sameAbsorbed), sameAbsorbed); same.description != "same" {
 		t.Errorf("equal descriptions became %q", same.description)
 	}
 }
@@ -490,11 +535,7 @@ func twoSetPlan(t *testing.T, attributed []bson.ObjectID) mergePlan {
 		t.Fatal(err)
 	}
 
-	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor}, absorbed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return plan
+	return makeAutoMergePlan(classifyAgainst(survivor, absorbed), absorbed)
 }
 
 func TestApplyMergePlanRejectsBadPlans(t *testing.T) {
@@ -505,11 +546,8 @@ func TestApplyMergePlanRejectsBadPlans(t *testing.T) {
 	brokenAttribution := twoSetPlan(t, []bson.ObjectID{bson.NewObjectID()})
 	missingImage := twoSetPlan(t, nil)
 	missingImage.order = missingImage.order[:1]
-	self := twoSetPlan(t, nil)
-	self, err := makeAutoMergePlan(mergeCandidate{set: self.survivor}, self.survivor)
-	if err != nil {
-		t.Fatal(err)
-	}
+	selfSet := twoSetPlan(t, nil).survivor
+	self := makeAutoMergePlan(classifyAgainst(selfSet, selfSet), selfSet)
 
 	tests := []struct {
 		name string
@@ -546,11 +584,7 @@ func TestApplyMergePlanRejectsBadPlans(t *testing.T) {
 		}
 	}
 
-	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor}, absorbed)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	plan := makeAutoMergePlan(classifyAgainst(survivor, absorbed), absorbed)
 	processed := false
 	Tagger = fakeTagger{processed: &processed, processErr: errors.New("stop before the database")}
 	if _, err := applyMergePlan("user1", plan); err == nil || processed {
@@ -604,10 +638,7 @@ func TestApplyMergePlanAppliesPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor}, absorbed)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan = makeAutoMergePlan(classifyAgainst(survivor, absorbed), absorbed)
 	copyName := ImageFileName("Kept", plan.idMap[imgC.ID], "png")
 
 	checked := false
@@ -646,10 +677,7 @@ func TestApplyMergePlanAppliesPlan(t *testing.T) {
 		Sources: []SourceInfo{{Name: "a", SourceID: "1", AttributedTo: []bson.ObjectID{imgA.ID}}}}
 	absorbed = &ImageSetMongo{ID: bson.NewObjectID(), KscopeUserId: "user1", Path: folder, Image: []ImageInfo{imgC},
 		Sources: []SourceInfo{{Name: "b", SourceID: "2", AttributedTo: []bson.ObjectID{imgC.ID}}}}
-	if plan, err = makeAutoMergePlan(mergeCandidate{set: survivor}, absorbed); err != nil {
-		t.Fatal(err)
-	}
-
+	plan = makeAutoMergePlan(classifyAgainst(survivor, absorbed), absorbed)
 	for _, name := range []string{imgC.Name, ImageFileName("Kept", plan.idMap[imgC.ID], "png")} {
 		if err := os.WriteFile(filepath.Join(folder, name), []byte("pixels"), 0600); err != nil {
 			t.Fatal(err)

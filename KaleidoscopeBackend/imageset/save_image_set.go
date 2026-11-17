@@ -229,10 +229,7 @@ func PrepareImages(files []MediaSource) ([]PreparedImage, error) {
 			preparedImage.Info.Width, preparedImage.Info.Height = decoded.Bounds().Dx(), decoded.Bounds().Dy()
 		}
 
-		if preparedImage.Plain, err = isPlain(preparedImage.Info.PDQ); err != nil {
-			return nil, fmt.Errorf("checking %s for a plain page: %w", file.Name(), err)
-		}
-
+		preparedImage.Plain = isPlain(preparedImage.Info.PDQ)
 		prepared = append(prepared, preparedImage)
 	}
 	return prepared, nil
@@ -249,7 +246,7 @@ var ErrNoMedia = errors.New("no media attached")
 // then inserts imageSet under the ID it already has (ProcessImageSet gives it;
 // a zero ID is an error). Attribution is checked before anything is written,
 // and a later failure undoes its own partial writes, unless the insert may have
-// landed (mayWriteHaveLanded).
+// landed (isWritePossibleFromError).
 func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string) error {
 
 	//TODO: Test if image size is to large

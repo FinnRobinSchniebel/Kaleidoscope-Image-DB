@@ -35,7 +35,7 @@ const (
 	SourceInsert         SourceWriteKind = "insert"
 	SourcePendingFlip    SourceWriteKind = "pending flip"
 	SourceMissingMark    SourceWriteKind = "missing mark"
-	SourceImageCheck     SourceWriteKind = "image check" //a check that failed or couldn't decide, so nothing was written
+	SourceImageCheck     SourceWriteKind = "image check" //a check that couldn't decide, so nothing was written
 	SourceReread         SourceWriteKind = "re-read"     //a failed re-read of the set before its write
 )
 
@@ -141,10 +141,8 @@ func applySourceUpdateInSet(set *ImageSetMongo, index int, newSrc SourceInfo, pa
 		return SourceWriteResult{SetID: set.ID, Kind: SourceImageCheck, Err: ErrSetChangedDuringSync}
 	}
 
-	check, err := checkSourceImages(set, index, *pages)
+	check := checkSourceImages(set, index, *pages)
 	switch {
-	case err != nil:
-		return SourceWriteResult{SetID: set.ID, Kind: SourceImageCheck, Err: err}
 	case len(check.needsOriginals) > 0:
 		return SourceWriteResult{SetID: set.ID, Kind: SourceImageCheck, Err: ErrSetChangedDuringSync}
 	case check.kind == SourcePendingFlip:
@@ -174,7 +172,7 @@ func applySourceUpdateInSet(set *ImageSetMongo, index int, newSrc SourceInfo, pa
 // (saveMergedSet); once it lands, the reset copies' notifications are
 // invalidated. originals holds each new page's fetched original. A failure
 // leaves the set as it was, unless the write may have landed
-// (mayWriteHaveLanded): its files and counts are then kept. The caller holds
+// (isWritePossibleFromError): its files and counts are then kept. The caller holds
 // the user's set lock.
 func insertSourcePagesInSet(set *ImageSetMongo, index int, newSrc SourceInfo, matched []bson.ObjectID, originals map[int]PreparedImage, checkedAt time.Time) SourceWriteResult {
 
@@ -249,12 +247,7 @@ func insertSourcePagesInSet(set *ImageSetMongo, index int, newSrc SourceInfo, ma
 func mergeSetAfterSourceInsert(set *ImageSetMongo, index int) []notification.ItemResult {
 
 	userID, src := set.KscopeUserId, set.Sources[index]
-	prepared, err := storedSetAsPreparedImages(set.Image)
-	if err != nil {
-		return []notification.ItemResult{notification.FailedItem(userID, src.SourceID, set.ID, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err))}
-	}
-
-	merged, err := mergeFlow(userID, src.SourceID, set, prepared, false)
+	merged, err := mergeFlow(userID, src.SourceID, set, storedSetAsPreparedImages(set.Image), false)
 	if err != nil {
 		return []notification.ItemResult{notification.FailedItem(userID, src.SourceID, set.ID, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err))}
 	}
@@ -402,8 +395,14 @@ func markSourcePendingImageChangeInSet(set *ImageSetMongo, index int, checkedAt 
 // newPendingImageUpdate is the pending-update notification for the copy at
 // set.Sources[index].
 func newPendingImageUpdate(set *ImageSetMongo, index int) notification.PendingImageUpdate {
+	return notification.PendingImageUpdate{PendingUpdateKey: makePendingUpdateKey(set, index)}
+}
+
+// makePendingUpdateKey returns the pending-update key of the copy at
+// set.Sources[index].
+func makePendingUpdateKey(set *ImageSetMongo, index int) notification.PendingUpdateKey {
 	src := set.Sources[index]
-	return notification.PendingImageUpdate{PendingUpdateKey: notification.PendingUpdateKey{SetID: set.ID, Service: src.Name, SourceID: src.SourceID}}
+	return notification.PendingUpdateKey{SetID: set.ID, Service: src.Name, SourceID: src.SourceID}
 }
 
 // MarkSourceMissing records, in every set holding the source (through

@@ -45,27 +45,19 @@ func loadUserImageHashes(userID string) ([]StoredImageHash, error) {
 
 	var stored []StoredImageHash
 	for _, set := range sets {
-		if stored, err = appendStoredImageHashes(stored, set.ID, set.Image); err != nil {
-			return nil, err
-		}
+		stored = appendStoredImageHashes(stored, set.ID, set.Image)
 	}
 	return stored, nil
 }
 
 // appendStoredImageHashes appends the hashes of setID's images, each flagged
 // whether it's a plain page.
-func appendStoredImageHashes(stored []StoredImageHash, setID bson.ObjectID, images []ImageInfo) ([]StoredImageHash, error) {
+func appendStoredImageHashes(stored []StoredImageHash, setID bson.ObjectID, images []ImageInfo) []StoredImageHash {
 
 	for _, img := range images {
-
-		plain, err := isPlain(img.PDQ)
-		if err != nil {
-			return nil, err
-		}
-
-		stored = append(stored, StoredImageHash{SetID: setID, ImageID: img.ID, Hashes: img.ImageHashes, Plain: plain})
+		stored = append(stored, StoredImageHash{SetID: setID, ImageID: img.ID, Hashes: img.ImageHashes, Plain: isPlain(img.PDQ)})
 	}
-	return stored, nil
+	return stored
 }
 
 // findHashMatches returns the stored images matching hashes: exact when both

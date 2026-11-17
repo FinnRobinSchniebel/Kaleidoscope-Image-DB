@@ -642,11 +642,7 @@ func fetchPixivPages(ctx context.Context, illust *pixivmodel.Illust, newSrc imag
 	}
 
 	pages := imageset.FetchedPages{Previews: previews, FirstPageWidth: illust.Width, FirstPageHeight: illust.Height}
-	needed, err := imageset.FindPagesNeedingOriginals(sets, newSrc, pages)
-	if err != nil {
-		return imageset.FetchedPages{}, fmt.Errorf("%w: finding the originals to fetch: %w", notification.ErrLibraryAccess, err)
-	}
-
+	needed := imageset.FindPagesNeedingOriginals(sets, newSrc, pages)
 	if len(needed) == 0 {
 		return pages, nil
 	}

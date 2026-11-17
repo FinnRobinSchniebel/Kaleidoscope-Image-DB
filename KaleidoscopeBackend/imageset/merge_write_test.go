@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -93,11 +94,15 @@ func TestAttachIncomingSource(t *testing.T) {
 	//a zip subset onto a synced copy: the checked copy's order wins, the zip's metadata and LastChecked still apply
 	target := &ImageSetMongo{Title: "Old", Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "Old", AttributedTo: []bson.ObjectID{imageA, imageB, imageC}, LastChecked: checked, Date: older}}}
 	incoming := &ImageSetMongo{Itype: "illust", Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "New", Date: newer}}}
-	index, isNew := attachIncomingSource(target, incoming, []bson.ObjectID{imageA, imageC})
+	index, isNew, storedBefore := attachIncomingSource(target, incoming, []bson.ObjectID{imageA, imageC})
 	source := target.Sources[index]
 
 	if isNew || index != 0 || !slices.Equal(source.AttributedTo, []bson.ObjectID{imageA, imageB, imageC}) {
 		t.Errorf("zip subset: index %d, new %t, attributed %v; want 0, false, [A B C]", index, isNew, source.AttributedTo)
+	}
+
+	if storedBefore.Title != "Old" || !slices.Equal(storedBefore.AttributedTo, []bson.ObjectID{imageA, imageB, imageC}) {
+		t.Errorf("zip subset: copy before %+v; want the stored copy as it was before the attach", storedBefore)
 	}
 
 	if source.Title != "New" || target.Title != "New" || !source.LastChecked.IsZero() {
@@ -138,11 +143,15 @@ func TestAttachIncomingSource(t *testing.T) {
 	//a new source: appended with its tags cleared and its description joined
 	target = &ImageSetMongo{Itype: "manga", Description: "first", Sources: []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imageA}}}}
 	incoming = &ImageSetMongo{Itype: "illust", Sources: []SourceInfo{{Name: "other", SourceID: "601", Description: "second", Tags: []SourceTag{{Default: "cat"}}}}}
-	index, isNew = attachIncomingSource(target, incoming, []bson.ObjectID{imageA})
+	index, isNew, storedBefore = attachIncomingSource(target, incoming, []bson.ObjectID{imageA})
 	source = target.Sources[index]
 
 	if !isNew || index != 1 || len(source.Tags) != 0 || !slices.Equal(source.AttributedTo, []bson.ObjectID{imageA}) {
 		t.Errorf("new source: index %d, new %t, tags %v, attributed %v; want 1, true, none, [A]", index, isNew, source.Tags, source.AttributedTo)
+	}
+
+	if !reflect.DeepEqual(storedBefore, SourceInfo{}) {
+		t.Errorf("new source: copy before %+v, want none", storedBefore)
 	}
 
 	if target.Description != "first\n\nsecond" || target.Itype != "manga" {
@@ -151,11 +160,11 @@ func TestAttachIncomingSource(t *testing.T) {
 
 	//an ID-less upload is the same source as upload, but not as upload with an ID
 	target = &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imageA}}}}
-	if _, isNew := attachIncomingSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "upload"}}}, []bson.ObjectID{imageA}); isNew {
+	if _, isNew, _ := attachIncomingSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "upload"}}}, []bson.ObjectID{imageA}); isNew {
 		t.Error("upload without an ID was added as a new source beside upload without an ID")
 	}
 
-	if _, isNew := attachIncomingSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", SourceID: "9"}}}, []bson.ObjectID{imageA}); !isNew {
+	if _, isNew, _ := attachIncomingSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", SourceID: "9"}}}, []bson.ObjectID{imageA}); !isNew {
 		t.Error("upload with an ID was treated as the ID-less upload source")
 	}
 }
@@ -212,6 +221,33 @@ func TestMergeIntoSetUnchanged(t *testing.T) {
 	item, outcome := mergeIntoSet("user1", "group", incoming, prepared, match)
 	if item.Kind != notification.ItemUnchanged || outcome.imagesAdded {
 		t.Errorf("item = %+v, imagesAdded %t; want unchanged with nothing added", item, outcome.imagesAdded)
+	}
+}
+
+func TestMergeIntoSetSeesTagTranslationChange(t *testing.T) {
+
+	imageA, imageB := bson.NewObjectID(), bson.NewObjectID()
+	target := &ImageSetMongo{
+		ID:      bson.NewObjectID(),
+		Title:   "Title",
+		Authors: []string{unknownAuthor},
+		Image:   []ImageInfo{{ID: imageA}, {ID: imageB}},
+		Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "Title", AttributedTo: []bson.ObjectID{imageA, imageB}, Tags: []SourceTag{{Default: "cat"}}}},
+	}
+
+	//the tag step fills in a translation in place, as reconcileSourceTags does
+	previous := Tagger
+	Tagger = fakeTagger{onProcess: func() { target.Sources[0].Tags[0].EN = "cat" }}
+	defer func() { Tagger = previous }()
+	useUnreachableCollection(t)
+
+	incoming := &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "Title"}}}
+	prepared := []PreparedImage{preparedWithPixels(1), preparedWithPixels(2)}
+	match := mergeCandidate{set: target, scenario: scenarioDuplicate, exactOf: [][]bson.ObjectID{{imageA}, {imageB}}}
+
+	//a real change is written, and the write fails against the unreachable database
+	if item, _ := mergeIntoSet("user1", "group", incoming, prepared, match); item.Kind != notification.ItemFailed {
+		t.Errorf("item = %+v, want a failed item from the attempted write: a new translation is a real change", item)
 	}
 }
 

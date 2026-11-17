@@ -11,7 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
-func TestMayWriteHaveLanded(t *testing.T) {
+func TestIsWritePossibleFromError(t *testing.T) {
 
 	useUnreachableCollection(t)
 	_, databaseDown := Collection.InsertOne(context.Background(), bson.M{"page": 1})

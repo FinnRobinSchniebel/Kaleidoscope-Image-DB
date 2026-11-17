@@ -165,20 +165,29 @@ func PDQDistance(first, second []byte) int {
 // page of any colour hashes near one of the two; real art measured 54 or more.
 const PlainDistance = 40
 
-var whitePDQ = sync.OnceValues(func() ([]byte, error) {
+var (
+	whitePDQ []byte             //plain white's hash, set by ComputePlainPageHash
+	zeroPDQ  [pdqHashBytes]byte //pure black's hash
+)
+
+// ComputePlainPageHash computes plain white's PDQ hash, which isPlain compares
+// against. It must run once at startup, before anything is hashed or matched;
+// until then isPlain only recognizes pure black.
+func ComputePlainPageHash() error {
+
 	white := image.NewNRGBA(image.Rect(0, 0, 64, 64))
 	draw.Draw(white, white.Bounds(), image.White, image.Point{}, draw.Src)
-	return pdqHash(white)
-})
 
-// isPlain reports whether pdq is a plain page's hash. A missing hash is never plain.
-func isPlain(pdq []byte) (bool, error) {
-
-	white, err := whitePDQ()
+	hash, err := pdqHash(white)
 	if err != nil {
-		return false, fmt.Errorf("hashing plain white: %w", err)
+		return fmt.Errorf("hashing plain white: %w", err)
 	}
 
-	zero := make([]byte, pdqHashBytes)
-	return PDQDistance(pdq, white) <= PlainDistance || PDQDistance(pdq, zero) <= PlainDistance, nil
+	whitePDQ = hash
+	return nil
+}
+
+// isPlain reports whether pdq is a plain page's hash. A missing hash is never plain.
+func isPlain(pdq []byte) bool {
+	return PDQDistance(pdq, whitePDQ) <= PlainDistance || PDQDistance(pdq, zeroPDQ[:]) <= PlainDistance
 }

@@ -756,7 +756,7 @@ func isWritePossibleFromError(err error) bool {
 // write clears its name (set.ThumbNail too), so the next view regenerates it; a
 // failed removal is only logged. A set that no longer matches returns an error,
 // and the write didn't land; after any other error it may have
-// (mayWriteHaveLanded). The caller holds LockUserSets.
+// (isWritePossibleFromError). The caller holds LockUserSets.
 func saveMergedSet(set *ImageSetMongo, before []ImageInfo) error {
 
 	beforeIDs := make([]bson.ObjectID, len(before))

@@ -16,8 +16,10 @@ import (
 // first (doesIncomingSourceInfoWin), and takes incoming's metadata and
 // LastChecked; a held copy keeps its Date. A new one is appended with its tags
 // cleared, for ProcessSourceTags to record. An empty Itype or Other is filled
-// from incoming.
-func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.ObjectID) (index int, isNew bool) {
+// from incoming. storedBefore is the same source's copy as it was before the
+// attach, its Tags cloned since ProcessSourceTags edits them in place; it is
+// zero for a new source.
+func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.ObjectID) (index int, isNew bool, storedBefore SourceInfo) {
 
 	source := incoming.Sources[0]
 
@@ -36,6 +38,7 @@ func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.Obj
 		}
 
 		stored := target.Sources[i] //read before the writes below, whose zero LastChecked would make a zip win
+		stored.Tags = slices.Clone(stored.Tags)
 		leading, rest := attributed, stored.AttributedTo
 		if !doesIncomingSourceInfoWin(stored, source) {
 			leading, rest = rest, leading
@@ -49,14 +52,14 @@ func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.Obj
 		}
 
 		target.Sources[i].LastChecked = source.LastChecked
-		return i, false
+		return i, false, stored
 	}
 
 	source.AttributedTo = attributed
 	source.Tags = nil
 	AppendSource(target, source, source.Description)
 	DeriveFromSources(target)
-	return len(target.Sources) - 1, true
+	return len(target.Sources) - 1, true, SourceInfo{}
 }
 
 // resetHeldSourceCopies sets every pending or declined copy on set back to none,
@@ -84,7 +87,7 @@ func resetHeldSourceCopies(set *ImageSetMongo) []heldCopyChange {
 // copies (resetHeldSourceCopies), and incoming's source is attached to the
 // images it covers. Nothing is written before checkAttribution,
 // and a failure removes the new files and undoes the recorded tag counts,
-// unless the write may have landed (mayWriteHaveLanded). The
+// unless the write may have landed (isWritePossibleFromError). The
 // outcome's imagesAdded (the set needs checking in turn) and heldCopies (the
 // copies the addition reset) are only reported for a write that landed. The
 // caller holds LockUserSets.
@@ -95,16 +98,12 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 	before := slices.Clone(target.Image)
 	tagsBefore, autoTagsBefore := slices.Clone(target.Tags), slices.Clone(target.AutoTags)
 	itypeBefore, otherBefore := target.Itype, target.Other
-	sourcesBefore := slices.Clone(target.Sources)
-	for i := range sourcesBefore {
-		sourcesBefore[i].Tags = slices.Clone(sourcesBefore[i].Tags)
-	}
 
 	keeperOf, added := planImagesToMerge(prepared, match)
 	if len(added) > 0 {
 		target.Image = placeMergedImages(target.Image, match, keeperOf, added)
 	}
-	index, isNew := attachIncomingSource(target, incoming, findMergedAttributionImageIDs(match, keeperOf, added))
+	index, isNew, sourceBefore := attachIncomingSource(target, incoming, findMergedAttributionImageIDs(match, keeperOf, added))
 
 	//after the attach, which keeps a held copy's Date
 	var reset []heldCopyChange
@@ -144,8 +143,8 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 
 	source := &target.Sources[index]
 	realChange := len(added) > 0 || isNew ||
-		!slices.Equal(source.AttributedTo, sourcesBefore[index].AttributedTo) ||
-		sourceDataChanged(sourcesBefore[index], *source)
+		!slices.Equal(source.AttributedTo, sourceBefore.AttributedTo) ||
+		sourceDataChanged(sourceBefore, *source)
 	//recomputed system tags or a filled Itype/Other still need writing, but aren't the source's change
 	otherChange := !slices.Equal(target.Tags, tagsBefore) || !slices.Equal(target.AutoTags, autoTagsBefore) ||
 		target.Itype != itypeBefore || target.Other != otherBefore
