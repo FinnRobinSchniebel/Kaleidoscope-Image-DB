@@ -173,7 +173,9 @@ func applySourceUpdateInSet(set *ImageSetMongo, index int, newSrc SourceInfo, pa
 // set's held copies and applies newSrc's metadata, in one guarded write
 // (saveMergedSet); once it lands, the reset copies' notifications are
 // invalidated. originals holds each new page's fetched original. A failure
-// leaves the set as it was. The caller holds the user's set lock.
+// leaves the set as it was, unless the write may have landed
+// (mayWriteHaveLanded): its files and counts are then kept. The caller holds
+// the user's set lock.
 func insertSourcePagesInSet(set *ImageSetMongo, index int, newSrc SourceInfo, matched []bson.ObjectID, originals map[int]PreparedImage, checkedAt time.Time) SourceWriteResult {
 
 	result := SourceWriteResult{SetID: set.ID, Kind: SourceInsert}
@@ -200,7 +202,7 @@ func insertSourcePagesInSet(set *ImageSetMongo, index int, newSrc SourceInfo, ma
 		return result
 	}
 
-	// Until the write lands, a failure removes the new files and the counts recorded so far.
+	// Until the write lands or may have landed, a failure removes the new files and the counts recorded so far.
 	committed := false
 	var counted TagCountChange
 	defer func() {
@@ -224,6 +226,7 @@ func insertSourcePagesInSet(set *ImageSetMongo, index int, newSrc SourceInfo, ma
 
 	set.Sources[index].LastImageUpdate, set.Sources[index].LastAppliedUpdate = checkedAt, checkedAt
 	if result.Err = saveMergedSet(set, before); result.Err != nil {
+		committed = isWritePossibleFromError(result.Err) //the stored set may list the new files
 		return result
 	}
 

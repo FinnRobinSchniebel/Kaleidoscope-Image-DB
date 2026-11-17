@@ -154,8 +154,9 @@ func makeAutoMergePlan(target mergeCandidate, absorbed *ImageSetMongo) (mergePla
 // the absorbed set stays until removeMergedSet. The survivor is changed in
 // place, even when this fails. Sets sharing an image ID are refused, and nothing
 // is written until the merged set passes checkAttribution; until the save lands,
-// a failure removes the new links and undoes the counts. The outcome is only
-// filled once the save landed. The caller holds LockUserSets.
+// a failure removes the new links and undoes the counts, unless the save may
+// have landed (mayWriteHaveLanded). The outcome is only filled once the save
+// landed. The caller holds LockUserSets.
 func applyMergePlan(userID string, plan mergePlan) (mergeTargetOutcome, error) {
 
 	survivor, absorbed := plan.survivor, plan.absorbed
@@ -194,7 +195,7 @@ func applyMergePlan(userID string, plan mergePlan) (mergeTargetOutcome, error) {
 		return mergeTargetOutcome{}, err
 	}
 
-	// Until survivor's write lands, a failure removes the new links and the counts recorded so far.
+	// Until survivor's write lands or may have landed, a failure removes the new links and the counts recorded so far.
 	committed := false
 	var linked []string
 	var counted []TagCountChange
@@ -257,6 +258,7 @@ func applyMergePlan(userID string, plan mergePlan) (mergeTargetOutcome, error) {
 	counted = append(counted, change)
 
 	if err := saveMergedSet(survivor, before); err != nil {
+		committed = isWritePossibleFromError(err) //the stored survivor may list the new links
 		return mergeTargetOutcome{}, err
 	}
 	committed = true

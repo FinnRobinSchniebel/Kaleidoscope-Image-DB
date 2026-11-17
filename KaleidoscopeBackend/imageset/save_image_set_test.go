@@ -223,6 +223,31 @@ func TestAddImageSetUsesGivenID(t *testing.T) {
 	}
 }
 
+func TestAddImageSetCleansUpWhenDatabaseUnreachable(t *testing.T) {
+
+	oldVolume, previous := BackendVolumeLocation, Tagger
+	BackendVolumeLocation = t.TempDir()
+	Tagger = fakeTagger{}
+	defer func() { BackendVolumeLocation, Tagger = oldVolume, previous }()
+	if err := os.MkdirAll(tempDir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	useUnreachableCollection(t)
+
+	imageID := bson.NewObjectID()
+	set := &ImageSetMongo{ID: bson.NewObjectID(), Title: "Down", Sources: []SourceInfo{{Name: "pixiv", SourceID: "1", AttributedTo: []bson.ObjectID{imageID}}}}
+	images := []PreparedImage{{Info: ImageInfo{ID: imageID}, Media: writeTestFile(t, "page.png", []byte("pixels")), Format: "png"}}
+
+	//nothing was sent, so the set can't be stored and its file must go
+	if err := addImageSet(set, images, "user1"); err == nil || set.Image[0].Name == "" {
+		t.Fatalf("err %v, file %q; want the insert to fail after the file was written", err, set.Image[0].Name)
+	}
+
+	if entries, err := os.ReadDir(set.Path); err != nil || len(entries) != 0 {
+		t.Errorf("set folder %v (%v), want it empty", entries, err)
+	}
+}
+
 func TestProcessImageSetRejectsBadInput(t *testing.T) {
 	//a readable file, so a missing check would run on into the lookup (no DB here) and crash
 	var pngBytes bytes.Buffer

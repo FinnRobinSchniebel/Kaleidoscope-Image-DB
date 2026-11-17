@@ -83,7 +83,8 @@ func resetHeldSourceCopies(set *ImageSetMongo) []heldCopyChange {
 // candidate): an addition inserts its new images and resets the set's held
 // copies (resetHeldSourceCopies), and incoming's source is attached to the
 // images it covers. Nothing is written before checkAttribution,
-// and a failure removes the new files and undoes the recorded tag counts. The
+// and a failure removes the new files and undoes the recorded tag counts,
+// unless the write may have landed (mayWriteHaveLanded). The
 // outcome's imagesAdded (the set needs checking in turn) and heldCopies (the
 // copies the addition reset) are only reported for a write that landed. The
 // caller holds LockUserSets.
@@ -115,7 +116,7 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), unwritten
 	}
 
-	// Until the write lands, a failure removes the new files and the counts recorded so far.
+	// Until the write lands or may have landed, a failure removes the new files and the counts recorded so far.
 	committed := false
 	var counted TagCountChange
 	defer func() {
@@ -163,6 +164,7 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 	}
 
 	if err := saveMergedSet(target, before); err != nil {
+		committed = isWritePossibleFromError(err) //the stored set may list the new files
 		return notification.FailedItem(userID, ref, target.ID, fmt.Errorf("%w: %w", notification.ErrSaveFailed, err)), unwritten
 	}
 	committed = true

@@ -2,6 +2,7 @@ package imageset
 
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,7 +11,28 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
+
+// useUnreachableCollection points Collection at a server that isn't there until
+// the test ends, so every write fails as with the database down: nothing is
+// sent.
+func useUnreachableCollection(t *testing.T) {
+
+	t.Helper()
+	client, err := mongo.Connect(options.Client().ApplyURI("mongodb://127.0.0.1:1").SetServerSelectionTimeout(100 * time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	old := Collection
+	Collection = client.Database("unreachable").Collection("imagesets")
+	t.Cleanup(func() {
+		Collection = old
+		client.Disconnect(context.Background())
+	})
+}
 
 // fakeTagger changes no tags, so a merge can run without a database.
 type fakeTagger struct {

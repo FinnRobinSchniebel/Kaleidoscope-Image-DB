@@ -740,12 +740,23 @@ func loadOwnedSets(userID string, ids []bson.ObjectID) ([]ImageSetMongo, error) 
 	return ordered, nil
 }
 
+// isWritePossibleFromError reports whether a write that returned err may still have
+// been applied: a network error once the request may have been sent, or a write
+// concern error (the write was done, its confirmation wasn't). Any other error
+// means the request never reached the server or the server refused it.
+func isWritePossibleFromError(err error) bool {
+
+	var exception mongo.WriteException
+	return mongo.IsNetworkError(err) || (errors.As(err, &exception) && exception.WriteConcernError != nil)
+}
+
 // saveMergedSet writes a merge into set, only if its stored image IDs are still
 // those of before. images is written only when the IDs or an active flag
 // changed. When image 0 changed, the old thumbnail file is removed before the
 // write clears its name (set.ThumbNail too), so the next view regenerates it; a
-// failed removal is only logged. A set that no longer matches returns an error.
-// The caller holds LockUserSets.
+// failed removal is only logged. A set that no longer matches returns an error,
+// and the write didn't land; after any other error it may have
+// (mayWriteHaveLanded). The caller holds LockUserSets.
 func saveMergedSet(set *ImageSetMongo, before []ImageInfo) error {
 
 	beforeIDs := make([]bson.ObjectID, len(before))

@@ -248,7 +248,8 @@ var ErrNoMedia = errors.New("no media attached")
 // addImageSet saves each image (from PrepareImages) as a file named by its ID,
 // then inserts imageSet under the ID it already has (ProcessImageSet gives it;
 // a zero ID is an error). Attribution is checked before anything is written,
-// and a later failure undoes its own partial writes.
+// and a later failure undoes its own partial writes, unless the insert may have
+// landed (mayWriteHaveLanded).
 func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string) error {
 
 	//TODO: Test if image size is to large
@@ -295,7 +296,8 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 	}
 
 	// The insert below is the commit point. Until then nothing is stored, so a
-	// failure only has to undo the files and counts recorded in imageSet.
+	// failure only has to undo the files and counts recorded in imageSet; an
+	// insert that may have landed keeps them.
 	committed := false
 	defer func() {
 		if !committed {
@@ -339,6 +341,7 @@ func addImageSet(imageSet *ImageSetMongo, images []PreparedImage, userId string)
 	log.Print("Files Uploaded")
 
 	if _, err := Collection.InsertOne(context.Background(), imageSet); err != nil {
+		committed = isWritePossibleFromError(err)
 		return fmt.Errorf("inserting image set: %w", err)
 	}
 	committed = true

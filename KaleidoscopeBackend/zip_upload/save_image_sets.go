@@ -77,7 +77,7 @@ func importZipGroups(basePath string, groups []ImageSetFileBundle, user string, 
 
 		imageset.PrintISet(&bundle.Iset)
 
-		//a failed group leaves nothing behind, so the remaining groups can still be imported
+		//a failed group is reported, and the remaining groups are still imported
 		report.Record(imageset.ProcessImageSet(context.Background(), &bundle.Iset, files, user, bundle.Key)...)
 
 		for _, path := range bundle.FilePath {

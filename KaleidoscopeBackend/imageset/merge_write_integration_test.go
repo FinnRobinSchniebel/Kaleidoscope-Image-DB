@@ -4,6 +4,7 @@ package imageset
 
 import (
 	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/testdb"
 	"bytes"
 	"context"
 	"fmt"
@@ -492,5 +493,184 @@ func TestMergeFlowMovesHeldCopyNotifications(t *testing.T) {
 		if count, err := notification.Collection.CountDocuments(ctx, copied); err != nil || count != 1 {
 			t.Errorf("interrupted: %d copies on %s with E4's CreatedAt (%v), want 1", count, name, err)
 		}
+	}
+}
+
+func TestSetWriteWithLostReplyKeepsFiles(t *testing.T) {
+
+	var undone []TagCountChange
+	tagger := fakeTagger{undone: &undone}
+	useTestDatabase(t, tagger)
+	useTestVolume(t)
+
+	//each path's write goes through the proxy, which applies it and drops the reply
+	direct := Collection
+	cutDB, cutNextReply := testdb.ConnectWithReplyCut(t, direct.Database().Name())
+	tagger.onProcess = func() {
+		Collection = cutDB.Collection(direct.Name())
+		cutNextReply()
+	}
+	Tagger = tagger
+
+	pages, err := PrepareImages(writeBlockPNGs(t, t.TempDir(), 5))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const user = "lost-reply-user"
+	newSet := func(name, sourceID string, pages ...PreparedImage) *ImageSetMongo {
+
+		t.Helper()
+		set := storeTestSet(t, user, name, time.Now(), pages...)
+		set.Sources = []SourceInfo{{Name: "zipsrc", SourceID: sourceID, AttributedTo: imageIDs(set.Image)}}
+		insertSets(t, *set)
+		return set
+	}
+
+	//the write landed: the stored set has every image it gained, each with its file
+	checkStored := func(name string, id bson.ObjectID, images int) {
+
+		t.Helper()
+		stored := loadSet(t, id)
+		if len(stored.Image) != images {
+			t.Errorf("%s: stored %d images, want %d: the write should have landed", name, len(stored.Image), images)
+		}
+
+		for _, img := range stored.Image {
+			if _, err := os.Stat(filepath.Join(stored.Path, img.Name)); err != nil {
+				t.Errorf("%s: the stored set lists %s, whose file is gone: %v", name, img.Name, err)
+			}
+		}
+
+		if len(undone) != 0 {
+			t.Errorf("%s: counts undone %+v, want them kept", name, undone)
+		}
+	}
+
+	//import into a set
+	target := newSet("target", "1", pages[0])
+	incoming := &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "2"}}}
+	match := mergeCandidate{set: target, scenario: scenarioAddition, exactOf: [][]bson.ObjectID{{target.Image[0].ID}, nil}}
+	item, outcome := mergeIntoSet(user, "ref", incoming, []PreparedImage{pages[0], pages[1]}, match)
+	Collection = direct
+
+	if item.Kind != notification.ItemFailed || outcome.imagesAdded {
+		t.Errorf("import: item %+v, imagesAdded %t; want a failed item with nothing reported added", item, outcome.imagesAdded)
+	}
+	checkStored("import", target.ID, 2)
+
+	//combine
+	survivor := newSet("survivor", "3", pages[2])
+	absorbed := newSet("absorbed", "4", pages[2], pages[3])
+	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor, scenario: scenarioAddition}, absorbed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = applyMergePlan(user, plan)
+	Collection = direct
+
+	if err == nil {
+		t.Error("combine: no error, want the lost reply reported")
+	}
+	checkStored("combine", survivor.ID, 2)
+
+	if got := folderEntries(t, absorbed.Path); len(got) != 2 || len(loadSet(t, absorbed.ID).Image) != 2 {
+		t.Errorf("combine: the absorbed set's folder %v, want it and its two images untouched", got)
+	}
+
+	//sync insert
+	synced, ids := newCheckSet(checkDate, []string{"p1"}, nil)
+	storeSetFiles(t, synced, "synced")
+	insertSets(t, *synced)
+	result := insertSourcePagesInSet(synced, 0, SourceInfo{Name: "pixiv", SourceID: "1", Title: "New"}, []bson.ObjectID{ids["p1"], bson.NilObjectID}, map[int]PreparedImage{1: fetchedOriginal(t, "p2")}, time.Now())
+	Collection = direct
+
+	if result.Err == nil || result.Changed {
+		t.Errorf("sync insert: %+v, want the lost reply reported as a failure", result)
+	}
+	checkStored("sync insert", synced.ID, 2)
+
+	//new set
+	fresh := &ImageSetMongo{ID: bson.NewObjectID(), Title: "fresh", Sources: []SourceInfo{{Name: "zipsrc", SourceID: "5", AttributedTo: []bson.ObjectID{pages[4].Info.ID}}}}
+	err = addImageSet(fresh, []PreparedImage{pages[4]}, user)
+	Collection = direct
+
+	if err == nil {
+		t.Error("new set: no error, want the lost reply reported")
+	}
+	checkStored("new set", fresh.ID, 1)
+}
+
+func TestMergeWriteMissRemovesNewFiles(t *testing.T) {
+
+	ctx := context.Background()
+	var undone []TagCountChange
+	var missing *ImageSetMongo
+	tagger := fakeTagger{undone: &undone}
+	tagger.onProcess = func() {
+
+		//an image is added before the write, so the guarded write matches nothing
+		if _, err := Collection.UpdateOne(ctx, bson.M{"_id": missing.ID}, bson.M{"$push": bson.M{"images": bson.M{"id": bson.NewObjectID()}}}); err != nil {
+			t.Errorf("adding an image to %s: %v", missing.Title, err)
+		}
+	}
+	useTestDatabase(t, tagger)
+	useTestVolume(t)
+
+	pages, err := PrepareImages(writeBlockPNGs(t, t.TempDir(), 4))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const user = "write-miss-user"
+	newSet := func(name, sourceID string, pages ...PreparedImage) *ImageSetMongo {
+
+		t.Helper()
+		set := storeTestSet(t, user, name, time.Now(), pages...)
+		set.Sources = []SourceInfo{{Name: "zipsrc", SourceID: sourceID, AttributedTo: imageIDs(set.Image)}}
+		insertSets(t, *set)
+		return set
+	}
+
+	undoneFor := func(set *ImageSetMongo) bool {
+		return slices.ContainsFunc(undone, func(change TagCountChange) bool { return change.SourceName == set.ID.Hex() })
+	}
+
+	//import into a set
+	target := newSet("target", "1", pages[0])
+	missing = target
+	incoming := &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "2"}}}
+	match := mergeCandidate{set: target, scenario: scenarioAddition, exactOf: [][]bson.ObjectID{{target.Image[0].ID}, nil}}
+	item, _ := mergeIntoSet(user, "ref", incoming, []PreparedImage{pages[0], pages[1]}, match)
+
+	if item.Kind != notification.ItemFailed {
+		t.Errorf("import: item %+v, want a failed item", item)
+	}
+
+	if got := folderEntries(t, target.Path); len(got) != 1 || !undoneFor(target) {
+		t.Errorf("import: folder %v, undone %+v; want only the set's own file and its counts undone", got, undone)
+	}
+
+	//combine
+	undone = nil
+	survivor := newSet("survivor", "3", pages[2])
+	absorbed := newSet("absorbed", "4", pages[2], pages[3])
+	missing = survivor
+	plan, err := makeAutoMergePlan(mergeCandidate{set: survivor, scenario: scenarioAddition}, absorbed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := applyMergePlan(user, plan); err == nil {
+		t.Error("combine: no error, want the missed write reported")
+	}
+
+	if got := folderEntries(t, survivor.Path); len(got) != 1 || !undoneFor(survivor) {
+		t.Errorf("combine: survivor's folder %v, undone %+v; want only its own file and its counts undone", got, undone)
+	}
+
+	if got := folderEntries(t, absorbed.Path); len(got) != 2 {
+		t.Errorf("combine: the absorbed set's folder %v, want its two files untouched", got)
 	}
 }
