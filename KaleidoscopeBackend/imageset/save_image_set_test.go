@@ -288,7 +288,7 @@ func TestProcessImageSetRejectsBadInput(t *testing.T) {
 
 func TestProcessImageSetSkipsWhenLibraryBusy(t *testing.T) {
 
-	//a readable file; the lock is held, and the task gives up before mergeFlow could reach the DB
+	//a readable file; the lock is held, and the task gives up before importMergeFlow could reach the DB
 	var pngBytes bytes.Buffer
 	if err := png.Encode(&pngBytes, testPicture(0, false)); err != nil {
 		t.Fatal(err)
@@ -302,5 +302,28 @@ func TestProcessImageSetSkipsWhenLibraryBusy(t *testing.T) {
 	results := ProcessImageSet(ctx, set, files, "busy-import-user", "group")
 	if len(results) != 1 || results[0].Kind != notification.ItemSkipped || results[0].Reason != ErrLibraryBusy.Error() {
 		t.Errorf("results = %+v, want one skipped item with the busy reason", results)
+	}
+}
+
+func TestProcessImageSetStopsWhenLookupFails(t *testing.T) {
+
+	oldVolume, previous := BackendVolumeLocation, Tagger
+	BackendVolumeLocation = t.TempDir()
+	Tagger = fakeTagger{}
+	defer func() { BackendVolumeLocation, Tagger = oldVolume, previous }()
+	useUnreachableCollection(t)
+
+	var pngBytes bytes.Buffer
+	if err := png.Encode(&pngBytes, testPicture(0, false)); err != nil {
+		t.Fatal(err)
+	}
+	files := []MediaSource{writeTestFile(t, "page.png", pngBytes.Bytes())}
+	set := &ImageSetMongo{Sources: []SourceInfo{{Name: "pixiv", SourceID: "1"}}}
+
+	//the library couldn't be read, so no new set may be tried either
+	results := ProcessImageSet(context.Background(), set, files, "lookup-fails-user", "group")
+	want := notification.ItemResult{Kind: notification.ItemFailed, Ref: "group", Reason: notification.ErrLibraryAccess.Error()}
+	if len(results) != 1 || results[0] != want {
+		t.Errorf("results = %+v, want only %+v", results, want)
 	}
 }

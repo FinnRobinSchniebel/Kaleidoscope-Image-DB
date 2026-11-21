@@ -327,6 +327,71 @@ func TestImportSuggestsNoSetBySourceAlone(t *testing.T) {
 	}
 }
 
+func TestImportFlowNeverSuggestsItsTargets(t *testing.T) {
+
+	useTestDatabase(t, fakeTagger{})
+	useTestVolume(t)
+
+	files := writeBlockPNGs(t, t.TempDir(), 3)
+	pages, err := PrepareImages(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	//the pages must be far apart and not plain, so the sets relate only through the pages they share
+	for i := range pages {
+
+		if pages[i].Plain {
+			t.Fatalf("page %d is plain", i)
+		}
+
+		for j := i + 1; j < len(pages); j++ {
+			if distance := PDQDistance(pages[i].Info.PDQ, pages[j].Info.PDQ); distance <= SimilarDistance {
+				t.Fatalf("pages %d and %d are only %d apart", i, j, distance)
+			}
+		}
+	}
+
+	const user = "own-targets-user"
+	ctx := context.Background()
+	added := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+
+	x := storeTestSet(t, user, "x", added, pages[0])
+	x.Sources = []SourceInfo{{Name: "zipsrc", SourceID: "1", AttributedTo: imageIDs(x.Image)}}
+	y := storeTestSet(t, user, "y", added, pages[1])
+	y.Sources = []SourceInfo{{Name: "zipsrc", SourceID: "2", AttributedTo: imageIDs(y.Image)}}
+	insertSets(t, *x, *y)
+
+	//Y changes during the first write, so its own write misses while X's lands; X then only partly overlaps Y
+	armed := true
+	Tagger = fakeTagger{onProcess: func() {
+
+		if !armed {
+			return
+		}
+		armed = false
+
+		result, err := Collection.UpdateOne(ctx, bson.M{"_id": y.ID}, bson.M{"$push": bson.M{"images": bson.M{"id": bson.NewObjectID()}}})
+		if err != nil || result.MatchedCount != 1 {
+			t.Errorf("adding an image to Y: matched %v (%v), want 1", result, err)
+		}
+	}}
+
+	incoming := &ImageSetMongo{Title: "import", Sources: []SourceInfo{{Name: "zipsrc", SourceID: "3"}}}
+	items := ProcessImageSet(ctx, incoming, files, user, "ref")
+	want := []notification.ItemResult{
+		{Kind: notification.ItemUpdated, Ref: "ref", SetID: x.ID, Reason: "added 2 new images to an existing set"},
+		{Kind: notification.ItemFailed, Ref: "ref", SetID: y.ID, Reason: notification.ErrSaveFailed.Error()},
+	}
+	if !slices.Equal(items, want) {
+		t.Errorf("items %+v, want %+v", items, want)
+	}
+
+	if count, err := notification.Collection.CountDocuments(ctx, bson.M{"type": notification.TypeSuggestedMerge}); err != nil || count != 0 {
+		t.Errorf("stored suggestions: %d (%v), want none", count, err)
+	}
+}
+
 func TestMergeFlowMovesHeldCopyNotifications(t *testing.T) {
 
 	useTestDatabase(t, fakeTagger{})
@@ -366,12 +431,8 @@ func TestMergeFlowMovesHeldCopyNotifications(t *testing.T) {
 		return set
 	}
 
-	runFlow := func(entry *ImageSetMongo) {
-
-		t.Helper()
-		if _, err := mergeFlow(user, "ref", entry, storedSetAsPreparedImages(entry.Image), false); err != nil {
-			t.Fatalf("flow of %s: %v", entry.Title, err)
-		}
+	runFlow := func(entry *ImageSetMongo) []notification.ItemResult {
+		return localMergeFlow(user, "ref", entry.ID)
 	}
 
 	stateOf := func(setID bson.ObjectID, service, sourceID string) ImageChangeState {
@@ -472,7 +533,18 @@ func TestMergeFlowMovesHeldCopyNotifications(t *testing.T) {
 			t.Errorf("adding an image to E4: matched %v (%v), want 1", result, err)
 		}
 	}}
-	runFlow(e4)
+	items := runFlow(e4)
+
+	//an interrupted round queues nothing, so no target gets a round of its own
+	combined := "combined with set " + e4.ID.Hex()
+	want := []notification.ItemResult{
+		{Kind: notification.ItemUpdated, Ref: "ref", SetID: t4a.ID, Reason: combined},
+		{Kind: notification.ItemUpdated, Ref: "ref", SetID: t4b.ID, Reason: combined},
+		{Kind: notification.ItemFailed, Ref: "ref", SetID: e4.ID, Reason: notification.ErrSaveFailed.Error()},
+	}
+	if !slices.Equal(items, want) {
+		t.Errorf("interrupted: items %+v, want %+v", items, want)
+	}
 
 	if !exists(e4.ID) || stateOf(t4a.ID, "zipsrc", "4") != ImageChangePending || stateOf(t4b.ID, "zipsrc", "4") != ImageChangePending {
 		t.Errorf("interrupted: E4 left %t; want E4 kept and its hold on T4a and T4b", exists(e4.ID))

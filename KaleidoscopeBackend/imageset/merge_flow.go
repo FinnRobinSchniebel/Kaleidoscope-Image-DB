@@ -32,7 +32,7 @@ func (change heldCopyChange) makeKey(setID bson.ObjectID) notification.PendingUp
 }
 
 // carriedNotifications follows held copies' pending-update notifications through
-// one mergeFlow. locations maps a held copy's key to its notification's origin,
+// one merge flow. locations maps a held copy's key to its notification's origin,
 // the key it's stored under; a held copy not in it carries its own.
 type carriedNotifications struct {
 	locations map[notification.PendingUpdateKey]notification.PendingUpdateKey
@@ -133,105 +133,125 @@ func (c *carriedNotifications) settle(userID string) {
 	}
 }
 
-// mergeResult is what mergeFlow did.
+// mergeResult is what a merge flow did; importMergeFlow returns it.
 type mergeResult struct {
 	items   []notification.ItemResult
-	targets []bson.ObjectID //the first entry's automatic targets, landed or not; none means an import becomes a new set
+	targets []bson.ObjectID //the import's automatic targets, landed or not, which later suggestions never name; none means it becomes a new set
 }
 
-// mergeFlow merges set into userID's library breadth first: each entry goes
-// into all of its automatic matches, which survive (a stored entry is then
-// removed), and a match that gained images is checked in turn. Suggested merges
-// are published here and nowhere else; no set is created. set is an import not
-// stored yet when isNew, otherwise a stored set that changed, and prepared holds
-// its images (storedSetAsPreparedImages for a stored set). Once the queue is
-// empty, the pending-update notifications of the held copies its writes moved
-// or reset follow them (carriedNotifications). err means the first lookup
-// failed and nothing was decided. The caller holds LockUserSets.
-func mergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage, isNew bool) (mergeResult, error) {
+// mergeFlowState is one merge flow's progress. A flow merges a set into its
+// user's library breadth first: each entry goes into all of its automatic
+// matches, which survive (a stored entry is then removed), and a match that
+// gained images gets its own round in turn. Only a flow publishes suggested
+// merges, and it never creates a set.
+type mergeFlowState struct {
+	userID, ref string
+	result      mergeResult
+	queue       []bson.ObjectID //sets waiting for their round
+	carried     carriedNotifications
+}
 
-	var result mergeResult
-	var excluded []bson.ObjectID
-	var carried carriedNotifications
-	queue := []bson.ObjectID{set.ID}
-	queued := map[bson.ObjectID]bool{set.ID: true}
+// recordRound adds a round's items to the report and folds its landed writes
+// into carried. With queueGains, each target that gained images is queued
+// unless it's already waiting; an interrupted stored round passes false.
+func (f *mergeFlowState) recordRound(entryID bson.ObjectID, items []notification.ItemResult, outcomes []mergeTargetOutcome, queueGains bool) {
 
-	first := true
-	for len(queue) > 0 {
+	f.result.items = append(f.result.items, items...)
+	for _, outcome := range outcomes {
 
-		id := queue[0]
-		queue = queue[1:]
-		delete(queued, id)
-
-		entry, entryPrepared, entryIsNew := set, prepared, isNew
-		if !first {
-
-			sets, err := loadOwnedSets(userID, []bson.ObjectID{id})
-			if err != nil {
-				result.items = append(result.items, notification.FailedItem(userID, ref, id, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err)))
-				continue
-			}
-
-			if len(sets) == 0 {
-				continue //merged into another set since it was queued
-			}
-
-			entry, entryPrepared, entryIsNew = &sets[0], storedSetAsPreparedImages(sets[0].Image), false
-		}
-
-		automatic, suggested, err := findMergeCandidates(userID, entryPrepared, entry.ID)
-		if err != nil && first {
-			return mergeResult{}, err
-		}
-
-		if err != nil {
-			result.items = append(result.items, notification.FailedItem(userID, ref, id, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err)))
-			continue
-		}
-		wasFirst := first
-		first = false
-
-		if len(automatic) == 0 {
-			result.items = append(result.items, suggestMerge(userID, ref, entry.ID, suggested, excluded)...)
-			continue
-		}
-
-		var items []notification.ItemResult
-		var outcomes []mergeTargetOutcome
-		var gone bool
-		if entryIsNew {
-			items, outcomes = mergeImportIntoTargets(userID, ref, entry, entryPrepared, automatic)
-		} else {
-			items, outcomes, gone = mergeStoredSetIntoTargets(userID, ref, entry, automatic)
-		}
-		result.items = append(result.items, items...)
-
-		if wasFirst {
-			for _, target := range automatic {
-				result.targets = append(result.targets, target.set.ID)
-			}
-			excluded = result.targets
-		}
-
-		for _, outcome := range outcomes {
-
-			carried.recordMergeWrite(entry.ID, outcome)
-
-			//an interrupted round queues nothing
-			if outcome.imagesAdded && (entryIsNew || gone) && !queued[outcome.setID] {
-				queue = append(queue, outcome.setID)
-				queued[outcome.setID] = true
-			}
-		}
-
-		//after its writes, which can carry its holds to the targets
-		if gone {
-			carried.recordSetRemoved(entry)
+		f.carried.recordMergeWrite(entryID, outcome)
+		if queueGains && outcome.imagesAdded && !slices.Contains(f.queue, outcome.setID) {
+			f.queue = append(f.queue, outcome.setID)
 		}
 	}
+}
 
-	carried.settle(userID)
-	return result, nil
+// runStoredRound writes the stored entry into each of its automatic matches and
+// removes it, or with none gives it its suggested merge, never naming the
+// import's targets.
+func (f *mergeFlowState) runStoredRound(entry *ImageSetMongo, automatic, suggested []mergeCandidate) {
+
+	if len(automatic) == 0 {
+		f.result.items = append(f.result.items, suggestMerge(f.userID, f.ref, entry.ID, suggested, f.result.targets)...)
+		return
+	}
+
+	items, outcomes, removed := mergeStoredSetIntoTargets(f.userID, f.ref, entry, automatic)
+	f.recordRound(entry.ID, items, outcomes, removed)
+
+	//after its writes, which can carry its holds to the targets
+	if removed {
+		f.carried.recordSetRemoved(entry)
+	}
+}
+
+// runQueuedRounds gives each queued set its stored round, breadth first, until
+// the queue is empty. A set merged away since it was queued is skipped, and a
+// failed read is a Failed item for that set.
+func (f *mergeFlowState) runQueuedRounds() {
+
+	for len(f.queue) > 0 {
+
+		id := f.queue[0]
+		f.queue = f.queue[1:]
+
+		sets, err := loadOwnedSets(f.userID, []bson.ObjectID{id})
+		if err != nil {
+			f.result.items = append(f.result.items, notification.FailedItem(f.userID, f.ref, id, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err)))
+			continue
+		}
+
+		if len(sets) == 0 {
+			continue //merged into another set since it was queued
+		}
+
+		automatic, suggested, err := findMergeCandidates(f.userID, storedSetAsPreparedImages(sets[0].Image), id)
+		if err != nil {
+			f.result.items = append(f.result.items, notification.FailedItem(f.userID, f.ref, id, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err)))
+			continue
+		}
+		f.runStoredRound(&sets[0], automatic, suggested)
+	}
+}
+
+// importMergeFlow merges set, an import not stored yet, into userID's library
+// (see mergeFlowState), then settles the notifications of the held copies its
+// writes moved or reset. err means the lookup failed and nothing was decided.
+// The caller holds LockUserSets.
+func importMergeFlow(userID, ref string, set *ImageSetMongo, prepared []PreparedImage) (mergeResult, error) {
+
+	automatic, suggested, err := findMergeCandidates(userID, prepared, set.ID)
+	if err != nil {
+		return mergeResult{}, err
+	}
+
+	if len(automatic) == 0 {
+		return mergeResult{items: suggestMerge(userID, ref, set.ID, suggested, nil)}, nil
+	}
+
+	flow := &mergeFlowState{userID: userID, ref: ref}
+	for _, target := range automatic {
+		flow.result.targets = append(flow.result.targets, target.set.ID)
+	}
+
+	items, outcomes := mergeImportIntoTargets(userID, ref, set, prepared, automatic)
+	flow.recordRound(set.ID, items, outcomes, true)
+
+	flow.runQueuedRounds()
+	flow.carried.settle(userID)
+	return flow.result, nil
+}
+
+// localMergeFlow merges the stored set setID into the rest of userID's library
+// (see mergeFlowState), then settles the notifications of the held copies its
+// writes moved or reset. A failed read is a Failed item. The caller holds
+// LockUserSets.
+func localMergeFlow(userID, ref string, setID bson.ObjectID) []notification.ItemResult {
+
+	flow := &mergeFlowState{userID: userID, ref: ref, queue: []bson.ObjectID{setID}}
+	flow.runQueuedRounds()
+	flow.carried.settle(userID)
+	return flow.result.items
 }
 
 // findMergeCandidates looks images up in userID's library, ignoring hits on

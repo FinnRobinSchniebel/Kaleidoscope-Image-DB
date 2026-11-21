@@ -134,11 +134,11 @@ func (m MultipartSource) Remove() bool {
 
 // ProcessImageSet imports files with set's one source (nothing attributed yet)
 // into userID's library and returns the import report's items, ref naming the
-// import in them. mergeFlow merges it into the stored sets it duplicates, extends
-// or is a subset of; with none, it becomes a new set. Failures are items carrying
-// a notification reason. Everything after decoding holds the user's set lock; in
-// a scheduler task (see WithPause) a busy lock pauses the task, and giving up
-// skips the import.
+// import in them. importMergeFlow merges it into the stored sets it duplicates,
+// extends or is a subset of; with none, it becomes a new set. Failures are items
+// carrying a notification reason. Everything after decoding holds the user's set
+// lock; in a scheduler task (see WithPause) a busy lock pauses the task, and
+// giving up skips the import.
 func ProcessImageSet(ctx context.Context, set *ImageSetMongo, files []MediaSource, userID string, ref string) []notification.ItemResult {
 
 	//given first, overriding any caller's, so a suggestion can name the set before it's stored
@@ -167,7 +167,7 @@ func ProcessImageSet(ctx context.Context, set *ImageSetMongo, files []MediaSourc
 	}
 	defer unlock()
 
-	merged, err := mergeFlow(userID, ref, set, prepared, true)
+	merged, err := importMergeFlow(userID, ref, set, prepared)
 	if err != nil {
 		return []notification.ItemResult{notification.FailedItem(userID, ref, bson.NilObjectID, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err))}
 	}

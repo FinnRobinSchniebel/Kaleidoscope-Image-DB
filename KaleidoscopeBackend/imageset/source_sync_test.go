@@ -1,9 +1,12 @@
 package imageset
 
 import (
+	"Kaleidoscopedb/Backend/KaleidoscopeBackend/notification"
 	"slices"
 	"testing"
 	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestApplySourceMetadataEmptyNeverOverwrites(t *testing.T) {
@@ -100,5 +103,22 @@ func TestSourceDataChanged(t *testing.T) {
 		if got := sourceDataChanged(base, after); got != tt.want {
 			t.Errorf("%s: sourceDataChanged = %t, want %t", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestMergeSetAfterSourceInsertReportsUnreadableLibrary(t *testing.T) {
+
+	useUnreachableCollection(t)
+	set := &ImageSetMongo{
+		ID:           bson.NewObjectID(),
+		KscopeUserId: "user1",
+		Sources:      []SourceInfo{{Name: "pixiv", SourceID: "1"}},
+		Image:        []ImageInfo{{ID: bson.NewObjectID()}},
+	}
+
+	items := mergeSetAfterSourceInsert(set, 0)
+	want := notification.ItemResult{Kind: notification.ItemFailed, Ref: "1", SetID: set.ID, Reason: notification.ErrLibraryAccess.Error()}
+	if len(items) != 1 || items[0] != want {
+		t.Errorf("items = %+v, want only %+v", items, want)
 	}
 }

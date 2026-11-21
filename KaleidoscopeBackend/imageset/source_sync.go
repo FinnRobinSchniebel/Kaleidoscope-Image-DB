@@ -46,7 +46,7 @@ type SourceWriteResult struct {
 	Kind    SourceWriteKind
 	Changed bool
 	Held    ImageChangeState          //the copy's state when a hold kept the write from applying; none otherwise
-	Merged  []notification.ItemResult //mergeFlow's items after an insert, each naming its own set
+	Merged  []notification.ItemResult //localMergeFlow's items after an insert, each naming its own set
 	Err     error
 }
 
@@ -128,9 +128,9 @@ func ApplySourceUpdate(ctx context.Context, userID string, newSrc SourceInfo, pa
 // copy that needs no image check (NeedsImageCheck) gets the metadata update,
 // which only stamps a held one; any other is checked (checkSourceImages) and
 // then flipped to pending, gets its new pages inserted (insertSourcePagesInSet)
-// with mergeFlow run on the set afterwards, or has its attribution rewritten
-// along with the metadata. A rewrite the set's attribution check rejects writes
-// nothing. The caller holds the user's set lock.
+// with localMergeFlow run on the set afterwards, or has its attribution
+// rewritten along with the metadata. A rewrite the set's attribution check
+// rejects writes nothing. The caller holds the user's set lock.
 func applySourceUpdateInSet(set *ImageSetMongo, index int, newSrc SourceInfo, pages *FetchedPages, checkedAt time.Time) SourceWriteResult {
 
 	if !NeedsImageCheck(set.Sources[index], newSrc.Date) {
@@ -241,17 +241,12 @@ func insertSourcePagesInSet(set *ImageSetMongo, index int, newSrc SourceInfo, ma
 	return result
 }
 
-// mergeSetAfterSourceInsert runs mergeFlow on set, which just gained pages from
-// its copy at set.Sources[index], and returns the flow's items. The caller holds
-// the user's set lock.
+// mergeSetAfterSourceInsert runs localMergeFlow on set, which just gained pages
+// from its copy at set.Sources[index], and returns the flow's items. The caller
+// holds the user's set lock.
 func mergeSetAfterSourceInsert(set *ImageSetMongo, index int) []notification.ItemResult {
 
-	userID, src := set.KscopeUserId, set.Sources[index]
-	merged, err := mergeFlow(userID, src.SourceID, set, storedSetAsPreparedImages(set.Image), false)
-	if err != nil {
-		return []notification.ItemResult{notification.FailedItem(userID, src.SourceID, set.ID, fmt.Errorf("%w: %w", notification.ErrLibraryAccess, err))}
-	}
-	return merged.items
+	return localMergeFlow(set.KscopeUserId, set.Sources[index].SourceID, set.ID)
 }
 
 // applySourceMetadataUpdateInSet updates the copy at set.Sources[index] with
