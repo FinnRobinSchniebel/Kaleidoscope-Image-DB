@@ -348,7 +348,7 @@ func finishPixivSync(userId string, done func(error), err error) {
 // which must be visible. Tags are compared separately because a tag edit or
 // bookmark visibility flip doesn't move create_date.
 func pixivSourceStale(il pixivmodel.Illust, src imageset.SourceInfo, isPrivate bool) bool {
-	return src.LastChecked.IsZero() ||
+	return src.Untracked ||
 		src.SourceMissing ||
 		!imageset.SourceDateMatches(src.Date, il.CreateDate) ||
 		tagsChanged(src.Tags, pixivIllustTags(&il, isPrivate))

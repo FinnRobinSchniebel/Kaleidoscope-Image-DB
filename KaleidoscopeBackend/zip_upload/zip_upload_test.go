@@ -175,8 +175,8 @@ func TestBuildImageSetBundle(t *testing.T) {
 	if set.Title != "First" || !slices.Equal(set.Authors, []string{"alice"}) {
 		t.Errorf("set Title = %q, Authors = %v", set.Title, set.Authors)
 	}
-	if !src.LastChecked.IsZero() {
-		t.Error("zip sources must not get a LastChecked")
+	if !src.Untracked || !src.LastChecked.IsZero() {
+		t.Errorf("Untracked %t, LastChecked %v; want a zip source flagged untracked, with no LastChecked", src.Untracked, src.LastChecked)
 	}
 }
 

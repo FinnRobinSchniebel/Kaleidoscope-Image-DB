@@ -343,10 +343,14 @@ func TestMarkSourcesChecked(t *testing.T) {
 	source := func(name, id string, checked time.Time) SourceInfo {
 		return SourceInfo{Name: name, SourceID: id, LastChecked: checked}
 	}
+
+	//a zip copy no sync has applied yet: stamped like any other, and still untracked
+	zipCopy := source("pixiv", "4", time.Time{})
+	zipCopy.Untracked = true
 	insertSets(t,
 		ImageSetMongo{ID: both, KscopeUserId: "user1", Sources: []SourceInfo{source("pixiv", "1", old), source("pixiv", "2", old)}},
 		ImageSetMongo{ID: mixed, KscopeUserId: "user1", Sources: []SourceInfo{source("zipsrc", "1", old), source("pixiv", "3", old)}},
-		ImageSetMongo{ID: zero, KscopeUserId: "user1", Sources: []SourceInfo{source("pixiv", "4", time.Time{}), source("pixiv", "6", old)}},
+		ImageSetMongo{ID: zero, KscopeUserId: "user1", Sources: []SourceInfo{zipCopy, source("pixiv", "6", old)}},
 		ImageSetMongo{ID: unlisted, KscopeUserId: "user1", Sources: []SourceInfo{source("pixiv", "5", old)}},
 		ImageSetMongo{ID: otherUser, KscopeUserId: "user2", Sources: []SourceInfo{source("pixiv", "1", old)}},
 	)
@@ -389,10 +393,14 @@ func TestMarkSourcesChecked(t *testing.T) {
 	expectLastChecked("bumped", map[bson.ObjectID][]time.Time{
 		both:      {checkedAt, checkedAt},
 		mixed:     {old, checkedAt},
-		zero:      {{}, checkedAt},
+		zero:      {checkedAt, checkedAt},
 		unlisted:  {old},
 		otherUser: {old},
 	})
+
+	if !loadSet(t, zero).Sources[0].Untracked {
+		t.Error("the zip copy lost its untracked flag in the bump, want it kept")
+	}
 }
 
 func TestMetadataUpdateHoldsHeldCopies(t *testing.T) {
@@ -414,7 +422,11 @@ func TestMetadataUpdateHoldsHeldCopies(t *testing.T) {
 	update := SourceInfo{Name: "pixiv", SourceID: "1", Title: "New", Date: oldDate.Add(time.Hour), Tags: []SourceTag{{Default: "cat"}, {Default: "dog"}}}
 	freeSet := withCopy(free, ImageChangeNone, old)
 	freeSet.Sources[0].Date = update.Date
-	insertSets(t, freeSet, withCopy(pending, ImageChangePending, old), withCopy(declined, ImageChangeDeclined, time.Time{}))
+
+	//a held zip copy: stamped like any held copy, and still untracked
+	declinedSet := withCopy(declined, ImageChangeDeclined, time.Time{})
+	declinedSet.Sources[0].Untracked = true
+	insertSets(t, freeSet, withCopy(pending, ImageChangePending, old), declinedSet)
 
 	checkedAt := time.Now().UTC().Truncate(time.Millisecond)
 	results, err := ApplySourceUpdate(context.Background(), "user1", update, nil, checkedAt)
@@ -443,10 +455,56 @@ func TestMetadataUpdateHoldsHeldCopies(t *testing.T) {
 		}
 	}
 	expectHeld(1, pending, ImageChangePending, checkedAt)
-	expectHeld(2, declined, ImageChangeDeclined, time.Time{})
+	expectHeld(2, declined, ImageChangeDeclined, checkedAt)
+
+	if !loadSet(t, declined).Sources[0].Untracked {
+		t.Error("declined zip copy lost its untracked flag, want it kept while held")
+	}
 
 	if calls != 1 {
 		t.Errorf("ProcessSourceTags ran %d times, want once (the free set only)", calls)
+	}
+}
+
+func TestSyncWritesClearUntracked(t *testing.T) {
+
+	useTestDatabase(t, fakeTagger{})
+	free, pending, gone := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
+	date := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	withCopy := func(id bson.ObjectID, sourceID string, state ImageChangeState) ImageSetMongo {
+		src := SourceInfo{Name: "pixiv", SourceID: sourceID, Title: "Art", Date: date, LastChecked: date, ImageChangeState: state, Untracked: true}
+		return ImageSetMongo{ID: id, KscopeUserId: "user1", Title: "Art", Sources: []SourceInfo{src}}
+	}
+	insertSets(t, withCopy(free, "1", ImageChangeNone), withCopy(pending, "1", ImageChangePending), withCopy(gone, "2", ImageChangeNone))
+
+	//the stored data again, so only the flag can change
+	results, err := ApplySourceUpdate(context.Background(), "user1", SourceInfo{Name: "pixiv", SourceID: "1", Title: "Art", Date: date}, nil, time.Now())
+	if err != nil || len(results) != 2 {
+		t.Fatalf("%+v, %v; want a result for each set", results, err)
+	}
+
+	if r := results[0]; r.SetID != free || r.Err != nil || r.Changed || r.Kind != SourceMetadataUpdate {
+		t.Errorf("free copy: %+v, want a metadata update that changed nothing", r)
+	}
+
+	if loadSet(t, free).Sources[0].Untracked {
+		t.Error("free copy is still untracked, want the update to clear it")
+	}
+
+	if r := results[1]; r.SetID != pending || r.Err != nil || r.Kind != SourceHeldStamp {
+		t.Errorf("pending copy: %+v, want a held stamp", r)
+	}
+
+	if !loadSet(t, pending).Sources[0].Untracked {
+		t.Error("pending copy is tracked, want it still untracked while held")
+	}
+
+	if _, err := MarkSourceMissing(context.Background(), "user1", "pixiv", "2", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if src := loadSet(t, gone).Sources[0]; src.Untracked || !src.SourceMissing {
+		t.Errorf("missing copy %+v: want it tracked and missing", src)
 	}
 }
 
@@ -508,7 +566,7 @@ func TestMarkSourcePendingImageChange(t *testing.T) {
 		withCopy(flips, "1", SourceInfo{SourceMissing: true}),
 		withCopy(declined, "2", SourceInfo{ImageChangeState: ImageChangeDeclined, LastChecked: sourceDate}),
 		withCopy(failing, "3", SourceInfo{SourceMissing: true}),
-		withCopy(unpublished, "4", SourceInfo{}),
+		withCopy(unpublished, "4", SourceInfo{Untracked: true}),
 	)
 	checkedAt := time.Now().UTC().Truncate(time.Millisecond)
 
@@ -576,8 +634,9 @@ func TestMarkSourcePendingImageChange(t *testing.T) {
 		t.Errorf("failed publish: %+v, want the flip written anyway", r)
 	}
 
-	if src := loadSet(t, unpublished).Sources[0]; src.ImageChangeState != ImageChangePending {
-		t.Errorf("unpublished copy's state %q, want pending", src.ImageChangeState)
+	//a flip applies nothing, so the copy stays untracked
+	if src := loadSet(t, unpublished).Sources[0]; src.ImageChangeState != ImageChangePending || !src.Untracked {
+		t.Errorf("unpublished copy: state %q, untracked %t; want pending and still untracked", src.ImageChangeState, src.Untracked)
 	}
 
 	if err := PublishMissingPendingUpdates(ctx); err != nil {

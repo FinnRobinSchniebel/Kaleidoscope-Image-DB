@@ -269,8 +269,8 @@ func sourceLabel(s imageset.SourceInfo) string {
 	return s.Name + "/" + s.SourceID
 }
 
-// sourceFromValues builds a source from one file's parsed fields. LastChecked
-// is left zero so a matching service sync still fills in missing metadata.
+// sourceFromValues builds a source from one file's parsed fields. Untracked is
+// set, so a matching service sync catches the source up once.
 func sourceFromValues(values map[string]string) (imageset.SourceInfo, error) {
 	source := imageset.SourceInfo{
 		Name:         imageset.NormalizeSourceName(values["Source"]),
@@ -278,6 +278,7 @@ func sourceFromValues(values map[string]string) (imageset.SourceInfo, error) {
 		AuthorID:     values["AuthorId"],
 		Title:        values["Title"],
 		SourceAuthor: values["Author"],
+		Untracked:    true,
 	}
 
 	//add Date to data set (accepts format with - and _)

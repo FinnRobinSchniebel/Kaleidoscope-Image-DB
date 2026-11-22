@@ -447,14 +447,14 @@ func mergeSourcesInto(plan mergePlan) (indexes []int, heldCopies []heldCopyChang
 }
 
 // doesIncomingSourceInfoWin reports whether incoming, an absorbed set's or an
-// import's copy of stored's source, wins over stored. Dates compare as stored,
-// so a day-only date beats an exact time earlier than 00:17 on its day. An
-// import's copy has no LastAppliedUpdate, so it loses a Date tie to an applied
-// stored copy.
+// import's copy of stored's source, wins over stored. An untracked copy loses to
+// a tracked one. Dates compare as stored, so a day-only date beats an exact time
+// earlier than 00:17 on its day. An import's copy has no LastAppliedUpdate, so
+// it loses a Date tie to an applied stored copy.
 func doesIncomingSourceInfoWin(stored, incoming SourceInfo) bool {
 
-	if storedUnchecked, incomingUnchecked := stored.LastChecked.IsZero(), incoming.LastChecked.IsZero(); storedUnchecked != incomingUnchecked {
-		return storedUnchecked
+	if stored.Untracked != incoming.Untracked {
+		return stored.Untracked
 	}
 
 	if !incoming.Date.Equal(stored.Date) {
@@ -475,9 +475,10 @@ func collapseMergedSourceBookkeeping(kept *SourceInfo, winner, loser SourceInfo)
 
 	kept.Date = mergeSourceDate(loser.Date, winner.Date)
 	kept.LastChecked = winner.LastChecked
+	kept.Untracked = winner.Untracked && loser.Untracked
 
-	// not missing wins, but an unchecked loser doesn't count (it never beats a checked winner)
-	kept.SourceMissing = winner.SourceMissing && (loser.SourceMissing || loser.LastChecked.IsZero())
+	// not missing wins, but an untracked loser doesn't count (it never beats a tracked winner)
+	kept.SourceMissing = winner.SourceMissing && (loser.SourceMissing || loser.Untracked)
 
 	kept.LastImageUpdate = winner.LastImageUpdate
 	if loser.LastImageUpdate.After(kept.LastImageUpdate) {

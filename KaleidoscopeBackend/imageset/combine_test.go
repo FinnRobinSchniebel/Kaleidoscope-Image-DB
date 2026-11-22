@@ -274,13 +274,14 @@ func TestMergeSourcesInto(t *testing.T) {
 		Title:   "Old",
 		Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "Old", AttributedTo: []bson.ObjectID{imgA}, LastChecked: later, Date: survivorDate}},
 	}
-	mergeSourcesInto(mergePlan{survivor: checked, absorbed: &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "New", AttributedTo: []bson.ObjectID{imgC}, Date: absorbedDate}}}, idMap: idMap})
-	if src := checked.Sources[0]; src.Title != "Old" || checked.Title != "Old" || !src.Date.Equal(survivorDate) {
-		t.Errorf("unchecked absorbed copy: source %+v, set title %q; want the survivor's title and Date kept", src, checked.Title)
+	//an untracked zip copy loses despite its later Date, even once a sync stamped it
+	mergeSourcesInto(mergePlan{survivor: checked, absorbed: &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "New", AttributedTo: []bson.ObjectID{imgC}, LastChecked: earlier, Date: absorbedDate, Untracked: true}}}, idMap: idMap})
+	if src := checked.Sources[0]; src.Title != "Old" || checked.Title != "Old" || !src.Date.Equal(survivorDate) || src.Untracked {
+		t.Errorf("untracked absorbed copy: source %+v, set title %q; want the survivor's title and Date kept, and tracked", src, checked.Title)
 	}
 
 	if got, want := checked.Sources[0].AttributedTo, []bson.ObjectID{imgA, imgC}; !slices.Equal(got, want) {
-		t.Errorf("unchecked absorbed copy: attribution %v, want the survivor's order first %v", got, want)
+		t.Errorf("untracked absorbed copy: attribution %v, want the survivor's order first %v", got, want)
 	}
 
 	//the survivor's copy has the edited version: p3 removed at the source, p4 new
@@ -348,14 +349,15 @@ func TestDoesIncomingSourceInfoWin(t *testing.T) {
 		stored, incoming SourceInfo
 		want             bool
 	}{
-		{"stored unchecked", SourceInfo{Date: newer}, SourceInfo{LastChecked: t1, Date: older}, true},
-		{"incoming unchecked", SourceInfo{LastChecked: t1, Date: older}, SourceInfo{Date: newer}, false},
+		{"stored untracked", SourceInfo{Untracked: true, Date: newer}, SourceInfo{LastChecked: t1, Date: older}, true},
+		{"incoming untracked", SourceInfo{LastChecked: t1, Date: older}, SourceInfo{Untracked: true, Date: newer}, false},
+		{"incoming untracked though stamped", SourceInfo{LastChecked: t1, Date: older}, SourceInfo{Untracked: true, LastChecked: t2, Date: newer}, false},
 		{"incoming Date later", SourceInfo{LastChecked: t2, Date: older}, SourceInfo{LastChecked: t1, Date: newer}, true},
 		{"stored Date later", SourceInfo{LastChecked: t1, Date: newer}, SourceInfo{LastChecked: t2, Date: older}, false},
 		{"Date tie, stored applied later", SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t2}, SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, false},
 		{"Date tie, incoming applied later", SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t2}, true},
 		{"full tie", SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, SourceInfo{LastChecked: t1, Date: older, LastAppliedUpdate: t1}, true},
-		{"both unchecked and equal", SourceInfo{Date: older}, SourceInfo{Date: older}, true},
+		{"both untracked and equal", SourceInfo{Untracked: true, Date: older}, SourceInfo{Untracked: true, Date: older}, true},
 	}
 
 	for _, tc := range tests {
@@ -388,26 +390,48 @@ func TestCollapseMergedSourceBookkeeping(t *testing.T) {
 
 	unchecked := time.Time{}
 	missing := []struct {
-		name                        string
-		winnerMissing, loserMissing bool
-		winnerChecked, loserChecked time.Time
-		want                        bool
+		name                            string
+		winnerMissing, loserMissing     bool
+		winnerUntracked, loserUntracked bool
+		loserChecked                    time.Time
+		want                            bool
 	}{
-		{"both checked, only the winner missing", true, false, t2, t1, false},
-		{"both checked and missing", true, true, t2, t1, true},
-		{"checked winner missing, unchecked loser not", true, false, t2, unchecked, true},
-		{"checked winner not missing, unchecked loser missing", false, true, t2, unchecked, false},
-		{"neither checked, only the winner missing", true, false, unchecked, unchecked, true},
+		{"both tracked, only the winner missing", true, false, false, false, t1, false},
+		{"both tracked and missing", true, true, false, false, t1, true},
+		{"tracked winner missing, untracked loser not", true, false, false, true, unchecked, true},
+		{"tracked winner missing, stamped untracked loser not", true, false, false, true, t1, true},
+		{"tracked winner not missing, untracked loser missing", false, true, false, true, unchecked, false},
+		{"both untracked, only the winner missing", true, false, true, true, unchecked, true},
 	}
 
 	for _, tc := range missing {
 
 		var kept SourceInfo
 		collapseMergedSourceBookkeeping(&kept,
-			SourceInfo{SourceMissing: tc.winnerMissing, LastChecked: tc.winnerChecked},
-			SourceInfo{SourceMissing: tc.loserMissing, LastChecked: tc.loserChecked})
+			SourceInfo{SourceMissing: tc.winnerMissing, Untracked: tc.winnerUntracked, LastChecked: t2},
+			SourceInfo{SourceMissing: tc.loserMissing, Untracked: tc.loserUntracked, LastChecked: tc.loserChecked})
 		if kept.SourceMissing != tc.want {
 			t.Errorf("%s: SourceMissing = %t, want %t", tc.name, kept.SourceMissing, tc.want)
+		}
+	}
+
+	//a tracked copy always wins, so only two untracked copies leave the flag
+	untracked := []struct {
+		name                            string
+		winnerUntracked, loserUntracked bool
+		want                            bool
+	}{
+		{"both untracked", true, true, true},
+		{"only the loser untracked", false, true, false},
+		{"neither untracked", false, false, false},
+	}
+
+	for _, tc := range untracked {
+
+		var kept SourceInfo
+		collapseMergedSourceBookkeeping(&kept, SourceInfo{Untracked: tc.winnerUntracked}, SourceInfo{Untracked: tc.loserUntracked})
+		if kept.Untracked != tc.want {
+			t.Errorf("%s: Untracked = %t, want %t", tc.name, kept.Untracked, tc.want)
 		}
 	}
 }

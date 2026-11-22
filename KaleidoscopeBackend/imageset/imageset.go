@@ -57,6 +57,7 @@ type SourceInfo struct {
 	LastAppliedUpdate time.Time        `json:"last_applied_update" bson:"last_applied_update" form:"last_applied_update"`                  //our time of this source's last change to the set's metadata or images
 	ImageChangeState  ImageChangeState `json:"image_change_state,omitempty" bson:"image_change_state,omitempty" form:"image_change_state"` //pending or declined while an image change found at the source is unresolved
 	SourceMissing     bool             `json:"source_missing" bson:"source_missing" form:"source_missing"`                                 //true when the source could not be fetched; existing data is left untouched
+	Untracked         bool             `json:"untracked,omitempty" bson:"untracked,omitempty" form:"untracked"`                            //no sync has applied this source yet, e.g. a zip copy
 }
 
 // info regarding the images location on the DB and current state

@@ -96,16 +96,12 @@ func writeEachSetHoldingSource(ctx context.Context, userID, name, sourceID strin
 }
 
 // stampHeldSourceInSet is a sync update's whole write to a copy whose
-// image-change state holds it (pending or declined): only LastChecked is set,
-// and a zero one is kept, since it marks a source the next sync must catch up.
+// image-change state holds it (pending or declined): only LastChecked is set.
 // The caller holds the user's set lock.
 func stampHeldSourceInSet(set *ImageSetMongo, index int, checkedAt time.Time) SourceWriteResult {
 
 	src := &set.Sources[index]
 	result := SourceWriteResult{SetID: set.ID, Kind: SourceHeldStamp, Held: src.ImageChangeState}
-	if src.LastChecked.IsZero() {
-		return result
-	}
 
 	src.LastChecked = checkedAt
 	fields := bson.M{fmt.Sprintf("sources.%d.last_checked", index): checkedAt}
@@ -289,9 +285,10 @@ func applySourceMetadataUpdateInSet(set *ImageSetMongo, index int, newSrc Source
 
 // applySourceMetadataAndTags applies newSrc's metadata (applySourceMetadata) and
 // tags (ProcessSourceTags) to the copy at set.Sources[index] in memory, as a sync
-// saw it at checkedAt, and clears SourceMissing. It returns the set-level fields
-// applySourceMetadata changed and the tag counts recorded, which the caller
-// undoes if its write fails. The caller holds the user's set lock.
+// saw it at checkedAt, and clears SourceMissing and Untracked. It returns the
+// set-level fields applySourceMetadata changed and the tag counts recorded,
+// which the caller undoes if its write fails. The caller holds the user's set
+// lock.
 func applySourceMetadataAndTags(set *ImageSetMongo, index int, newSrc SourceInfo, checkedAt time.Time) (fields bson.M, counted TagCountChange, err error) {
 
 	fields = applySourceMetadata(set, index, newSrc)
@@ -299,6 +296,7 @@ func applySourceMetadataAndTags(set *ImageSetMongo, index int, newSrc SourceInfo
 	// Must precede ProcessSourceTags: its system-tag recompute reads SourceMissing.
 	set.Sources[index].LastChecked = checkedAt
 	set.Sources[index].SourceMissing = false
+	set.Sources[index].Untracked = false
 
 	if counted, err = Tagger.ProcessSourceTags(set.KscopeUserId, set, index, newSrc.Tags); err != nil {
 		return nil, TagCountChange{}, fmt.Errorf("processing source tags: %w", err)
@@ -340,7 +338,8 @@ func applySourceMetadata(set *ImageSetMongo, index int, newSrc SourceInfo) bson.
 }
 
 // sourceDataChanged reports whether after differs from before in a field the
-// source supplies. Bookkeeping such as LastChecked and SourceMissing is ignored.
+// source supplies. Bookkeeping such as LastChecked, SourceMissing and Untracked
+// is ignored.
 func sourceDataChanged(before, after SourceInfo) bool {
 	return before.Title != after.Title ||
 		before.Description != after.Description ||
@@ -421,12 +420,14 @@ func markSourceMissingInSet(set *ImageSetMongo, index int, checkedAt time.Time) 
 	set.Sources[index].SourceMissing = true
 	set.Sources[index].ImageChangeState = ImageChangeNone
 	set.Sources[index].LastChecked = checkedAt
+	set.Sources[index].Untracked = false
 
 	p := fmt.Sprintf("sources.%d.", index)
 	fields := bson.M{
 		p + "source_missing":     true,
 		p + "image_change_state": ImageChangeNone,
 		p + "last_checked":       checkedAt,
+		p + "untracked":          false,
 	}
 
 	if err := updateSourceFieldsWithTags(set, index, stateRead, fields, !wasMissing); err != nil {
@@ -459,7 +460,7 @@ func updateSourceFieldsWithTags(set *ImageSetMongo, index int, stateRead ImageCh
 // MarkSourcesChecked sets LastChecked to checkedAt on every stored copy of the
 // sources named name with sourceIDs, holding the user's set lock
 // (lockUserSetsOrPause), for sources a sync pass looked at and had nothing to
-// write for. A copy whose LastChecked is still zero keeps it.
+// write for.
 func MarkSourcesChecked(ctx context.Context, userID, name string, sourceIDs []string, checkedAt time.Time) error {
 
 	if len(sourceIDs) == 0 {

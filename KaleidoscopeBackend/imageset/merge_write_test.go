@@ -85,16 +85,16 @@ func (fakeTagger) ResolveTagTerm(string, string) ([]string, bool, error) {
 	return nil, false, nil
 }
 
-func TestAttachIncomingSource(t *testing.T) {
+func TestImportAttachSource(t *testing.T) {
 
 	imageA, imageB, imageC := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
 	checked := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	older, newer := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 
-	//a zip subset onto a synced copy: the checked copy's order wins, the zip's metadata and LastChecked still apply
+	//a zip subset onto a synced copy: the synced copy's order, metadata and LastChecked are kept, and it stays tracked
 	target := &ImageSetMongo{Title: "Old", Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "Old", AttributedTo: []bson.ObjectID{imageA, imageB, imageC}, LastChecked: checked, Date: older}}}
-	incoming := &ImageSetMongo{Itype: "illust", Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "New", Date: newer}}}
-	index, isNew, storedBefore := attachIncomingSource(target, incoming, []bson.ObjectID{imageA, imageC})
+	incoming := &ImageSetMongo{Itype: "illust", Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "New", Date: newer, Untracked: true}}}
+	index, isNew, storedBefore := importAttachSource(target, incoming, []bson.ObjectID{imageA, imageC})
 	source := target.Sources[index]
 
 	if isNew || index != 0 || !slices.Equal(source.AttributedTo, []bson.ObjectID{imageA, imageB, imageC}) {
@@ -105,37 +105,51 @@ func TestAttachIncomingSource(t *testing.T) {
 		t.Errorf("zip subset: copy before %+v; want the stored copy as it was before the attach", storedBefore)
 	}
 
-	if source.Title != "New" || target.Title != "New" || !source.LastChecked.IsZero() {
-		t.Errorf("zip subset: titles %q/%q, LastChecked %v; want New, New and the incoming zero", source.Title, target.Title, source.LastChecked)
+	if source.Title != "Old" || target.Title != "Old" || !source.LastChecked.Equal(checked) || source.Untracked {
+		t.Errorf("zip subset: titles %q/%q, LastChecked %v, untracked %t; want Old, Old, the synced %v and tracked", source.Title, target.Title, source.LastChecked, source.Untracked, checked)
 	}
 
 	if target.Itype != "illust" {
 		t.Errorf("Itype = %q, want the empty one filled from the import", target.Itype)
 	}
 
-	//both copies unchecked (a zip onto a zip-only set): the later Date goes first, and a tie to the stored copy
+	//a sync's import onto a zip-only copy: its metadata and LastChecked apply, and the copy is tracked
+	target = &ImageSetMongo{Title: "Zip", Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "Zip", AttributedTo: []bson.ObjectID{imageA}, Date: older, Untracked: true}}}
+	importAttachSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "Synced", Date: newer, LastChecked: checked}}}, []bson.ObjectID{imageA})
+	if src := target.Sources[0]; src.Title != "Synced" || !src.LastChecked.Equal(checked) || src.Untracked {
+		t.Errorf("sync onto zip: %+v, want the synced title and LastChecked, and tracked", src)
+	}
+
+	//both copies untracked (a zip onto a zip-only set): the later Date goes first, and a tie to the stored copy
 	orders := []struct {
 		name   string
 		stored SourceInfo
 		want   []bson.ObjectID
 	}{
-		{"zip Date later", SourceInfo{Date: older, LastAppliedUpdate: checked}, []bson.ObjectID{imageB, imageA}},
-		{"equal Date", SourceInfo{Date: newer, LastAppliedUpdate: checked}, []bson.ObjectID{imageA, imageB}},
+		{"zip Date later", SourceInfo{Date: older, LastAppliedUpdate: checked, Untracked: true}, []bson.ObjectID{imageB, imageA}},
+		{"equal Date", SourceInfo{Date: newer, LastAppliedUpdate: checked, Untracked: true}, []bson.ObjectID{imageA, imageB}},
 	}
 
 	for _, tc := range orders {
 
 		tc.stored.Name, tc.stored.SourceID, tc.stored.AttributedTo = "zipsrc", "501", []bson.ObjectID{imageA}
 		target := &ImageSetMongo{Sources: []SourceInfo{tc.stored}}
-		attachIncomingSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Date: newer}}}, []bson.ObjectID{imageB, imageA})
+		importAttachSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Date: newer, Untracked: true}}}, []bson.ObjectID{imageB, imageA})
 		if got := target.Sources[0].AttributedTo; !slices.Equal(got, tc.want) {
 			t.Errorf("%s: attributed %v, want %v", tc.name, got, tc.want)
 		}
 	}
 
-	//a held copy keeps its Date, while the zip's metadata still applies
-	target = &ImageSetMongo{Title: "Old", Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "Old", AttributedTo: []bson.ObjectID{imageA}, LastChecked: checked, Date: older, ImageChangeState: ImageChangePending}}}
-	attachIncomingSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "New", Date: newer}}}, []bson.ObjectID{imageA})
+	//a zip onto a zip copy a sync stamped while hidden: the zip's metadata applies, the stamp stays
+	target = &ImageSetMongo{Title: "Old", Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "Old", AttributedTo: []bson.ObjectID{imageA}, LastChecked: checked, Date: older, Untracked: true}}}
+	importAttachSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "zipsrc", SourceID: "501", Title: "New", Date: newer, Untracked: true}}}, []bson.ObjectID{imageA})
+	if src := target.Sources[0]; src.Title != "New" || !src.Date.Equal(newer) || !src.LastChecked.Equal(checked) || !src.Untracked {
+		t.Errorf("zip onto zip: %+v, want the zip's title and Date, LastChecked %v kept, and still untracked", src, checked)
+	}
+
+	//a held zip-only copy keeps its Date, while the zip's metadata still applies
+	target = &ImageSetMongo{Title: "Old", Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "Old", AttributedTo: []bson.ObjectID{imageA}, LastChecked: checked, Date: older, ImageChangeState: ImageChangePending, Untracked: true}}}
+	importAttachSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "pixiv", SourceID: "7", Title: "New", Date: newer, Untracked: true}}}, []bson.ObjectID{imageA})
 	if src := target.Sources[0]; !src.Date.Equal(older) || src.Title != "New" || src.ImageChangeState != ImageChangePending {
 		t.Errorf("held copy %+v: want its Date kept, the zip's title applied and the state kept", src)
 	}
@@ -143,7 +157,7 @@ func TestAttachIncomingSource(t *testing.T) {
 	//a new source: appended with its tags cleared and its description joined
 	target = &ImageSetMongo{Itype: "manga", Description: "first", Sources: []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imageA}}}}
 	incoming = &ImageSetMongo{Itype: "illust", Sources: []SourceInfo{{Name: "other", SourceID: "601", Description: "second", Tags: []SourceTag{{Default: "cat"}}}}}
-	index, isNew, storedBefore = attachIncomingSource(target, incoming, []bson.ObjectID{imageA})
+	index, isNew, storedBefore = importAttachSource(target, incoming, []bson.ObjectID{imageA})
 	source = target.Sources[index]
 
 	if !isNew || index != 1 || len(source.Tags) != 0 || !slices.Equal(source.AttributedTo, []bson.ObjectID{imageA}) {
@@ -160,11 +174,11 @@ func TestAttachIncomingSource(t *testing.T) {
 
 	//an ID-less upload is the same source as upload, but not as upload with an ID
 	target = &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", AttributedTo: []bson.ObjectID{imageA}}}}
-	if _, isNew, _ := attachIncomingSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "upload"}}}, []bson.ObjectID{imageA}); isNew {
+	if _, isNew, _ := importAttachSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "upload"}}}, []bson.ObjectID{imageA}); isNew {
 		t.Error("upload without an ID was added as a new source beside upload without an ID")
 	}
 
-	if _, isNew, _ := attachIncomingSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", SourceID: "9"}}}, []bson.ObjectID{imageA}); !isNew {
+	if _, isNew, _ := importAttachSource(target, &ImageSetMongo{Sources: []SourceInfo{{Name: "upload", SourceID: "9"}}}, []bson.ObjectID{imageA}); !isNew {
 		t.Error("upload with an ID was treated as the ID-less upload source")
 	}
 }

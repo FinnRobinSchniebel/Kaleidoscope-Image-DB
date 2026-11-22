@@ -10,16 +10,18 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// attachIncomingSource attaches incoming.Sources[0] to target, attributed to
+// importAttachSource attaches incoming.Sources[0] to target, attributed to
 // attributed (its page order), and returns its index in target.Sources. The
 // same source keeps its other attributed images, with the winning copy's order
-// first (doesIncomingSourceInfoWin), and takes incoming's metadata and
-// LastChecked; a held copy keeps its Date. A new one is appended with its tags
-// cleared, for ProcessSourceTags to record. An empty Itype or Other is filled
+// first (doesIncomingSourceInfoWin). It takes incoming's metadata unless
+// incoming is untracked and the stored copy isn't, and incoming's LastChecked
+// only when incoming is tracked; a held copy keeps its Date, and the copy stays
+// untracked only when both are. A new one is appended with its tags cleared,
+// for ProcessSourceTags to record. An empty Itype or Other is filled
 // from incoming. storedBefore is the same source's copy as it was before the
 // attach, its Tags cloned since ProcessSourceTags edits them in place; it is
 // zero for a new source.
-func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.ObjectID) (index int, isNew bool, storedBefore SourceInfo) {
+func importAttachSource(target, incoming *ImageSetMongo, attributed []bson.ObjectID) (index int, isNew bool, storedBefore SourceInfo) {
 
 	source := incoming.Sources[0]
 
@@ -37,7 +39,7 @@ func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.Obj
 			continue
 		}
 
-		stored := target.Sources[i] //read before the writes below, whose zero LastChecked would make a zip win
+		stored := target.Sources[i] //read before the writes below
 		stored.Tags = slices.Clone(stored.Tags)
 		leading, rest := attributed, stored.AttributedTo
 		if !doesIncomingSourceInfoWin(stored, source) {
@@ -45,13 +47,22 @@ func attachIncomingSource(target, incoming *ImageSetMongo, attributed []bson.Obj
 		}
 
 		target.Sources[i].AttributedTo = mergeAttribution(rest, leading)
-		applySourceMetadata(target, i, source)
+
+		//an untracked copy never overwrites a tracked one's metadata
+		if !source.Untracked || stored.Untracked {
+			applySourceMetadata(target, i, source)
+		}
+
+		//an untracked copy carries no sync's LastChecked
+		if !source.Untracked {
+			target.Sources[i].LastChecked = source.LastChecked
+		}
 
 		if stored.ImageChangeState != ImageChangeNone {
 			target.Sources[i].Date = stored.Date
 		}
 
-		target.Sources[i].LastChecked = source.LastChecked
+		target.Sources[i].Untracked = stored.Untracked && source.Untracked
 		return i, false, stored
 	}
 
@@ -103,7 +114,7 @@ func mergeIntoSet(userID, ref string, incoming *ImageSetMongo, prepared []Prepar
 	if len(added) > 0 {
 		target.Image = placeMergedImages(target.Image, match, keeperOf, added)
 	}
-	index, isNew, sourceBefore := attachIncomingSource(target, incoming, findMergedAttributionImageIDs(match, keeperOf, added))
+	index, isNew, sourceBefore := importAttachSource(target, incoming, findMergedAttributionImageIDs(match, keeperOf, added))
 
 	//after the attach, which keeps a held copy's Date
 	var reset []heldCopyChange

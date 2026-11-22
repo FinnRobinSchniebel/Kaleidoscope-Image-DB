@@ -76,22 +76,19 @@ func updateSourceFields(set *ImageSetMongo, index int, stateRead ImageChangeStat
 }
 
 // bumpSourcesLastChecked sets last_checked to checkedAt on userID's sources named
-// name with one of sourceIDs, in every set holding them. A zero last_checked is
-// left alone, since it marks a source the next sync must catch up once. The
-// caller holds the user's set lock.
+// name with one of sourceIDs, in every set holding them. The caller holds the
+// user's set lock.
 func bumpSourcesLastChecked(userID, name string, sourceIDs []string, checkedAt time.Time) error {
 
 	match := bson.M{
-		"name":         name,
-		"source_id":    bson.M{"$in": sourceIDs},
-		"last_checked": bson.M{"$gt": time.Time{}},
+		"name":      name,
+		"source_id": bson.M{"$in": sourceIDs},
 	}
 	filter := bson.M{"kscope_userid": userID, "sources": bson.M{"$elemMatch": match}}
 
 	arrayFilter := bson.M{
-		"s.name":         name,
-		"s.source_id":    bson.M{"$in": sourceIDs},
-		"s.last_checked": bson.M{"$gt": time.Time{}},
+		"s.name":      name,
+		"s.source_id": bson.M{"$in": sourceIDs},
 	}
 	update := bson.M{"$set": bson.M{"sources.$[s].last_checked": checkedAt}}
 

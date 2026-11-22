@@ -221,7 +221,7 @@ func TestImportResetsAndKeepsHeldCopies(t *testing.T) {
 
 	//V is a subset of U that was never merged, which only old data has
 	v := storeTestSet(t, user, "v", checked, pages[3])
-	v.Sources = []SourceInfo{{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{v.Image[0].ID}, Date: zipDate}}
+	v.Sources = []SourceInfo{{Name: "pixiv", SourceID: "7", AttributedTo: []bson.ObjectID{v.Image[0].ID}, Date: zipDate, Untracked: true}}
 	insertSets(t, *u, *v)
 	uPixiv := publishTestPendingUpdate(t, user, notification.PendingUpdateKey{SetID: u.ID, Service: "pixiv", SourceID: "7"}, notification.StatusPending)
 	uFanbox := publishTestPendingUpdate(t, user, notification.PendingUpdateKey{SetID: u.ID, Service: "fanbox", SourceID: "8"}, notification.StatusDeclined)
@@ -249,6 +249,11 @@ func TestImportResetsAndKeepsHeldCopies(t *testing.T) {
 
 	if stored.Sources[0].ImageChangeState != ImageChangePending || stored.Sources[1].ImageChangeState != ImageChangeDeclined {
 		t.Errorf("U's states %q/%q; want pending and declined kept", stored.Sources[0].ImageChangeState, stored.Sources[1].ImageChangeState)
+	}
+
+	//V's untracked copy loses the combine, so the hold keeps its own Date
+	if !stored.Sources[0].Date.Equal(heldDate) {
+		t.Errorf("U's pixiv copy has Date %v, want its held %v kept over V's untracked one", stored.Sources[0].Date, heldDate)
 	}
 
 	if got := loadPendingUpdate(t, uPixiv); got.Status != notification.StatusPending || got.Payload.SetID != u.ID {

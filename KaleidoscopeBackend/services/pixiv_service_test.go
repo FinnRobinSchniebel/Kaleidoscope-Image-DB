@@ -78,6 +78,26 @@ func TestPixivSourceStaleDayOnlyDate(t *testing.T) {
 	}
 }
 
+func TestPixivSourceStaleUntracked(t *testing.T) {
+
+	created := time.Date(2026, 8, 27, 9, 12, 12, 0, time.UTC)
+	il := pixivmodel.Illust{CreateDate: created}
+	tests := []struct {
+		name  string
+		src   imageset.SourceInfo
+		stale bool
+	}{
+		{"untracked, stamped while hidden", imageset.SourceInfo{Date: created, LastChecked: time.Now(), Untracked: true}, true},
+		{"tracked, zero LastChecked", imageset.SourceInfo{Date: created}, false},
+		{"tracked and checked", imageset.SourceInfo{Date: created, LastChecked: time.Now()}, false},
+	}
+	for _, tt := range tests {
+		if got := pixivSourceStale(il, tt.src, false); got != tt.stale {
+			t.Errorf("%s: pixivSourceStale = %t, want %t", tt.name, got, tt.stale)
+		}
+	}
+}
+
 func TestBuildPixivImageSetDerivesFromSource(t *testing.T) {
 	caption := "a caption"
 	illust := &pixivmodel.Illust{

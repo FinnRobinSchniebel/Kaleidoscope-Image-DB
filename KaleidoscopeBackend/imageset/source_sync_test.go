@@ -94,6 +94,7 @@ func TestSourceDataChanged(t *testing.T) {
 		{"same instant in another zone", func(s *SourceInfo) { s.Date = date.In(time.FixedZone("JST", 9*60*60)) }, false},
 		{"only LastChecked", func(s *SourceInfo) { s.LastChecked = date }, false},
 		{"only SourceMissing", func(s *SourceInfo) { s.SourceMissing = true }, false},
+		{"only Untracked", func(s *SourceInfo) { s.Untracked = true }, false},
 		{"title", func(s *SourceInfo) { s.Title = "B" }, true},
 		{"tag translation", func(s *SourceInfo) { s.Tags = []SourceTag{{Default: "cat", EN: "Cat"}} }, true},
 	}

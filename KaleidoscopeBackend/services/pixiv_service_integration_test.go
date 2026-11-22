@@ -172,11 +172,15 @@ func TestProcessBookmarkItemsHoldsAndStamps(t *testing.T) {
 
 	free, held, hiddenOld, hiddenZero := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
 	heldPending, heldDeclined, removed := bson.NewObjectID(), bson.NewObjectID(), bson.NewObjectID()
+
+	//a zip copy no sync has applied yet
+	zipCopy := withCopy(hiddenZero, "2", imageset.ImageChangeNone, time.Time{})
+	zipCopy.Sources[0].Untracked = true
 	for _, set := range []imageset.ImageSetMongo{
 		notStale(withCopy(free, "1", imageset.ImageChangeNone, lastChecked)),
 		withCopy(held, "1", imageset.ImageChangePending, lastChecked),
 		withCopy(hiddenOld, "2", imageset.ImageChangeNone, lastChecked),
-		withCopy(hiddenZero, "2", imageset.ImageChangeNone, time.Time{}),
+		zipCopy,
 		notStale(withCopy(heldPending, "3", imageset.ImageChangePending, lastChecked)),
 		notStale(withCopy(heldDeclined, "3", imageset.ImageChangeDeclined, lastChecked)),
 		withCopy(removed, "4", imageset.ImageChangeDeclined, lastChecked),
@@ -233,8 +237,9 @@ func TestProcessBookmarkItemsHoldsAndStamps(t *testing.T) {
 		t.Errorf("hidden work's copy: LastChecked %v, want it stamped", src.LastChecked)
 	}
 
-	if src := storedCopy(hiddenZero); !src.LastChecked.IsZero() {
-		t.Errorf("hidden work's unchecked copy: LastChecked %v, want it left zero", src.LastChecked)
+	//hidden, so nothing was applied: stamped, but still caught up once visible
+	if src := storedCopy(hiddenZero); !stamped(src.LastChecked) || !src.Untracked {
+		t.Errorf("hidden work's zip copy %+v: want it stamped and still untracked", src)
 	}
 
 	for _, setID := range []bson.ObjectID{heldPending, heldDeclined} {
